@@ -1,0 +1,13 @@
+[package]
+name = "simon-node"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "SIMON — strona node'a (miner gada z tym przez protokół)"
+
+[dependencies]
+simon-core = { path = "../simon-core" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,154 @@
+/* SIMON — whitepaper, arkusz do druku (weasyprint).
+   Paleta z logotypu: granat #151B2D, bursztyn #D9A441, papier #F5F4F1 */
+
+:root {
+  --navy:   #151B2D;
+  --navy-2: #2A3350;
+  --amber:  #D9A441;
+  --amber-l:#F3E3C2;
+  --paper:  #F5F4F1;
+  --rule:   #D9D7D1;
+  --muted:  #5A6072;
+}
+
+/* ---------- strona ---------- */
+@page {
+  size: A4;
+  margin: 20mm 18mm 18mm 18mm;
+  @bottom-left  { content: string(doctitle); font-family: "Fira Sans"; font-size: 7.5pt; color: #8A8F9C; }
+  @bottom-right { content: counter(page) " / " counter(pages); font-family: "Fira Sans"; font-size: 7.5pt; color: #8A8F9C; }
+}
+@page :first { margin: 0; @bottom-left { content: none; } @bottom-right { content: none; } }
+
+html { font-size: 10.5pt; }
+body {
+  font-family: "Fira Sans", "DejaVu Sans", sans-serif;
+  color: var(--navy);
+  line-height: 1.55;
+  hyphens: none;
+  text-align: left;
+}
+
+/* ---------- okładka ---------- */
+.cover {
+  page: first;
+  background: var(--paper);
+  height: 297mm; width: 210mm;
+  padding: 34mm 24mm 22mm 24mm;
+  box-sizing: border-box;
+  page-break-after: always;
+  display: flex; flex-direction: column;
+  hyphens: none;
+}
+.cover .mark { width: 34mm; margin-bottom: 16mm; }
+.cover .mark svg { display: block; width: 100%; height: auto; }
+.cover .spacer { flex: 1 1 auto; }
+.cover .wordmark {
+  font-size: 38pt; font-weight: 700; letter-spacing: 0.30em;
+  color: var(--navy); margin: 0 0 3mm 0; line-height: 1;
+}
+.cover .tagline {
+  font-size: 12.5pt; font-weight: 400; color: var(--muted);
+  margin: 0 0 22mm 0; max-width: 130mm; line-height: 1.45;
+}
+.cover .rule { width: 26mm; height: 3.2pt; background: var(--amber); margin-bottom: 9mm; }
+.cover .doctype {
+  font-size: 9pt; letter-spacing: 0.22em; text-transform: uppercase;
+  color: var(--muted); margin-bottom: 3mm;
+}
+.cover .meta {
+  font-size: 9pt; color: var(--muted); line-height: 1.7;
+  border-top: 1px solid var(--rule); padding-top: 5mm;
+}
+.cover .meta b { color: var(--navy); font-weight: 600; }
+.cover .principle {
+  margin-top: 4mm; padding: 4mm 5mm; background: #FFFFFF;
+  border-left: 3pt solid var(--amber); font-size: 9.5pt; color: var(--navy);
+}
+
+/* tytuł do stopki */
+h1.doctitle { string-set: doctitle content(); }
+
+/* ---------- nagłówki ---------- */
+h1, h2, h3, h4 { font-weight: 600; color: var(--navy); line-height: 1.25; }
+h2 {
+  font-size: 16pt; margin: 11mm 0 3.5mm 0;
+  padding-bottom: 2.2mm; border-bottom: 2.2pt solid var(--amber);
+  page-break-after: avoid; page-break-before: auto;
+}
+h3 { font-size: 12pt; margin: 6.5mm 0 2mm 0; page-break-after: avoid; }
+h4 { font-size: 10.5pt; margin: 5mm 0 1.5mm 0; color: var(--navy-2); page-break-after: avoid; }
+p { margin: 0 0 2.6mm 0; orphans: 2; widows: 2; }
+
+/* ---------- tabele ---------- */
+table {
+  width: 100%; border-collapse: collapse; margin: 3.5mm 0 5mm 0;
+  font-size: 8.8pt; page-break-inside: avoid;
+}
+thead th {
+  background: var(--navy); color: #FFF; font-weight: 600; text-align: left;
+  padding: 2mm 2.4mm; border: none; font-size: 8.5pt;
+  letter-spacing: 0.02em;
+}
+tbody td { padding: 1.9mm 2.4mm; border-bottom: 0.6pt solid var(--rule); vertical-align: top; }
+tbody tr:nth-child(even) { background: #FAFAF8; }
+tbody tr:last-child td { border-bottom: 1pt solid var(--navy); }
+table code { font-size: 8pt; }
+
+/* ---------- cytat / callout ---------- */
+blockquote {
+  margin: 4mm 0; padding: 3.2mm 4.5mm;
+  background: var(--paper); border-left: 3pt solid var(--amber);
+  page-break-inside: avoid;
+}
+blockquote p { margin: 0; font-size: 10pt; }
+blockquote p + p { margin-top: 2mm; }
+
+/* ---------- kod ---------- */
+pre {
+  background: #FBFBF9; border: 0.6pt solid var(--rule); border-left: 2.5pt solid var(--navy-2);
+  padding: 3mm 3.5mm; margin: 3.5mm 0;
+  font-family: "Fira Mono", "DejaVu Sans Mono", monospace;
+  font-size: 7.8pt; line-height: 1.42; page-break-inside: avoid;
+  white-space: pre-wrap; word-wrap: break-word;
+}
+code {
+  font-family: "Fira Mono", "DejaVu Sans Mono", monospace;
+  font-size: 8.6pt; background: #F0EFEC; padding: 0.3mm 1mm; border-radius: 1.5pt;
+}
+pre code { background: none; padding: 0; font-size: inherit; }
+
+/* ---------- listy ---------- */
+ul, ol { margin: 2.5mm 0 3.5mm 0; padding-left: 6mm; }
+li { margin-bottom: 1.4mm; }
+li > p { margin-bottom: 1.4mm; }
+
+/* ---------- akcenty ---------- */
+strong { font-weight: 600; }
+hr { border: none; border-top: 0.8pt solid var(--rule); margin: 7mm 0; }
+a { color: var(--navy-2); text-decoration: none; }
+
+/* znaczniki statusu */
+.st {
+  font-size: 7.6pt; font-weight: 600; letter-spacing: 0.06em;
+  padding: 0.4mm 1.4mm; border-radius: 2pt; white-space: nowrap;
+}
+.st-m { background: var(--amber); color: var(--navy); }          /* ZMIERZONE */
+.st-i { background: var(--navy); color: #FFF; }                   /* ZAIMPLEMENTOWANE */
+.st-d { background: #FFF; color: var(--navy); border: 0.8pt solid var(--navy); } /* ZAPROJEKTOWANE */
+
+/* stopka dokumentu */
+.colophon {
+  margin-top: 8mm; padding-top: 4mm; border-top: 1px solid var(--rule);
+  font-size: 8.5pt; color: var(--muted); font-style: italic;
+}
+
+/* znaczniki zamiast emoji (brak pokrycia w fontach do druku) */
+.mk { font-weight: 700; font-size: 10pt; line-height: 1; }
+.mk-no   { color: #B3402F; }
+.mk-ok   { color: #2F7D4F; }
+.mk-warn {
+  color: var(--navy); background: var(--amber);
+  display: inline-block; width: 4.2mm; height: 4.2mm; line-height: 4.2mm;
+  text-align: center; border-radius: 50%; font-size: 8pt;
+}

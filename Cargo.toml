@@ -1,0 +1,30 @@
+[workspace]
+resolver = "2"
+members = ["crates/simon-core", "crates/simon-node", "crates/simon-harness", "crates/simon-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+authors = ["Karol (Szpili)"]
+
+[workspace.dependencies]
+# Krypto — Ed25519 (PLAN §1: dalek/ed25519-dalek), NIE secp256k1
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand = "0.8"
+sha2 = "0.10"
+hex = "0.4"
+# Serializacja — kanoniczna, do odcisku receiptu
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Czas
+time = { version = "0.3", features = ["formatting"] }
+# Błędy
+thiserror = "1"
+# HTTP do vLLM/Ollama (API OpenAI) — M1.2
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

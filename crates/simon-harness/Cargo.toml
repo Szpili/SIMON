@@ -1,0 +1,24 @@
+[package]
+name = "simon-harness"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "SIMON — harness: zlecanie pracy do klastra, UI"
+
+[dependencies]
+simon-core = { path = "../simon-core" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+hex.workspace = true
+libp2p = { version = "0.57.0", features = ["tokio", "gossipsub", "kad", "identify", "noise", "yamux", "tcp", "quic", "dns", "macros", "ping", "request-response", "cbor"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+futures = "0.3"
+rand.workspace = true
+
+[dev-dependencies]
+ed25519-dalek.workspace = true
+rand.workspace = true
+simon-node = { path = "../simon-node" }
