@@ -6,6 +6,99 @@ weryfikacji obliczeń.** Kod sprawdza dziś tylko integralność podpisu.
 
 ---
 
+## PLAN NA PAŹDZIERNIK — AMD Developer Hackathon: ACT III (dopisane 2026-09-18)
+
+**Twardy termin: 18 października, 16:00 CEST** (koniec zgłoszeń). Faza online
+12–18.10. Zespół: SIMON, zapisany. Repo publiczne, MIT:
+`github.com/Szpili/SIMON`. Demo żywe.
+
+### Ścieżka krytyczna — jedna, i wszystko inne przy niej blednie
+
+```
+wniosek o kredyt AMD  ──(2-3 dni robocze)──>  pomiar ROCm  ──>  wynik w README + whitepaper
+```
+
+Pomiar międzyvendorowy jest **jedyną częścią zgłoszenia, która naprawdę
+wymaga ich sprzętu**, i jedyną, której nikt inny nie ma. W kryterium
+„Application of Technology" waży najwięcej. Wszystko poza tą ścieżką da się
+robić równolegle i da się skrócić; tej nie.
+
+Kredyt wygasa **30 dni od aktywacji**, nie od przyznania — więc wniosek
+składamy od razu, a aktywujemy dopiero, gdy notebook ma na czym pójść.
+
+### Tydzień 1 (18–24.09) — odblokowanie
+
+- [ ] **wniosek o kredyt AMD** — `developer.amd.com` → Member Perks → formularz.
+      Wybór: **AMD Developer Cloud ($100)**, nie Fireworks ($50): pomiar
+      potrzebuje kontroli nad stosem, na zarządzanym endpointcie mierzylibyśmy
+      cudzą czarną skrzynkę
+- [ ] **ziomki rejestrują się w AMD AI Developer Program** — to warunek
+      dopuszczenia do ACT III, nie formalność. Bez tego nie liczą się jako zespół
+- [ ] **`qwen-serving.service`** — dziś vLLM chodzi jako ręczny proces.
+      Po restarcie Szpona demo wstanie i będzie zwracać błędy: usługi pokażą
+      „active", strona będzie martwa. Najgorszy rodzaj awarii, bo wygląda dobrze
+- [ ] rozmowa z autorem Vulkana: co dokładnie ma na CUDA. Vulkan compute chodzi
+      na Radeonach **bez ROCm** — to druga, niezależna droga do zgodności z AMD,
+      szersza sprzętowo choć wolniejsza
+
+### Tydzień 2 (25.09–01.10) — pomiar
+
+- [ ] **ramię A na ROCm** — `notebooks/SIMON-D2-ROCm.ipynb`, sesja JupyterLab
+      (darmowa, 3 h/dobę). Baza CUDA jest w środku, werdykt wychodzi w sesji
+- [ ] **ramiona B–E (vLLM)** na VM 1× MI300X — to, co padło na Franku przez brak
+      UVA pod WSL2. Obraz Quick Start ma ROCm i vLLM gotowe
+- [ ] wynik do `DESIGN-VERIFIER-0.md` i README — **także jeśli wyjdzie
+      niewygodnie**. Wynik „AMD ≠ NVIDIA mimo uczciwości obu stron" jest
+      mocniejszym materiałem niż wynik potwierdzający, bo to realny problem
+      całej dziedziny, nie nasza porażka
+- [ ] VM **ZNISZCZYĆ** po pomiarze. Wyłączenie nie zatrzymuje naliczania
+
+### Tydzień 3 (02–08.10) — demo, które przeżyje ocenę
+
+Sędziowie klikają **po 18 października**, a dziś wszystko stoi na jednym
+domowym komputerze pod adresem zdradzającym nazwę maszyny i tailnetu.
+
+- [ ] drugi węzeł (Pazur / Franko) — demo pokazujące **różny sprzęt w jednej
+      sieci** dowodzi tezy projektu lepiej niż jakikolwiek opis
+- [ ] rozważyć węzeł na AMD przez Fireworks: endpoint zgodny z OpenAI, 90 dni
+      ważności — jedyny sposób, żeby po hackathonie demo dalej stało na AMD
+- [ ] własna domena zamiast adresu `.ts.net` z portem (porty niestandardowe
+      bywają blokowane w sieciach firmowych — sędzia zobaczy wtedy pustkę)
+- [ ] przejrzeć przepustnicę pod kątem dnia oceny: 40/godz. może być za mało,
+      gdy kilku sędziów klika naraz, i za dużo, gdy znajdzie to bot
+
+### Tydzień 4 (09–18.10) — zgłoszenie
+
+- [ ] **12.10: tracki zostają ogłoszone** — do tej pory ich nie znamy. Plan nie
+      może zakładać, że SIMON w nie trafi; jeśli nie trafi, przepisujemy opis
+      pod trak, nie projekt pod trak
+- [ ] wideo (MP4) + slajdy (PDF) + okładka 16:9 — formaty są obowiązkowe
+- [ ] zgłoszenie: `lablab.ai/.../simon/submission`
+- [ ] **zgłosić dzień wcześniej.** Ostatnie godziny to moment, w którym platforma
+      pada pod obciążeniem
+
+### Czego świadomie NIE robimy w tym miesiącu
+
+Automatycznego slashowania. Nie mamy progu, którego dalibyśmy radę obronić, a
+pomiar ROCm może tę sprawę dopiero otworzyć. Wpisywanie go teraz byłoby
+sprzedawaniem czegoś, czego sami nie umiemy uzasadnić — i pierwszy sędzia,
+który zapyta „skąd ten próg", zobaczyłby to od razu.
+
+Reszty checklisty M2.4V (commit/reveal, apelacja, koluzja, wykrywanie „zawsze
+PASS", ukryte zadania kalibracyjne). To jest praca na kwartał, nie na miesiąc
+z twardym terminem.
+
+### Ryzyka, które realnie mogą to wywrócić
+
+1. **Kredyt nie zostaje przyznany** → pomiaru nie ma. Plan awaryjny: Fireworks
+   ($50) pokazuje SIMON działający na AMD, ale nie odpowiada na pytanie o dryf
+2. **Szpon zasypia albo traci prąd w dniu oceny** → demo martwe. Dlatego drugi
+   węzeł i `qwen-serving` w tydzień 1, a nie w ostatnim
+3. **Tracki ogłoszone 12.10 nie pasują do SIMON-a** → zostaje opis przepisany
+   pod trak; projektu nie naginamy
+
+---
+
 ## KOREKTA FUNDAMENTALNA: M2 nie był momentem prawdy
 
 **Co sprawdziłem w kodzie po uwadze Opusa:**
