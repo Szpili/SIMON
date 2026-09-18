@@ -15,7 +15,16 @@ env:
 
 jobs:
   testy:
-    runs-on: ubuntu-latest
+    # Macierz systemow, bo kod tozsamosci (M5.2a) ma galezie per system:
+    # sciezka macOS `~/Library/Application Support/SIMON` NIGDY nie byla
+    # skompilowana, dopoki CI chodzilo wylacznie na Linuksie. Blad w galezi
+    # pod `#[cfg(target_os = "macos")]` jest na Linuksie NIEWIDOCZNY — kompilator
+    # jej nawet nie oglada.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
