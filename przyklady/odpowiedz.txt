@@ -1,0 +1,1 @@
+We need answer user: "Explain in two sentences why a signature does not prove a computation." Need likely about digital signatures? A signature proves authenticity/integrity of a message, not that a computation was performed or result correct. Need two sentences. Could be in context of zk? "A signature

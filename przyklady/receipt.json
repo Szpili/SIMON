@@ -1,0 +1,15 @@
+{
+  "activation_hash": "toploc:NIE_POLICZONY",
+  "completion_tokens": 60,
+  "finished_at_us": 1789760547717093,
+  "job_id": "job-e267671122556bec",
+  "model_hash": "qwen3.8-27b",
+  "node_id": "de1cbe4d9a2abed30e2f27d2b9159aceedaef1a04ca260704e1ccda891416032",
+  "output_digest": "5f4af804357c8df0dc2c45c92d03d6af2a896cf2319c58dc65c388cd5c20ed7d",
+  "precision": "fp16",
+  "prompt_tokens": 66,
+  "runtime": "vllm/0.27.1",
+  "signature": "93de9d76c0ae9a70844b9f245e6964d0961d6ba27efa9a1a16c7cd3e7b98e50e9628195b3edbae2351e3e20c9ed3fa804df954732bfb4bd56394571fd338910f",
+  "signer": "de1cbe4d9a2abed30e2f27d2b9159aceedaef1a04ca260704e1ccda891416032",
+  "started_at_us": 1789760547717093
+}
