@@ -323,19 +323,66 @@ Wartość leży gdzie indziej i tak to opisujemy:
 
 ### Kamienie milowe
 
-- [x] **M5.1 — podpisana ILOŚĆ pracy.** Receipt niesie `prompt_tokens`
-      i `completion_tokens`, ROZDZIELNIE. Jedna liczba „tokenów" byłaby
-      zaproszeniem do arbitrażu: dekodowanie kosztuje ~55× więcej na token niż
-      prefill (nasz pomiar M2.4V). Zrobione 2026-09-18 — razem z naprawą
-      tego, że receipt w ogóle nie wiązał treści odpowiedzi.
-- [ ] **M5.2 — rejestr lokalny.** Suma podpisanych receiptów per węzeł:
-      „ta maszyna wykonała X prefill + Y decode dla Z zleceniodawców".
-      Lokalny, więc UCZCIWY bez konsensusu — i wystarczająco mocny na demo.
+- [x] **M5.1 — podpisana DEKLARACJA ilości pracy.** Receipt niesie
+      `prompt_tokens` i `completion_tokens`, ROZDZIELNIE. Jedna liczba
+      „tokenów" byłaby zaproszeniem do arbitrażu: dekodowanie kosztuje ~55×
+      więcej na token niż prefill (pomiar M2.4V).
+
+      **KOREKTA 2026-09-18 (recenzja):** napisałem wcześniej „teraz mamy
+      liczenie tokenów". To było przecenienie. Mamy **podpisaną deklarację
+      węzła**, nie niezależnie potwierdzone zużycie. Podpis uniemożliwia zmianę
+      liczby po fakcie; nie czyni jej prawdziwą. To samo dotyczy `ttft_ms`
+      i `gen_ms` — niezależnie mierzymy wyłącznie czas obiegu po stronie
+      klienta, więc **rozliczenia nie mogą opierać się na czasie zgłoszonym
+      przez węzeł**.
+- [ ] **M5.1b — liczniki przeliczane niezależnie.** Kontrakt docelowy:
+      klient wysyła `input_token_ids` + `prompt_commitment` i sam liczy
+      `declared_prompt_tokens = len(input_token_ids)`; węzeł zwraca
+      `ordered_output_token_ids` + `decoded_text`; klient sprawdza
+      `len(token_ids) == completion_tokens` oraz `decode(token_ids) == text`.
+      Wtedy liczby nie da się zawyżyć bez dostarczenia pasującej sekwencji.
+      Prompt musi być liczony tym samym tokenizerem co u węzła (repozytorium
+      + rewizja, hashe plików, hash szablonu czatu, konfiguracja tokenów
+      specjalnych, `add_generation_prompt`) — szablon czatu dokłada tokeny
+      kontrolne, więc liczenie z samego widocznego tekstu daje inną wartość.
+      BLOKER: żaden z naszych backendów nie wystawia dziś `token_ids` przez
+      API OpenAI.
+- [ ] **M5.1c — commitment po strukturze, nie po tekście.** Docelowo:
+      `H("SIMON/OUTPUT/v1" ‖ job_id ‖ model_manifest ‖ tokenizer_manifest ‖
+      prompt_commitment ‖ ordered_output_token_ids ‖ finish_reason ‖
+      tool_calls ‖ attachments)`. Dziś hashujemy zdekodowany tekst — a różne
+      sekwencje tokenów mogą dać ten sam tekst. Do interoperacyjności także
+      kanonizacja RFC 8785 zamiast `serde_json::to_string`.
+- [ ] **M5.2 — lokalny, dopisywalny metrycznik podpisanej pracy.**
+      NIE portfel, NIE saldo. Rekord minimalny: hash receiptu, `job_id`, klucze
+      klienta i wykonawcy, manifesty (model / tokenizer / profil wykonania),
+      `prompt_commitment`, `output_commitment`, liczniki rozbite na
+      `prompt_tokens_total` / `_computed` / `_cached` i `completion_tokens`,
+      czasy ZMIERZONE PRZEZ KLIENTA, podpis oraz `verification_status`.
+
+      `verification_status` musi rozróżniać `SIGNATURE_VALID`, `OUTPUT_BOUND`,
+      `EXECUTION_AUDIT_PENDING|PASS|FAIL`. Jedno `verified: true` skleiłoby
+      podpis, integralność treści i poprawność obliczenia w jedno mylące słowo —
+      dokładnie ten błąd popełniłem w demo.
+
+      Rejestr pokazuje SUROWE, rozdzielone liczniki i zmierzone czasy;
+      **przelicznika na tym etapie NIE ustalamy.**
+
+      Komunikat w demo brzmi „karta wykonała X jednostek pracy; wynik, liczniki
+      i autorstwo są związane podpisanym receiptem, a poziom weryfikacji jest
+      pokazany osobno" — **nie** „karta zarobiła X".
       *To jedyny punkt M5, który ma sens przed 18.10.*
-- [ ] **M5.3 — normalizacja jednostki.** Jawny kurs: waga prefill vs decode,
-      klasa modelu, długość kontekstu. Bez ogłoszonego kursu „tokeny" są
-      walutą o kursie, którego nikt nie zna — a wtedy wygrywa ten, kto
-      pierwszy policzy różnicę.
+- [ ] **M5.3 — normalizacja jednostki.** Pierwsza jawna postać: `C = w_p·P + w_d·D`,
+      gdzie `P` to **nie-cache'owane** tokeny promptu, `D` to tokeny wyjścia,
+      a wagi są ZMIERZONE dla konkretnego profilu modelu. Manifest pracy musi
+      trzymać więcej niż `C`: `prompt_tokens_total/_cached/_computed`,
+      `completion_tokens`, hash manifestu modelu, profil wykonania,
+      kwantyzację i przedział kontekstu.
+
+      **Pułapka:** vLLM rozróżnia tokeny promptu, cache'owane i tworzące cache,
+      bo to nie jest ta sama praca. Zaliczenie cache'owanego prefilla tak samo
+      jak liczonego od zera otwiera kolejny arbitraż. Bez ogłoszonego kursu
+      „tokeny" są walutą o kursie, którego nikt nie zna.
 - [ ] **M5.4 — wydawanie.** Agent płaci kredytami, node sprawdza saldo.
       Tu zaczyna się problem: saldo musi być WSPÓLNE, a nie lokalne.
 - [ ] **M5.5 — podwójne wydanie i konsensus.** Właściwy trudny kamień.
@@ -348,10 +395,21 @@ Wartość leży gdzie indziej i tak to opisujemy:
 
 ### Atak, o którym trzeba pamiętać od pierwszego dnia
 
-**Samoobsługa (self-dealing):** węzeł wysyła zlecenia sam do siebie i bije
-kredyty z powietrza. Obroną jest weryfikacja z M2.4V — czyli ekonomia i audyt
-to JEDEN problem, nie dwa. Każdy projekt kredytów bez działającego audytu
-kończy się farmą.
+**Samoobsługa (wash-compute):** węzeł wysyła zlecenia sam do siebie i bije
+kredyty z powietrza.
+
+**KOREKTA 2026-09-18 (recenzja):** napisałem wcześniej, że obroną jest
+weryfikacja. **To nieprawda.** Weryfikacja potwierdzi co najwyżej, że farma
+NAPRAWDĘ wykonała pracę — dla samej siebie. Czyni to wash-compute uczciwym
+obliczeniowo i nie usuwa arbitrażu ekonomicznego: przy `client == executor`
+zapłata wraca do tego samego właściciela, a jego realny koszt to prąd plus
+opłaty protokołu i weryfikatora. Jeśli przyznany kredyt ma większą użyteczność
+niż ten koszt, samotransakcja pozostaje racjonalna.
+
+Stąd twarde ograniczenia dla M5.2: rejestr **może** zapisywać wykonaną pracę,
+ale **nie może** być saldem wymienialnych praw do przyszłej pracy ani emitować
+nagrody za sztukę pracy. „Wykonane i zweryfikowane" nie znaczy „kupione przez
+niezależny popyt". **Wash-compute pozostaje NIEROZWIĄZANY.**
 
 ### Zadania agentowe — już działają
 

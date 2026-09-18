@@ -42,7 +42,16 @@ pub enum SimonError {
 /// Kanoniczność: JSON z posortowanymi kluczami, bez spacji. To jest jedyna
 /// dopuszczalna metoda liczenia odcisku — inaczej podpis nie jest przenośny
 /// między implementacjami (Rust ↔ Python).
+/// UWAGA co do slowa "kanoniczny": to jest `serde_json::to_string`, a NIE
+/// kanonizacja w sensie RFC 8785 (JCS). Wynik jest powtarzalny dla TEJ
+/// implementacji (mapy `serde_json` to `BTreeMap`, wiec klucze sa posortowane;
+/// floaty sa w podpisywanej tresci zakazane od 2026-09-17), ale inna
+/// implementacja protokolu moze policzyc inny bajt-strumien dla tych samych
+/// danych. Do interoperacyjnosci trzeba bedzie JCS albo formatu binarnego
+/// o ustalonej kolejnosci pol — zapisane jako dlug, nie zalatwione.
 pub fn content_digest<T: Serialize>(value: &T) -> Result<String, SimonError> {
+    // ponytail: serde_json wystarcza, dopoki jestesmy jedyna implementacja;
+    // przy drugiej -> RFC 8785.
     let canonical = serde_json::to_string(value)?;
     let mut hasher = Sha256::new();
     hasher.update(canonical.as_bytes());

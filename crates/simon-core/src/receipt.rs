@@ -76,10 +76,28 @@ pub struct Receipt {
     pub signature: Option<Signature>,
 }
 
-/// Odcisk treści wyniku. Wiąże tekst z konkretnym zleceniem, żeby poprawny
+/// Separator domeny. Bez niego ten sam hash mogłby zostać podstawiony
+/// w innym miejscu protokołu jako co innego.
+pub const DOMENA_ODCISKU_WYJSCIA: &str = "SIMON/OUTPUT/v1";
+
+/// Odcisk treści wyniku, związany z konkretnym zleceniem — żeby poprawny
 /// receipt z INNEGO zlecenia nie dał się podstawić pod ten sam tekst.
+///
+/// **Czego to NIE obejmuje (świadomy dług, nie przeoczenie):** commitment jest
+/// po ZDEKODOWANYM TEKŚCIE, a nie po sekwencji `token_ids`. Różne sekwencje
+/// tokenów mogą zdekodować się do tego samego tekstu, a weryfikacja inferencji
+/// dotyczy sekwencji, którą model faktycznie przetworzył. Docelowy commitment
+/// ma objąć `ordered_output_token_ids`, `finish_reason`, tool calle wraz
+/// z argumentami, manifest modelu i tokenizera oraz prompt commitment —
+/// patrz M5.2 w ROADMAP. Dziś żaden z naszych backendów nie wystawia
+/// `token_ids` przez API OpenAI, więc byłby to commitment do czegoś,
+/// czego klient i tak nie może sprawdzić.
 pub fn odcisk_wyjscia(job_id: &str, output: &str) -> Result<String, SimonError> {
-    content_digest(&serde_json::json!({ "job_id": job_id, "output": output }))
+    content_digest(&serde_json::json!({
+        "domena": DOMENA_ODCISKU_WYJSCIA,
+        "job_id": job_id,
+        "output": output,
+    }))
 }
 
 impl Receipt {

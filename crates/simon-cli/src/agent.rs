@@ -697,6 +697,60 @@ mod tests {
         assert!(!zweryfikuj_receipt(&json, "job-1", "qwen3.8-27b", Some("42 to odpowiedz ")));
     }
 
+    /// Zawyzenie licznikow PO podpisaniu lamie podpis. To NIE jest dowod, ze
+    /// liczniki sa prawdziwe — node moze podpisac dowolna liczbe od razu.
+    /// Testujemy tylko nienaruszalnosc, bo tyle dzis mamy.
+    #[test]
+    fn zawyzone_liczniki_po_podpisaniu_lamia_podpis() {
+        let klucz = simon_core::crypto::Keypair::generate();
+        let tekst = "wynik";
+        let podpisany = Receipt {
+            job_id: "job-1".into(),
+            node_id: klucz.public().to_hex(),
+            model_hash: "m".into(),
+            runtime: "vllm/0.27.1".into(),
+            precision: simon_core::receipt::Precision::Fp16,
+            activation_hash: "toploc:test".into(),
+            output_digest: simon_core::receipt::odcisk_wyjscia("job-1", tekst).unwrap(),
+            prompt_tokens: 10,
+            completion_tokens: 5,
+            started_at_us: 0,
+            finished_at_us: 1,
+            signer: klucz.public(),
+            signature: None,
+        }
+        .sign(&klucz)
+        .expect("podpis");
+
+        let mut zawyzony = podpisany.clone();
+        zawyzony.completion_tokens = 5_000;
+        let json = serde_json::to_string(&zawyzony).unwrap();
+        assert!(
+            !zweryfikuj_receipt(&json, "job-1", "m", Some(tekst)),
+            "podbicie completion_tokens po podpisie musi zostac zlapane"
+        );
+
+        let mut zawyzony2 = podpisany;
+        zawyzony2.prompt_tokens = 9_999;
+        let json2 = serde_json::to_string(&zawyzony2).unwrap();
+        assert!(!zweryfikuj_receipt(&json2, "job-1", "m", Some(tekst)));
+    }
+
+    /// Separator domeny: ten sam job_id i tekst w innej domenie protokolu
+    /// musi dac inny odcisk, inaczej hash da sie przeniesc miedzy kontekstami.
+    #[test]
+    fn odcisk_ma_separator_domeny() {
+        let bez_separatora = simon_core::content_digest(
+            &serde_json::json!({ "job_id": "j", "output": "t" }),
+        )
+        .unwrap();
+        assert_ne!(
+            simon_core::receipt::odcisk_wyjscia("j", "t").unwrap(),
+            bez_separatora,
+            "odcisk musi byc zwiazany z domena SIMON/OUTPUT/v1"
+        );
+    }
+
     /// Ten sam tekst, ale podpisany pod INNE zlecenie, nie moze przejsc —
     /// inaczej dalo by sie recyklingowac jeden poprawny receipt.
     #[test]

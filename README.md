@@ -31,6 +31,35 @@ number was produced on our own machines and the raw data lives in the repo.
 Platforms proven end-to-end: **Linux (CUDA)** and **macOS (Apple Silicon)**,
 including cross-platform interop between them.
 
+## What a receipt proves — and what it does not
+
+Stating this precisely matters more than stating it favourably.
+
+A receipt today proves exactly: **a registered node signed this exact answer as
+the result of this job.** The signature covers a commitment to the output text
+bound to the job id, so substituting the answer, tampering with it in transit,
+or pairing a valid receipt from another run with this text are all rejected.
+
+It does **not** prove that the declared model generated that answer. A malicious
+node can sign arbitrary text together with a correctly computed digest. Binding
+`model + prompt + execution + output` requires an execution audit (TopLoc), and
+that is not implemented.
+
+| | |
+|---|---|
+| Output binding | implemented + tested |
+| Token fields signed | implemented |
+| Token counts independently recomputed | partial — verify separately |
+| Execution correctness | **not implemented** |
+| Economic credit | **not implemented** |
+| Wash-compute resistance | **unsolved** |
+
+The token counters are the node's signed *declaration*: the signature stops
+them being changed afterwards, it does not make them true. The same holds for
+the reported timings — only round-trip latency is measured independently, so
+**settlement must never rest on node-reported time**. `docs/SECURITY-LOG.md`
+records the previous behaviour of each fix, not just the fix.
+
 ## Measured results
 
 **Audit cost.** An audit is `prefill(N+M)`; the job itself is

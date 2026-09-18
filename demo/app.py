@@ -197,7 +197,13 @@ elif w:
         opis, v = st.session_state.werdykt
         st.caption(f"przypadek: {opis}")
         if v.get("ok"):
-            st.success("RECEIPT WAŻNY — podpis się zgadza i dotyczy tego zlecenia")
+            st.success("RECEIPT WAŻNY")
+            st.markdown(
+                "- Podpis Ed25519: **poprawny**\n"
+                "- Treść związana z receiptem: **tak**\n"
+                "- Liczniki: **podpisane przez węzeł** (nie przeliczone niezależnie)\n"
+                "- Wykonanie modelu: **jeszcze niezaudytowane**"
+            )
         else:
             powody = []
             if v.get("parsuje_sie") is False:
@@ -213,6 +219,17 @@ elif w:
                 powody.append("**to nie jest ten wynik** — podpis prawdziwy, ale opisuje inny tekst")
             st.error("ODRZUCONY: " + "; ".join(powody or [v.get("powod", "nieznany powód")]))
         st.json(v, expanded=False)
+
+    st.warning(
+        "**Czego to NIE dowodzi.** Receipt dowodzi, że zarejestrowany węzeł "
+        "podpisał dokładnie tę odpowiedź jako wynik tego zlecenia. NIE dowodzi, "
+        "że wygenerował ją zadeklarowany model — złośliwy węzeł może podpisać "
+        "dowolny tekst wraz z poprawnie policzonym odciskiem. Dopiero audyt "
+        "wykonania (TopLoc) wiąże model, prompt, przebieg i wynik. "
+        "Liczniki tokenów są **deklaracją węzła**: podpis uniemożliwia ich "
+        "późniejszą zmianę, ale nie czyni ich prawdziwymi. Czasy `ttft`/`gen` "
+        "też pochodzą od węzła — mierzony niezależnie jest tylko czas obiegu."
+    )
 
 st.divider()
 st.caption(
