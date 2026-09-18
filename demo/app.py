@@ -30,6 +30,32 @@ LIMIT_NA_GODZINE = int(os.environ.get("SIMON_LIMIT_H", "40"))
 LICZNIK = pathlib.Path(os.environ.get("SIMON_LICZNIK", "/tmp/simon-demo-licznik.json"))
 
 
+def wczytaj_wezly() -> list[dict]:
+    """Lista węzłów, z których WOLNO wybierać.
+
+    W trybie publicznym to bramka bezpieczeństwa, nie wygoda: gdyby adres węzła
+    pochodził od odwiedzającego, kazałby naszemu serwerowi łączyć się z dowolnym
+    miejscem w sieci. Dlatego wybór jest zawsze z tej listy.
+    """
+    plik = os.environ.get("SIMON_NODES")
+    if plik and pathlib.Path(plik).is_file():
+        try:
+            dane = json.loads(pathlib.Path(plik).read_text())
+            wezly = [w for w in dane if w.get("adres")]
+            if wezly:
+                return wezly
+        except (OSError, ValueError):
+            # Zepsuta lista nie może wywalić demo — spadamy na pojedynczy węzeł.
+            st.warning("nie mogę odczytać listy węzłów — używam domyślnego")
+    if NODE:
+        return [{"nazwa": "węzeł domyślny", "adres": NODE,
+                 "model": os.environ.get("SIMON_MODEL", "qwen3.8-27b"), "opis": ""}]
+    return []
+
+
+WEZLY = wczytaj_wezly()
+
+
 st.set_page_config(page_title="SIMON", page_icon="🔏", layout="wide")
 
 
@@ -54,11 +80,15 @@ def wywolaj(args: list[str], wejscie: str | None = None, limit_s: int = 300) -> 
 with st.sidebar:
     st.header("Węzeł")
     if PUBLICZNY:
-        # Adres węzła NIE jest edytowalny publicznie: inaczej dowolny odwiedzający
-        # kazałby naszemu serwerowi łączyć się z adresem, który sam poda.
-        node, model = NODE, os.environ.get("SIMON_MODEL", "qwen3.8-27b")
-        st.caption(f"model: `{model}`")
-        st.caption(f"węzeł: `…{node[-16:]}`" if node else "brak węzła")
+        # Wybór TYLKO z listy — adres nigdy nie pochodzi od odwiedzającego.
+        if WEZLY:
+            wybrany = st.radio("Komu zlecić", WEZLY,
+                               format_func=lambda w: w["nazwa"])
+            node, model = wybrany["adres"], wybrany["model"]
+            if wybrany.get("opis"):
+                st.caption(wybrany["opis"])
+        else:
+            node, model = "", ""
         max_tokens = st.slider("Limit tokenów", 20, 200, 80, step=20)
         st.caption(f"demo publiczne — limit {LIMIT_NA_GODZINE} zleceń/godz.")
     else:
@@ -107,6 +137,10 @@ elif w:
     with prawo:
         st.subheader("Receipt")
         st.caption(f"podpisał węzeł `{w['receipt']['node_id'][:24]}…`")
+        # Silnik i model bierzemy z PODPISANEGO receiptu, nie z naszego opisu
+        # w panelu obok. To różnica między „twierdzimy, że to inny sprzęt"
+        # a „węzeł sam to podpisał, więc możesz to sprawdzić".
+        st.caption(f"policzył: `{w['receipt']['runtime']}` · model `{w['receipt']['model_hash']}`")
         st.json(w["receipt"], expanded=False)
 
     st.divider()
