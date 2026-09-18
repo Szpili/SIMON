@@ -16,6 +16,7 @@ use thiserror::Error;
 
 pub mod crypto;
 pub mod obserwacja;
+pub mod pomiar;
 pub mod receipt;
 
 pub use crypto::{Keypair, PublicKey, Signature};

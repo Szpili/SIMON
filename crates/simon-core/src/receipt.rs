@@ -170,6 +170,24 @@ impl Receipt {
 
     /// Czas wykonania w sekundach (z mikrosekund). TopLoc §5: walidacja to
     /// jeden prefill, więc jest rząd wielkości tańsza niż generacja.
+    /// **NIE UŻYWAĆ do niczego wiążącego** (audyt 2026-09-18).
+    ///
+    /// Liczy różnicę dwóch znaczników z ZEGARA ŚCIENNEGO węzła. Poza tym, że
+    /// węzeł może je ustawić dowolnie, taki zegar bywa zawodny bez złej woli:
+    /// NTP potrafi skokowo cofnąć lub przesunąć czas, więc różnica może wyjść
+    /// losowa albo zerowa (mamy `saturating_sub`, więc ujemna zamienia się
+    /// w zero — co maskuje problem zamiast go pokazać).
+    ///
+    /// Czas trwania mierzy się zegarem MONOTONICZNYM po stronie, która mierzy,
+    /// z jawnie określonymi granicami — patrz `obserwacja::ClientObservationV1`.
+    /// Nigdy nie odejmujemy od siebie znaczników z dwóch różnych maszyn.
+    ///
+    /// Te pola zostają w receipcie jako orientacyjny znacznik do logu
+    /// (wire format zamrożony do M5.1c), ale nie zasilają żadnej decyzji.
+    #[deprecated(
+        note = "różnica zegarów ściennych węzła — do logu, nie do rozliczeń; \
+                czas trwania bierz z ClientObservationV1"
+    )]
     pub fn elapsed_secs(&self) -> f64 {
         (self.finished_at_us.saturating_sub(self.started_at_us)) as f64 / 1_000_000.0
     }

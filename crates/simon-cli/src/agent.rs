@@ -20,6 +20,27 @@ use std::time::Duration;
 /// Ile czekamy na odpowiedź node'a.
 const TIMEOUT_ODPOWIEDZI: Duration = Duration::from_secs(300);
 
+/// ZAŁOŻENIE, nie pomiar (audyt stałych 2026-09-18).
+///
+/// Ile tokenów dokłada szablon czatu i otoczka promptu ponad samą treść.
+/// Nie jest to zmierzone dla żadnego konkretnego tokenizera — szablon czatu
+/// wstawia tokeny kontrolne zależne od modelu, więc prawdziwa wartość jest
+/// per-model i dziś jej nie znamy.
+///
+/// Konsekwencja pomyłki jest ograniczona i znana: za mała wartość oznacza zbyt
+/// duży kawałek, co łapie bramka C+1 na node'ie (`ctx_ponad_limit` z realnym
+/// licznikiem) i uruchamia adaptacyjne dzielenie. Za duża — kawałki mniejsze
+/// niż trzeba, czyli wolniej, ale poprawnie.
+///
+/// Docelowo: manifest tokenizera + policzenie narzutu raz, przy starcie
+/// (M5.1b w ROADMAP).
+const NARZUT_SZABLONU_TOKENOW: u32 = 60;
+
+/// Margines po wykryciu, że materiał jest gęstszy niż zakładano. Czysta
+/// ostrożność, nie wielkość zmierzona: schodzimy 10% poniżej zaobserwowanej
+/// gęstości, żeby kolejna próba nie trafiła w ten sam limit.
+const MARGINES_ZAOSTRZENIA: f64 = 0.9;
+
 pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
     if opcje.prompt.is_none() && opcje.file.is_none() {
         return Err("agent wymaga --prompt <tekst> lub --file <ścieżka>".into());
@@ -162,7 +183,7 @@ async fn uruchom_map_reduce(
     // Budżet znaków na kawałek = (budżet tokenów - narzut szablonu/pytania)
     // * najgęstszy zmierzony materiał (konserwatywnie). Realna gwarancja to
     // bramka C+1 na node'u + adaptacyjne dzielenie niżej, nie ta liczba.
-    let narzut_szablonu_tokenow = 60u32;
+    let narzut_szablonu_tokenow = NARZUT_SZABLONU_TOKENOW;
     let narzut_pytania_tokenow =
         (pytanie.chars().count() as f64 / mapreduce::ZNAK_NA_TOKEN_WORST_CASE).ceil() as u32;
     let mut znak_na_tok = mapreduce::ZNAK_NA_TOKEN_WORST_CASE;
@@ -301,7 +322,7 @@ async fn wyslij_kawalek_z_retry(
                              — zaostrzam budżet na resztę przebiegu",
                             *znak_na_tok
                         );
-                        *znak_na_tok = empiryczny * 0.9; // margines bezpieczeństwa
+                        *znak_na_tok = empiryczny * MARGINES_ZAOSTRZENIA;
                     }
                 }
                 let dl = fragment.chars().count();
@@ -396,7 +417,9 @@ fn zbuduj_zlecenie(
         // C: deklarujemy, ile kontekstu wysyłamy. Przybliżenie znakowe — node
         // i tak zweryfikuje realnie przez /tokenize (C+1), to jest tylko
         // deklaracja startowa (i sygnał błędu deklaracji w logu node'a).
-        max_ctx: (tresc.chars().count() as f64 / 3.5).ceil() as u32,
+        max_ctx: (tresc.chars().count() as f64
+            / crate::mapreduce::ZNAK_NA_TOKEN_PROZA_GENEROWANA)
+            .ceil() as u32,
         nonce: order.nonce.clone(),
     };
     Ok((order, request))
@@ -508,7 +531,7 @@ fn obsluz_odpowiedz(
                     "gen_ms": r.gen_ms,
                     "siec_ms": siec_ms,
                     "tokens_out": r.tokens_out,
-                    "tok_s": (tok_s * 10.0).round() / 10.0,
+                    "node_declared_tok_s": (tok_s * 10.0).round() / 10.0,
                     "receipt_zweryfikowany": weryfikacja,
                     "receipt": receipt,
                     // Czasy node'a to DEKLARACJA — nazwy mowia to wprost.
@@ -534,7 +557,7 @@ fn obsluz_odpowiedz(
             println!("Sieć (roundtrip):{} ms", siec_ms);
             if r.gen_ms > 0 {
                 let tok_s = r.tokens_out as f64 / (r.gen_ms as f64 / 1000.0);
-                println!("Przepustowość:   {tok_s:.1} tok/s");
+                println!("  node_declared_tok_s:   {tok_s:.1} tok/s (z deklaracji, nie z pomiaru klienta)");
             }
             println!(
                 "Weryfikacja:     {}",
