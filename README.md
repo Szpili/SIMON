@@ -73,10 +73,10 @@ then any naive fingerprint comparison slashes honest participants — and every
 cross-vendor decentralized inference network has this problem whether or not it
 has noticed yet.
 
-We want to measure it on ROCm rather than speculate about it. The node backend
-talks to an OpenAI-compatible endpoint, so a ROCm-backed server is a
-configuration change, not a rewrite; what we lack is AMD hardware to run the
-comparison on.
+We intend to measure it on ROCm rather than speculate about it. The node backend
+talks to an OpenAI-compatible endpoint, so a ROCm-served model is a
+configuration change, not a rewrite. What has not run yet is the ROCm arm of the
+comparison itself — that is the next measurement, on AMD Developer Cloud.
 
 ## Build
 
@@ -93,9 +93,9 @@ llama.cpp elsewhere).
 - `docs/whitepaper/SIMON-Whitepaper-EN.pdf` — full write-up (EN; PL version alongside)
 - `docs/design/DESIGN-VERIFIER-0.md` — verifier economics, drift measurements, and the open questions
 - `ROADMAP.md` — what is done, what is blocked, and by what
+- `notebooks/SIMON-D2-ROCm.ipynb` — the cross-vendor measurement itself, runnable on
+  AMD Developer Cloud; the CUDA baseline is embedded, so it reports a verdict in-session
 
 ## Licence
 
-AGPL-3.0-only. Deliberately: SIMON is network software, and the whole point is
-that participants can check what a node is actually running. A licence whose
-obligations trigger on network use is the one that matches that claim.
+MIT.

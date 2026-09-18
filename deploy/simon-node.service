@@ -1,0 +1,23 @@
+[Unit]
+Description=SIMON node (publiczne demo)
+Documentation=https://github.com/Szpili/SIMON
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# --key-file, NIE --key: systemd rozwija ${ZMIENNA} do argv, wiec ziarno
+# byloby widoczne w `ps` dla kazdego uzytkownika maszyny (sprawdzone).
+ExecStart=%h/SIMON/target/release/simon --role node \
+    --listen /ip4/127.0.0.1/tcp/9401 \
+    --model-url http://127.0.0.1:18020 \
+    --model-hash qwen3.8-27b \
+    --key-file %h/.simon/node.key
+Restart=always
+RestartSec=10
+# Wezel bez vLLM nie ma czego liczyc — po restarcie modelu i tak wstanie sam.
+StandardOutput=append:%h/.simon/node.log
+StandardError=append:%h/.simon/node.log
+
+[Install]
+WantedBy=default.target

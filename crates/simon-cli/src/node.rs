@@ -27,7 +27,26 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
     // peer_id, co rozjeżdża się przy odkrywaniu peerów (Kademlia/gossipsub)
     // w sieci z więcej niż jednym node'em na maszynę (złapane 2026-09-17
     // przy teście 2 równoczesnych agentów).
-    let mut swarm = zbuduj_swarm(&listen, &opcje.bootstrap, None)?;
+    // M2.5.1 + demo publiczne: ziarno musi byc znane PRZED budowa swarmu,
+    // bo z niego wyprowadzamy takze trwaly peer_id.
+    let z_pliku = match opcje.key_file.as_deref() {
+        Some(p) => Some(
+            std::fs::read_to_string(p)
+                .map_err(|e| format!("nie mogę czytać --key-file {p}: {e}"))?
+                .trim()
+                .to_string(),
+        ),
+        None => None,
+    };
+    let ziarno: Option<[u8; 32]> = match z_pliku.as_deref().or(opcje.key.as_deref()) {
+        Some(hexstr) => {
+            let raw = hex::decode(hexstr).map_err(|e| format!("zły --key (hex): {e}"))?;
+            Some(raw.try_into()
+                .map_err(|_| "--key musi mieć 32 bajty (64 znaki hex)".to_string())?)
+        }
+        None => None,
+    };
+    let mut swarm = zbuduj_swarm(&listen, &opcje.bootstrap, ziarno)?;
     wypisz_adresy(&swarm, "node");
 
     // C-gate: node OGŁASZA się w sieci (model + max_ctx), żeby koordynator
@@ -65,16 +84,10 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
 
     // M2.5.1: tożsamość node'a. Bez trwałego klucza klient nie ma czego weryfikować —
     // receipt podpisany losowym kluczem nie wiąże wyniku z konkretnym węzłem.
-    let klucz = match opcje.key.as_deref() {
-        Some(hexstr) => {
-            let raw = hex::decode(hexstr).map_err(|e| format!("zły --key (hex): {e}"))?;
-            let seed: [u8; 32] = raw
-                .try_into()
-                .map_err(|_| "--key musi mieć 32 bajty (64 znaki hex)".to_string())?;
-            Keypair::from_seed(&seed)
-        }
+    let klucz = match ziarno {
+        Some(seed) => Keypair::from_seed(&seed),
         None => {
-            println!("[node] UWAGA: brak --key — klucz losowy, tożsamość zmieni się po restarcie");
+            println!("[node] UWAGA: brak --key — klucz losowy, tożsamość (i peer_id) zmieni się po restarcie");
             Keypair::generate()
         }
     };

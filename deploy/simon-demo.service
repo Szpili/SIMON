@@ -1,0 +1,21 @@
+[Unit]
+Description=SIMON demo publiczne (Streamlit za Tailscale Funnel)
+After=simon-node.service
+Wants=simon-node.service
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.simon/env
+Environment=SIMON_PUBLIC=1
+Environment=SIMON_LIMIT_H=40
+Environment=SIMON_BIN=%h/SIMON/target/release/simon
+ExecStart=%h/.local/bin/streamlit run %h/SIMON/demo/app.py \
+    --server.port 8602 --server.address 127.0.0.1 --server.headless true \
+    --browser.gatherUsageStats false
+Restart=always
+RestartSec=10
+StandardOutput=append:%h/.simon/demo.log
+StandardError=append:%h/.simon/demo.log
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,162 @@
+"""SIMON — demo: zleć pracę obcemu węzłowi i NIE UWIERZ mu na słowo.
+
+Cała teza projektu w jednym ekranie: wynik przychodzi z maszyny, której nie
+kontrolujesz, razem z podpisanym receiptem — a Ty sprawdzasz ten receipt sam,
+łącznie z próbą podrobienia go na Twoich oczach.
+
+Demo woła prawdziwe `simon` CLI. Nic tu nie jest zasymulowane: jeśli węzeł nie
+odpowiada, demo mówi, że nie odpowiada, zamiast pokazywać ładny wynik z puszki.
+"""
+import json
+import os
+import pathlib
+import shutil
+import subprocess
+
+import streamlit as st
+
+import limity
+
+# Ścieżka liczona od pliku, nie od katalogu uruchomienia — streamlit bywa
+# odpalany z dowolnego miejsca i "./target/..." wtedy nie istnieje.
+DOMYSLNA = pathlib.Path(__file__).resolve().parent.parent / "target" / "release" / "simon"
+SIMON = os.environ.get("SIMON_BIN") or shutil.which("simon") or str(DOMYSLNA)
+NODE = os.environ.get("SIMON_NODE", "")
+
+# Tryb publiczny: demo wystawione w internet. Zmienia trzy rzeczy, wszystkie
+# dlatego, ze po drugiej stronie jest ktokolwiek, a nie my.
+PUBLICZNY = os.environ.get("SIMON_PUBLIC") == "1"
+LIMIT_NA_GODZINE = int(os.environ.get("SIMON_LIMIT_H", "40"))
+LICZNIK = pathlib.Path(os.environ.get("SIMON_LICZNIK", "/tmp/simon-demo-licznik.json"))
+
+
+st.set_page_config(page_title="SIMON", page_icon="🔏", layout="wide")
+
+
+def wywolaj(args: list[str], wejscie: str | None = None, limit_s: int = 300) -> dict:
+    """Uruchamia CLI i wyciąga JSON. Stdout to wynik, stderr to dziennik —
+    dlatego szukamy JSON-a od końca, a nie ufamy, że jest dokładnie jedną linią."""
+    try:
+        p = subprocess.run([SIMON, *args], input=wejscie, capture_output=True,
+                           text=True, timeout=limit_s)
+    except FileNotFoundError:
+        return {"ok": False, "powod": f"nie znaleziono binarki: {SIMON}"}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "powod": f"węzeł nie odpowiedział w {limit_s}s"}
+    for linia in reversed((p.stdout or "").strip().splitlines()):
+        try:
+            return json.loads(linia)
+        except json.JSONDecodeError:
+            continue
+    return {"ok": False, "powod": (p.stderr or "brak odpowiedzi").strip()[-400:]}
+
+
+with st.sidebar:
+    st.header("Węzeł")
+    if PUBLICZNY:
+        # Adres węzła NIE jest edytowalny publicznie: inaczej dowolny odwiedzający
+        # kazałby naszemu serwerowi łączyć się z adresem, który sam poda.
+        node, model = NODE, os.environ.get("SIMON_MODEL", "qwen3.8-27b")
+        st.caption(f"model: `{model}`")
+        st.caption(f"węzeł: `…{node[-16:]}`" if node else "brak węzła")
+        max_tokens = st.slider("Limit tokenów", 20, 200, 80, step=20)
+        st.caption(f"demo publiczne — limit {LIMIT_NA_GODZINE} zleceń/godz.")
+    else:
+        node = st.text_input("Adres węzła (multiaddr)", NODE,
+                             placeholder="/ip4/1.2.3.4/tcp/9001/p2p/12D3Koo...")
+        model = st.text_input("Model", "qwen3.8-27b")
+        max_tokens = st.slider("Limit tokenów", 20, 400, 80, step=20)
+        st.caption(f"binarka: `{SIMON}`")
+
+st.title("SIMON")
+st.markdown(
+    "Zlecasz pracę maszynie, której **nie kontrolujesz**. Wraca wynik i podpisany "
+    "receipt. Pytanie brzmi: skąd wiesz, że węzeł policzył to, co twierdzi?"
+)
+
+prompt = st.text_area("Zadanie dla sieci", "Napisz jedno zdanie o weryfikacji obliczeń.",
+                      height=90)
+
+if st.button("Zleć zadanie", type="primary", disabled=not node):
+    stop = limity.sprawdz(LICZNIK, LIMIT_NA_GODZINE) if PUBLICZNY else None
+    if stop:
+        st.warning(stop)
+    else:
+        with st.spinner("zlecenie leci do węzła..."):
+            st.session_state.wynik = wywolaj([
+                "--role", "agent", "--bootstrap", node, "--prompt", prompt[:2000],
+                "--model-hash", model, "--max-tokens", str(max_tokens), "--json"])
+        st.session_state.pop("werdykt", None)
+
+if not node:
+    st.info("Podaj adres węzła w panelu po lewej. Demo nie ma trybu udawanego — "
+            "bez działającego węzła nie ma czego weryfikować.")
+
+w = st.session_state.get("wynik")
+if w and not w.get("ok"):
+    st.error(f"Węzeł nie wykonał zlecenia: {w.get('powod') or w.get('opis') or w.get('kod')}")
+elif w:
+    lewo, prawo = st.columns([3, 2])
+    with lewo:
+        st.subheader("Wynik")
+        st.write(w["output"])
+        a, b, c = st.columns(3)
+        a.metric("TTFT", f"{w['ttft_ms']} ms")
+        b.metric("Przepustowość", f"{w['tok_s']} tok/s")
+        c.metric("Tokenów", w["tokens_out"])
+    with prawo:
+        st.subheader("Receipt")
+        st.caption(f"podpisał węzeł `{w['receipt']['node_id'][:24]}…`")
+        st.json(w["receipt"], expanded=False)
+
+    st.divider()
+    st.subheader("Nie wierz na słowo — sprawdź")
+    st.markdown(
+        "Receipt jest podpisany kluczem Ed25519 węzła, a podpis obejmuje odcisk "
+        "wyniku i identyfikator zlecenia. Poniżej możesz go zweryfikować, a także "
+        "spróbować oszukać weryfikację **dwoma sposobami, którymi realnie by się to zrobiło**."
+    )
+    k1, k2, k3 = st.columns(3)
+    surowy = json.dumps(w["receipt"])
+
+    if k1.button("Zweryfikuj receipt"):
+        st.session_state.werdykt = ("prawdziwy receipt", wywolaj(
+            ["--verify-receipt", "-", "--expect-job-id", w["job_id"],
+             "--expect-model", model, "--json"], wejscie=surowy, limit_s=30))
+
+    if k2.button("Podmień wynik"):
+        podrobiony = dict(w["receipt"], output_digest="0" * 64)
+        st.session_state.werdykt = ("węzeł podmienia wynik po podpisaniu", wywolaj(
+            ["--verify-receipt", "-", "--json"], wejscie=json.dumps(podrobiony), limit_s=30))
+
+    if k3.button("Podstaw pod inne zlecenie"):
+        st.session_state.werdykt = ("prawdziwy receipt, ale z CUDZEGO zlecenia", wywolaj(
+            ["--verify-receipt", "-", "--expect-job-id", "job-zupelnie-inne", "--json"],
+            wejscie=surowy, limit_s=30))
+
+    if "werdykt" in st.session_state:
+        opis, v = st.session_state.werdykt
+        st.caption(f"przypadek: {opis}")
+        if v.get("ok"):
+            st.success("RECEIPT WAŻNY — podpis się zgadza i dotyczy tego zlecenia")
+        else:
+            powody = []
+            if v.get("parsuje_sie") is False:
+                powody.append("to nie jest poprawny receipt")
+            if v.get("podpis_ok") is False:
+                powody.append("**podpis Ed25519 nie pasuje** — treść zmieniona po podpisaniu")
+            if v.get("job_id_ok") is False:
+                powody.append("**receipt dotyczy innego zlecenia** — podpis prawdziwy, "
+                              "ale to nie jest dowód na TĘ pracę")
+            if v.get("model_ok") is False:
+                powody.append("**inny model niż zamówiony**")
+            st.error("ODRZUCONY: " + "; ".join(powody or [v.get("powod", "nieznany powód")]))
+        st.json(v, expanded=False)
+
+st.divider()
+st.caption(
+    "Audyt pełny (przeliczenie zlecenia przez weryfikatora) kosztuje 2,4–9,9% "
+    "kosztu samego zlecenia — zmierzone, `docs/design/DESIGN-VERIFIER-0.md`. "
+    "Czego SIMON jeszcze NIE robi: nie karze automatycznie za rozbieżny odcisk "
+    "aktywacji, bo nie mamy progu, którego dalibyśmy radę obronić."
+)

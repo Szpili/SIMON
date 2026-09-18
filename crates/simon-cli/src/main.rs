@@ -50,6 +50,15 @@ OPCJE:
     --max-tokens <n>         [agent] limit tokenów (domyślnie 128; w trybie
                              --file dotyczy rund redukcji, nie kawałków map)
     --fee <n>                [agent] opłata THINK (domyślnie 1)
+    --json                   [agent] jeden obiekt JSON na stdout (wynik,
+                             pomiar, surowy receipt, werdykt weryfikacji)
+                             zamiast wydruku dla człowieka — dla demo/integracji
+    --verify-receipt <plik>  sprawdź receipt, który ktoś Ci podał (`-` = stdin).
+                             Offline, bez sieci. Z --expect-job-id/--expect-model
+                             sprawdza też, czy to receipt do TEGO zlecenia.
+    --key-file <plik>        [node] jak --key, ale ziarno czytane z pliku.
+                             UŻYWAJ TEGO we wdrożeniu: --key <hex> jest widoczny
+                             w `ps` dla każdego użytkownika maszyny.
     --key <hex>              [node] trwały klucz Ed25519 (64 hex = 32 B seed).
                              Bez tego node losuje klucz przy starcie i klient
                              nie ma stałej tożsamości do weryfikacji receiptu.
@@ -111,6 +120,18 @@ pub struct Opcje {
     pub then_bootstrap: Vec<String>,
     pub then_model_hash: Option<String>,
     pub then_prompt: Option<String>,
+    /// Demo/integracja: jeden obiekt JSON na stdout zamiast tekstu dla czlowieka.
+    pub json: bool,
+    /// Weryfikacja cudzego receiptu — bez sieci, bez zaufania do kogokolwiek.
+    /// To jest cala teza projektu jako jedna komenda: dostales wynik i podpis,
+    /// sprawdzasz je sam. Wartosc: sciezka do pliku albo `-` (stdin).
+    /// Sciezka do pliku z kluczem node'a. Wersja `--key <hex>` wystawia ziarno
+    /// w `ps` KAZDEMU uzytkownikowi maszyny (i w dzienniku systemd) — do
+    /// trwalego wdrozenia uzywaj pliku.
+    pub key_file: Option<String>,
+    pub verify_receipt: Option<String>,
+    pub expect_job_id: Option<String>,
+    pub expect_model: Option<String>,
 }
 
 impl Opcje {
@@ -130,6 +151,11 @@ impl Opcje {
         let mut then_bootstrap = Vec::new();
         let mut then_model_hash = None;
         let mut then_prompt = None;
+        let mut json = false;
+        let mut key_file = None;
+        let mut verify_receipt = None;
+        let mut expect_job_id = None;
+        let mut expect_model = None;
 
         let mut i = 0;
         while i < args.len() {
@@ -180,12 +206,22 @@ impl Opcje {
                 "--then-bootstrap" => then_bootstrap.push(wartosc(&mut i, "--then-bootstrap")?),
                 "--then-model-hash" => then_model_hash = Some(wartosc(&mut i, "--then-model-hash")?),
                 "--then-prompt" => then_prompt = Some(wartosc(&mut i, "--then-prompt")?),
+                "--json" => json = true,
+                "--key-file" => key_file = Some(wartosc(&mut i, "--key-file")?),
+                "--verify-receipt" => verify_receipt = Some(wartosc(&mut i, "--verify-receipt")?),
+                "--expect-job-id" => expect_job_id = Some(wartosc(&mut i, "--expect-job-id")?),
+                "--expect-model" => expect_model = Some(wartosc(&mut i, "--expect-model")?),
                 inny => return Err(format!("nieznany argument: {inny}")),
             }
             i += 1;
         }
 
-        let rola = rola.ok_or("brak --role (agent|coord|node)")?;
+        let rola = match rola {
+            Some(r) => r,
+            // --verify-receipt dziala offline, rola jest bez znaczenia
+            None if verify_receipt.is_some() => Rola::Agent,
+            None => return Err("brak --role (agent|coord|node)".into()),
+        };
         Ok(Self {
             rola,
             listen,
@@ -202,8 +238,79 @@ impl Opcje {
             then_bootstrap,
             then_model_hash,
             then_prompt,
+            json,
+            key_file,
+            verify_receipt,
+            expect_job_id,
+            expect_model,
         })
     }
+}
+
+/// `--verify-receipt`: sprawdza receipt, ktory ktos nam podal. Bez sieci,
+/// bez runtime, bez zaufania do zrodla. Kazda bramka raportowana OSOBNO —
+/// "nie przeszlo" bez wskazania KTOREJ bramki jest bezuzyteczne dla kogos,
+/// kto probuje zrozumiec, co go oszukalo.
+fn weryfikuj_offline(opcje: &Opcje, zrodlo: &str) -> ExitCode {
+    use std::io::Read;
+    let tekst = if zrodlo == "-" {
+        let mut b = String::new();
+        match std::io::stdin().read_to_string(&mut b) {
+            Ok(_) => b,
+            Err(e) => {
+                eprintln!("BŁĄD: nie mogę czytać stdin: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        match std::fs::read_to_string(zrodlo) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("BŁĄD: nie mogę czytać {zrodlo}: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    };
+
+    let r: simon_core::receipt::Receipt = match serde_json::from_str(tekst.trim()) {
+        Ok(r) => r,
+        Err(e) => {
+            if opcje.json {
+                println!("{}", serde_json::json!({
+                    "ok": false, "parsuje_sie": false, "powod": e.to_string()}));
+            } else {
+                eprintln!("NIEPOPRAWNY: to nie jest receipt ({e})");
+            }
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let podpis_ok = r.verify_self().is_ok();
+    let job_ok = opcje.expect_job_id.as_ref().map(|j| *j == r.job_id);
+    let model_ok = opcje.expect_model.as_ref().map(|m| *m == r.model_hash);
+    let ok = podpis_ok && job_ok != Some(false) && model_ok != Some(false);
+
+    if opcje.json {
+        println!("{}", serde_json::json!({
+            "ok": ok,
+            "parsuje_sie": true,
+            "podpis_ok": podpis_ok,
+            "job_id_ok": job_ok,
+            "model_ok": model_ok,
+            "job_id": r.job_id,
+            "node_id": r.node_id,
+            "model_hash": r.model_hash,
+            "runtime": r.runtime,
+            "signer": r.signer,
+        }));
+    } else {
+        println!("podpis Ed25519 : {}", if podpis_ok { "OK" } else { "ZŁY" });
+        if let Some(v) = job_ok { println!("job_id         : {}", if v { "zgodny" } else { "NIEZGODNY" }); }
+        if let Some(v) = model_ok { println!("model_hash     : {}", if v { "zgodny" } else { "NIEZGODNY" }); }
+        println!("node           : {}", r.node_id);
+        println!("werdykt        : {}", if ok { "RECEIPT WAŻNY" } else { "ODRZUCONY" });
+    }
+    if ok { ExitCode::SUCCESS } else { ExitCode::FAILURE }
 }
 
 fn main() -> ExitCode {
@@ -220,6 +327,12 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+
+    // Weryfikacja cudzego receiptu jest offline — nie stawiamy runtime'u
+    // ani nie dotykamy sieci.
+    if let Some(zrodlo) = opcje.verify_receipt.clone() {
+        return weryfikuj_offline(&opcje, &zrodlo);
+    }
 
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,

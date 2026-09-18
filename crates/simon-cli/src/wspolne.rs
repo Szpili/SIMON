@@ -24,10 +24,14 @@ pub struct Zachowanie {
 pub fn zbuduj_swarm(
     listen: &[String],
     bootstrap: &[String],
-    seed: Option<u64>,
+    // Ziarno tozsamosci SIECIOWEJ. `None` = losowy peer_id per proces
+    // (patrz komentarz w node.rs). `Some(seed)` = node ma trwaly `--key`,
+    // wiec i jego adres w sieci ma byc trwaly — inaczej kazdy restart
+    // unieważnia adres bootstrap, ktory ktos gdzies zapisal.
+    tozsamosc: Option<[u8; 32]>,
 ) -> Result<libp2p::Swarm<Zachowanie>, String> {
-    let klucz = match seed {
-        Some(s) => deterministyczny_klucz(s),
+    let klucz = match tozsamosc {
+        Some(seed) => klucz_p2p_z_seeda(&seed),
         None => Keypair::generate_ed25519(),
     };
 
@@ -95,6 +99,23 @@ pub fn multiaddr_z_peerdem(ma: &Multiaddr) -> Option<(libp2p::PeerId, Multiaddr)
     peer.map(|p| (p, ma.clone()))
 }
 
+/// Klucz TOZSAMOSCI SIECIOWEJ wyprowadzony z ziarna node'a.
+///
+/// Celowo NIE jest to ten sam klucz, ktorym node podpisuje receipty, mimo ze
+/// pochodzi z tego samego ziarna. Uzywanie jednego klucza Ed25519 do dwoch
+/// roznych celow (podpisy aplikacyjne + uscisk dloni transportu) to klasyczny
+/// sposob na to, zeby podpis z jednego protokolu dalo sie podstawic w drugim.
+/// Rozdzielamy je separacja domen.
+pub fn klucz_p2p_z_seeda(seed: &[u8; 32]) -> Keypair {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(b"simon-p2p-identity-v1");
+    h.update(seed);
+    let mut bajty = [0u8; 32];
+    bajty.copy_from_slice(&h.finalize());
+    Keypair::ed25519_from_bytes(bajty).expect("32 bajty = poprawny klucz")
+}
+
 /// Deterministyczny klucz z seeda — do testów i stabilnych tożsamości.
 pub fn deterministyczny_klucz(seed: u64) -> Keypair {
     use sha2::{Digest, Sha256};
@@ -126,6 +147,24 @@ mod tests {
         let c = deterministyczny_klucz(8);
         assert_eq!(a.public(), b.public(), "ten sam seed = ten sam peer");
         assert_ne!(a.public(), c.public(), "inny seed = inny peer");
+    }
+
+    #[test]
+    fn tozsamosc_p2p_jest_stabilna_i_rozna_od_klucza_podpisu() {
+        let seed = [7u8; 32];
+        assert_eq!(klucz_p2p_z_seeda(&seed).public(), klucz_p2p_z_seeda(&seed).public(),
+                   "to samo ziarno = ten sam peer_id (inaczej adres bootstrap ginie po restarcie)");
+        assert_ne!(klucz_p2p_z_seeda(&seed).public(), klucz_p2p_z_seeda(&[8u8; 32]).public());
+
+        // Klucz sieciowy NIE moze byc tym samym kluczem, co podpisujacy receipty.
+        let podpisujacy = simon_core::crypto::Keypair::from_seed(&seed);
+        let p2p = klucz_p2p_z_seeda(&seed);
+        let p2p_bajty = match p2p.clone().try_into_ed25519() {
+            Ok(k) => k.to_bytes()[32..].to_vec(),
+            Err(_) => panic!("spodziewany ed25519"),
+        };
+        assert_ne!(p2p_bajty, podpisujacy.public().0.to_vec(),
+                   "separacja domen: ten sam material klucza w dwoch rolach");
     }
 
     #[test]

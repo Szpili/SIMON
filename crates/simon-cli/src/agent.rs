@@ -64,13 +64,13 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
     // --- Etap A (dziś jedyny etap, gdy --then-bootstrap nie podany) ---
     let prompt = opcje.prompt.clone().expect("sprawdzone na górze funkcji");
     let (order, request) = zbuduj_zlecenie(&model_zadany, &prompt, opcje.fee, opcje.max_tokens, &klucz)?;
-    println!("[agent] order_id={}", order.order_id);
-    println!("[agent] model={} fee={}", order.model_hash, order.fee_think);
-    println!("[agent] wysyłam prompt do {peer} (/simon/prompt/1)...");
+    eprintln!("[agent] order_id={}", order.order_id);
+    eprintln!("[agent] model={} fee={}", order.model_hash, order.fee_think);
+    eprintln!("[agent] wysyłam prompt do {peer} (/simon/prompt/1)...");
     let (reply, siec_ms) = wyslij_i_czekaj(&mut swarm, peer, request).await?;
 
     if opcje.then_bootstrap.is_empty() {
-        return obsluz_odpowiedz(reply, siec_ms, &order.model_hash);
+        return obsluz_odpowiedz(reply, siec_ms, &order.model_hash, opcje.json);
     }
 
     // --- B2: łańcuch — etap A zweryfikowany, przekazujemy wynik do etapu B ---
@@ -87,11 +87,11 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
 
     let tekst_b = zbuduj_prompt_then(&then_prompt_tekst, &wynik_a);
     let (order_b, request_b) = zbuduj_zlecenie(&then_model, &tekst_b, opcje.fee, opcje.max_tokens, &klucz)?;
-    println!("[agent] etap B: wysyłam do {then_peer} (/simon/prompt/1)...");
+    eprintln!("[agent] etap B: wysyłam do {then_peer} (/simon/prompt/1)...");
     let (reply_b, siec_ms_b) = wyslij_i_czekaj(&mut swarm, then_peer, request_b).await?;
 
     println!("\n=== ETAP B ===");
-    obsluz_odpowiedz(reply_b, siec_ms_b, &order_b.model_hash)
+    obsluz_odpowiedz(reply_b, siec_ms_b, &order_b.model_hash, opcje.json)
 }
 
 /// Parsuje peer_id z listy multiadresów (`.../p2p/<id>`), używane dla
@@ -184,7 +184,7 @@ async fn uruchom_map_reduce(
         .to_string_lossy()
         .into_owned();
     let _ = std::fs::create_dir_all(&checkpoint_dir);
-    println!("[agent] checkpointy wyników cząstkowych: {checkpoint_dir}/ (siatka bezpieczeństwa, nie auto-resume)");
+    eprintln!("[agent] checkpointy wyników cząstkowych: {checkpoint_dir}/ (siatka bezpieczeństwa, nie auto-resume)");
 
     let mut wyniki_czastkowe: Vec<String> = Vec::with_capacity(kawalki.len());
     for (i, kawalek) in kawalki.iter().enumerate() {
@@ -205,7 +205,7 @@ async fn uruchom_map_reduce(
         )
         .await?;
         let _ = std::fs::write(format!("{checkpoint_dir}/kawalek_{i:04}.txt"), &wynik);
-        println!("[agent] map {}/{n}: {} znaków wyniku", i + 1, wynik.chars().count());
+        eprintln!("[agent] map {}/{n}: {} znaków wyniku", i + 1, wynik.chars().count());
         wyniki_czastkowe.push(wynik);
     }
 
@@ -226,7 +226,7 @@ async fn uruchom_map_reduce(
     while poziom.len() > 1 {
         runda += 1;
         let grupy = mapreduce::grupuj_do_budzetu(&poziom, budzet_znakow_reduce);
-        println!("[agent] reduce runda {runda}: {} wyników -> {} grup", poziom.len(), grupy.len());
+        eprintln!("[agent] reduce runda {runda}: {} wyników -> {} grup", poziom.len(), grupy.len());
         if grupy.len() >= poziom.len() {
             return Err(format!(
                 "reduce runda {runda}: grupowanie nie zmniejsza liczby elementów ({} -> {}) \
@@ -419,7 +419,7 @@ async fn wyslij_i_czekaj(
                 return Ok((response, start.elapsed().as_millis() as u64));
             }
             Ok(SwarmEvent::ConnectionEstablished { peer_id, .. }) => {
-                println!("[agent] połączony: {peer_id}");
+                eprintln!("[agent] połączony: {peer_id}");
             }
             Ok(_) => {}
         }
@@ -442,9 +442,12 @@ fn wyodrebnij_output(reply: PromptReply, oczekiwany_model: &str) -> Result<Strin
 }
 
 /// Wypisuje wynik, weryfikuje receipt i podaje rozbicie pomiaru (format Hermesa).
-fn obsluz_odpowiedz(reply: PromptReply, siec_ms: u64, oczekiwany_model: &str) -> Result<(), String> {
+fn obsluz_odpowiedz(reply: PromptReply, siec_ms: u64, oczekiwany_model: &str, json: bool) -> Result<(), String> {
     match reply {
         PromptReply::Blad(e) => {
+            if json {
+                println!("{}", serde_json::json!({"ok": false, "kod": e.kod, "opis": e.opis}));
+            }
             eprintln!("[agent] BŁĄD node'a {}: {}", e.kod, e.opis);
             Err(format!("node zwrócił błąd: {}", e.kod))
         }
@@ -454,6 +457,30 @@ fn obsluz_odpowiedz(reply: PromptReply, siec_ms: u64, oczekiwany_model: &str) ->
             if !weryfikacja {
                 eprintln!("[agent][diagnoza] oczekiwano job_id={} model={}", r.job_id, oczekiwany_model);
                 eprintln!("[agent][diagnoza] odebrany receipt: {}", r.receipt);
+            }
+            if json {
+                let tok_s = if r.gen_ms > 0 {
+                    r.tokens_out as f64 / (r.gen_ms as f64 / 1000.0)
+                } else { 0.0 };
+                // receipt idzie SUROWY: demo ma pokazac to, co faktycznie podpisal
+                // node, a nie nasza reinterpretacje.
+                let receipt: serde_json::Value = serde_json::from_str(&r.receipt)
+                    .unwrap_or(serde_json::Value::Null);
+                println!("{}", serde_json::json!({
+                    "ok": true,
+                    "output": r.output,
+                    "job_id": r.job_id,
+                    "ttft_ms": r.ttft_ms,
+                    "gen_ms": r.gen_ms,
+                    "siec_ms": siec_ms,
+                    "tokens_out": r.tokens_out,
+                    "tok_s": (tok_s * 10.0).round() / 10.0,
+                    "receipt_zweryfikowany": weryfikacja,
+                    "receipt": receipt,
+                }));
+                return if weryfikacja { Ok(()) } else {
+                    Err("receipt nie przechodzi weryfikacji".into())
+                };
             }
             println!("\n=== WYNIK ===");
             println!("{}", r.output);
@@ -527,6 +554,11 @@ mod tests {
             then_bootstrap: Vec::new(),
             then_model_hash: None,
             then_prompt: None,
+            json: false,
+            key_file: None,
+            verify_receipt: None,
+            expect_job_id: None,
+            expect_model: None,
         }
     }
 
