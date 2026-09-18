@@ -98,7 +98,19 @@ alone confirms the **author of the receipt**, not the correctness of the
 computation.
 
 **What the client can check itself, and what it cannot.** It verifies the
-signature, the `job_id` and model match, and that the receipt is single-use.
+signature, the `job_id` and model match, and — since 2026-09-18 — **that the
+digest in the receipt covers the text actually received** (previously the
+signature covered only metadata, so a node could return any text; see
+`docs/SECURITY-LOG.md`).
+
+> **CORRECTION.** An earlier version of this paragraph said the client verifies
+> that the receipt is single-use. **No such check exists.** Receipt reuse is
+> prevented by something else: `order_id` is a digest of an order carrying a
+> fresh nonce, so `job_id` is unpredictable and a receipt from another job fails
+> the gate. That is a consequence of construction, not a check — and it gives no
+> replay detection across clients or over time. Accounting needs a ledger
+> (M5.2), because without one nothing notices the same receipt being counted twice.
+
 It **cannot** establish on its own whether the node actually computed — that
 requires the model weights and the compute to recreate the activations. A
 client without a GPU either trusts a third party or has no computation

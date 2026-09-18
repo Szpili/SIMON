@@ -97,7 +97,20 @@ o wykonaniu wraz z materiałem do probabilistycznego audytu. Sam podpis
 potwierdza **autora receiptu**, nie poprawność obliczenia.
 
 **Co klient może sprawdzić sam, a czego nie.** Sam weryfikuje podpis,
-zgodność `job_id` i modelu oraz jednorazowość receiptu. **Nie jest w stanie**
+zgodność `job_id` i modelu oraz — od 2026-09-18 — **czy odcisk w receipcie
+pokrywa faktycznie odebraną treść** (wcześniej podpis obejmował tylko
+metadane, więc node mógł odesłać dowolny tekst; patrz `docs/SECURITY-LOG.md`).
+
+> **KOREKTA.** Wcześniejsza wersja tego akapitu mówiła, że klient weryfikuje
+> „jednorazowość receiptu". **Takiej kontroli nie ma.** Ponownemu użyciu
+> receiptu zapobiega co innego: `order_id` jest odciskiem zlecenia ze świeżym
+> nonce, więc `job_id` jest nieprzewidywalny i receipt z cudzego zlecenia nie
+> przechodzi bramki. To skutek konstrukcji, nie sprawdzenie — i nie daje
+> wykrywania powtórzeń między klientami ani w czasie. Do rozliczeń potrzebny
+> jest rejestr (M5.2), bo bez niego nic nie zauważy policzenia tego samego
+> receiptu dwa razy.
+
+**Nie jest w stanie**
 sam stwierdzić, czy node faktycznie policzył — do tego potrzebne są wagi
 modelu i moc na odtworzenie aktywacji. Klient bez GPU albo ufa komuś
 trzeciemu, albo nie ma weryfikacji obliczeń wcale. Stąd osobna rola:

@@ -1,0 +1,52 @@
+name: CI
+
+# Powod istnienia tego pliku: 2026-09-18 stala `65 tok/s` udajaca pomiar
+# przeszla przez kod, komentarz i demo. Sygnal byl widoczny (dwie rozne karty,
+# jedna liczba) i zostal przeoczony kilka razy. Recenzent, testy i czlowiek
+# zawiodly jednoczesnie — wiec to musi sprawdzac maszyna, przy kazdym pushu.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  testy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Testy
+        run: cargo test --release --locked
+
+      # Clippy nie blokuje builda, ale ma byc widoczny.
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+        continue-on-error: true
+
+  wartownik-stalych:
+    # Osobne zadanie, zeby bylo widac W NAZWIE, co pilnuje.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Detektor pomiarow-stalych
+        run: cargo test --release -p simon-core pomiar -- --nocapture
+
+      # Sygnatura bledu z 2026-09-18: przepustowosc liczona ze stalej.
+      # Wartownik celowo pomija komentarze (opis incydentu ma moc zostac
+      # w kodzie) i przeliczenia ms->s, a lapie dzielenie przez stala stawke.
+      - name: Wartownik stalych
+        run: python3 scripts/wartownik_stalych.py crates
