@@ -1,0 +1,18 @@
+<section id="status" data-transition="fade" style="background:#151B2D; color:#F5F4F1; font-family:'Fira Sans', Verdana, sans-serif; padding:128px 128px 160px; display:flex; flex-direction:column; gap:36px">
+  <h2 style="font-size:72px; font-weight:700; line-height:1.1">Status, without rounding up</h2>
+  <table style="font-size:32px; width:1664px; border-collapse:collapse">
+    <tr>
+      <th style="text-align:left; padding:16px 24px; border-bottom:2px solid #D9A441; font-weight:700">Capability</th>
+      <th style="text-align:left; padding:16px 24px; border-bottom:2px solid #D9A441; font-weight:700">State</th>
+    </tr>
+    <tr><td style="padding:16px 24px; color:#B9BEC9">Output binding</td><td style="padding:16px 24px; color:#7FB069; font-weight:700">implemented, tested</td></tr>
+    <tr><td style="padding:16px 24px; color:#B9BEC9">Offline receipt verification by a third party</td><td style="padding:16px 24px; color:#7FB069; font-weight:700">implemented, tested</td></tr>
+    <tr><td style="padding:16px 24px; color:#B9BEC9">Chunking, map-reduce, agent-to-agent chaining</td><td style="padding:16px 24px; color:#7FB069; font-weight:700">working</td></tr>
+    <tr><td style="padding:16px 24px; color:#B9BEC9">Token counts recomputed independently</td><td style="padding:16px 24px; color:#D9A441; font-weight:700">partial — backends expose no token ids</td></tr>
+    <tr><td style="padding:16px 24px; color:#B9BEC9">Execution correctness (TopLoc-style audit)</td><td style="padding:16px 24px; color:#E08B8B; font-weight:700">not implemented</td></tr>
+    <tr><td style="padding:16px 24px; color:#B9BEC9">Automatic slashing</td><td style="padding:16px 24px; color:#E08B8B; font-weight:700">deliberately off — no defensible threshold</td></tr>
+    <tr><td style="padding:16px 24px; color:#B9BEC9">Wash-compute resistance</td><td style="padding:16px 24px; color:#E08B8B; font-weight:700">unsolved</td></tr>
+  </table>
+  <p style="position:absolute; left:128px; bottom:64px; font-size:24px; color:#8A8F9C; width:1664px">129 tests green · CI on every push, including a guard against constants posing as measurements</p>
+  <aside>A fingerprint mismatch triggers re-audit, not punishment: we will not ship a threshold we cannot defend. The ledger records work, never a balance, because verified work is not the same as independent demand. Colour is doubled by the words here, so the table still reads without it.</aside>
+</section>

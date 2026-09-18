@@ -1,0 +1,23 @@
+<section id="demo" data-transition="fade" style="background:#F5F4F1; color:#151B2D; font-family:'Fira Sans', Verdana, sans-serif; padding:128px 128px 160px; display:flex; flex-direction:column; gap:40px">
+  <p style="font-size:24px; font-weight:700; letter-spacing:4px; color:#B08428">LIVE DEMO</p>
+  <h2 style="font-size:72px; font-weight:700; line-height:1.1">Try to forge the receipt yourself</h2>
+  <div style="display:flex; gap:28px">
+    <div style="flex:1; display:flex; flex-direction:column; gap:16px; background:#FFFFFF; padding:40px; border:1px solid #DDDAD2; border-radius:16px">
+      <h3 style="font-size:30px; font-weight:700">Tamper with the answer</h3>
+      <p style="font-size:28px; line-height:1.4; color:#4A5568">Change one byte after signing.</p>
+      <p style="font-size:28px; font-weight:700; color:#A03232">REJECTED — signature breaks</p>
+    </div>
+    <div style="flex:1; display:flex; flex-direction:column; gap:16px; background:#FFFFFF; padding:40px; border:1px solid #DDDAD2; border-radius:16px">
+      <h3 style="font-size:30px; font-weight:700">Replay another job</h3>
+      <p style="font-size:28px; line-height:1.4; color:#4A5568">A genuinely signed receipt, from a different job.</p>
+      <p style="font-size:28px; font-weight:700; color:#A03232">REJECTED — not proof of this work</p>
+    </div>
+    <div style="flex:1; display:flex; flex-direction:column; gap:16px; background:#FFFFFF; padding:40px; border:1px solid #DDDAD2; border-radius:16px">
+      <h3 style="font-size:30px; font-weight:700">Swap the text</h3>
+      <p style="font-size:28px; line-height:1.4; color:#4A5568">Real signature, substituted answer.</p>
+      <p style="font-size:28px; font-weight:700; color:#A03232">REJECTED — digest covers the text</p>
+    </div>
+  </div>
+  <p style="position:absolute; left:128px; bottom:64px; font-size:24px; color:#6A7179; width:1600px">No simulated mode: with no node reachable, the demo says so instead of showing a canned result.</p>
+  <aside>The demo commissions real work from a node, then offers three attacks — the three a dishonest node would actually use. The third attack is the one that only started failing on 18 September — until then it passed every gate. That story is the next slide but one.</aside>
+</section>

@@ -1,0 +1,23 @@
+<section id="proves" data-transition="fade" style="background:#151B2D; color:#F5F4F1; font-family:'Fira Sans', Verdana, sans-serif; padding:128px 128px 160px; display:flex; flex-direction:column; gap:40px">
+  <h2 style="font-size:72px; font-weight:700; line-height:1.1">What a receipt proves — and what it does not</h2>
+  <div style="display:flex; gap:32px">
+    <div style="flex:1; display:flex; flex-direction:column; gap:20px; background:#1D2540; padding:48px; border-radius:16px">
+      <h3 style="font-size:32px; font-weight:700; color:#D9A441">Proved today</h3>
+      <p style="font-size:32px; line-height:1.4">A registered node signed <b>this exact answer</b> as the result of <b>this job</b>.</p>
+      <ul style="font-size:28px; line-height:1.5; color:#B9BEC9">
+        <li>Ed25519 signature over a commitment to the output text</li>
+        <li>Bound to the job id — a valid receipt from another run cannot be reused</li>
+      </ul>
+    </div>
+    <div style="flex:1; display:flex; flex-direction:column; gap:20px; background:#1D2540; padding:48px; border-radius:16px">
+      <h3 style="font-size:32px; font-weight:700; color:#D9A441">Not proved</h3>
+      <p style="font-size:32px; line-height:1.4">That the <b>declared model generated it</b>.</p>
+      <ul style="font-size:28px; line-height:1.5; color:#B9BEC9">
+        <li>A malicious node can sign arbitrary text with a correct digest</li>
+        <li>Token counts and timings are signed declarations, not independent measurements</li>
+      </ul>
+    </div>
+  </div>
+  <p style="position:absolute; left:128px; bottom:64px; font-size:24px; color:#8A8F9C; width:1600px">Binding model + prompt + execution + output needs an execution audit. It is not implemented, and the repository says so.</p>
+  <aside>The right-hand column is the one that matters. Most projects only ever show the left.</aside>
+</section>

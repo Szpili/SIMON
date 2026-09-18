@@ -1,0 +1,36 @@
+<section id="cost" data-transition="fade" style="background:#151B2D; color:#F5F4F1; font-family:'Fira Sans', Verdana, sans-serif; padding:128px 128px 160px; display:flex; flex-direction:column; gap:40px">
+  <p style="font-size:24px; font-weight:700; letter-spacing:4px; color:#D9A441">MEASURED, NOT PROJECTED</p>
+  <h2 style="font-size:72px; font-weight:700; line-height:1.1">Verification is cheap enough to pay for</h2>
+  <p style="font-size:32px; color:#B9BEC9; width:1500px">An audit is one forward pass. The job must also decode — and decoding is ~55× slower per token.</p>
+  <table style="font-size:30px; width:1600px; border-collapse:collapse">
+    <tr>
+      <th style="text-align:left; padding:14px 24px; border-bottom:2px solid #D9A441; font-weight:700">Prompt</th>
+      <th style="text-align:left; padding:14px 24px; border-bottom:2px solid #D9A441; font-weight:700">Output</th>
+      <th style="text-align:left; padding:14px 24px; border-bottom:2px solid #D9A441; font-weight:700">Job</th>
+      <th style="text-align:left; padding:14px 24px; border-bottom:2px solid #D9A441; font-weight:700">Audit</th>
+      <th style="text-align:left; padding:14px 24px; border-bottom:2px solid #D9A441; font-weight:700">Audit as % of job</th>
+    </tr>
+    <tr>
+      <td style="padding:14px 24px; color:#B9BEC9">500</td><td style="padding:14px 24px; color:#B9BEC9">50</td>
+      <td style="padding:14px 24px; color:#B9BEC9">7.9 s</td><td style="padding:14px 24px; color:#B9BEC9">0.63 s</td>
+      <td style="padding:14px 24px; font-weight:700; color:#D9A441">8.0%</td>
+    </tr>
+    <tr>
+      <td style="padding:14px 24px; color:#B9BEC9">2016</td><td style="padding:14px 24px; color:#B9BEC9">200</td>
+      <td style="padding:14px 24px; color:#B9BEC9">18.8 s</td><td style="padding:14px 24px; color:#B9BEC9">1.86 s</td>
+      <td style="padding:14px 24px; font-weight:700; color:#D9A441">9.9%</td>
+    </tr>
+    <tr>
+      <td style="padding:14px 24px; color:#B9BEC9">2011</td><td style="padding:14px 24px; color:#B9BEC9">500</td>
+      <td style="padding:14px 24px; color:#B9BEC9">87.1 s</td><td style="padding:14px 24px; color:#B9BEC9">2.07 s</td>
+      <td style="padding:14px 24px; font-weight:700; color:#D9A441">2.4%</td>
+    </tr>
+    <tr>
+      <td style="padding:14px 24px; color:#B9BEC9">6037</td><td style="padding:14px 24px; color:#B9BEC9">500</td>
+      <td style="padding:14px 24px; color:#B9BEC9">69.1 s</td><td style="padding:14px 24px; color:#B9BEC9">5.12 s</td>
+      <td style="padding:14px 24px; font-weight:700; color:#D9A441">7.4%</td>
+    </tr>
+  </table>
+  <p style="position:absolute; left:128px; bottom:64px; font-size:24px; color:#8A8F9C; width:1600px">Lower bound: this is the forward pass alone, without activation extraction and hashing. Raw data is in the repository.</p>
+  <aside>This number decides whether verification can come out of the job price. It can.</aside>
+</section>

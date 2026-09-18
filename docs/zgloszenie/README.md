@@ -6,10 +6,35 @@ wideo **MP4**, publiczne repo GitHub, URL działającej aplikacji.
 | Element | Plik / adres | Stan |
 |---|---|---|
 | Okładka 16:9 | `okladka-1920x1080.png` (źródło: `okladka.svg`) | gotowe |
-| Slajdy | deck w Artifacts, eksport do PDF z widoku prezentacji | gotowe (10 slajdów) |
+| Slajdy | `SIMON-slajdy.pdf` (10 stron, 1440×810 pt = 16:9); źródła w `slajdy/` | gotowe |
 | Repo | `github.com/Szpili/SIMON` | gotowe, MIT |
 | Demo pod URL-em | Tailscale Funnel, usługi pod systemd | działa |
 | Wideo MP4 | — | **brak** — ma sens dopiero z wynikiem ROCm |
+
+## Slajdy
+
+Źródłem prawdy są pliki w `slajdy/` — jeden slajd to jedna sekcja na płótnie
+1920×1080. Ten sam zestaw zasila deck w Artifacts i PDF do zgłoszenia, więc nie
+mogą się rozjechać.
+
+```bash
+python3 buduj_slajdy.py            # HTML + PDF
+python3 buduj_slajdy.py --arkusz   # dodatkowo arkusz miniatur do przeglądu
+```
+
+Arkusz miniatur nie jest ozdobą: **osiem z dziesięciu slajdów było w pierwszej
+wersji przepełnionych** — stopki nachodziły na tekst, a jedna karta w ogóle nie
+mieściła się na slajdzie. Widać to dopiero po wyrenderowaniu wszystkich naraz,
+nie po przeczytaniu HTML-a.
+
+Notatki prelegenta (`<aside>`) **nie trafiają na slajd ani do PDF-a** — są
+widoczne tylko w widoku prezentacji.
+
+### Pułapka, która kosztowała dwie rundy
+
+Złota kreska pod tytułem to `border-top`, a **nie** pudełko o wysokości 8 px.
+W kolumnie flex taki element jest ściskany do zera i znika bez śladu —
+obramowania kurczeniu nie podlegają.
 
 ## Okładka
 
