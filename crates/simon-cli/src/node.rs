@@ -70,7 +70,8 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
         .unwrap_or_else(|| "nieznany".to_string());
     // C: node odczytuje SWOJE fakty z vLLM, zamiast je konfigurować.
     // vLLM jest źródłem prawdy o samym sobie — zero rozjazdu z rzeczywistością.
-    let (model_z_vllm, max_ctx) = odczytaj_moje_fakty(&model_url).await;
+    let (model_z_backendu, max_ctx) =
+        odczytaj_moje_fakty(&model_url, opcje.model_hash.as_deref()).await;
     if max_ctx == 0 {
         eprintln!("[node] UWAGA: nie mogę odczytać max_model_len — nie będę odrzucał zleceń");
     } else {
@@ -78,9 +79,21 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
     }
     // C-gate: co node DEKLARUJE (idzie do rejestru → filtrowanie przydziału).
     // `--model-hash` zostaje jako etykieta, ale prawda pochodzi z vLLM.
-    let model_deklarowany = model_z_vllm.unwrap_or_else(|| model_hash.clone());
+    // Gdy backend potwierdził żądany model — ogłaszamy jego `id`. Gdy nie
+    // potwierdził, ogłaszamy to, co sami deklarujemy, ale MÓWIMY o tym głośno:
+    // cicha etykieta bez pokrycia jest gorsza niż brak etykiety.
+    let model_deklarowany = match model_z_backendu {
+        Some(m) => m,
+        None => {
+            eprintln!(
+                "[node] UWAGA: ogłaszam '{model_hash}' BEZ potwierdzenia od backendu"
+            );
+            model_hash.clone()
+        }
+    };
     println!("[node] deklaruję: model={model_deklarowany} max_ctx={max_ctx}");
-    println!("[node] model_url={model_url} model_hash={model_hash}");
+    let runtime = wykryj_runtime(&model_url).await;
+    println!("[node] model_url={model_url} model_hash={model_hash} runtime={runtime}");
 
     // M2.5.1: tożsamość node'a. Bez trwałego klucza klient nie ma czego weryfikować —
     // receipt podpisany losowym kluczem nie wiąże wyniku z konkretnym węzłem.
@@ -186,7 +199,7 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
                             Some(max_ctx),
                         )
                     } else {
-                        policz(&model_url, &model_deklarowany, &klucz, &request).await
+                        policz(&model_url, &model_deklarowany, &runtime, &klucz, &request).await
                     };
                     if let Err(e) = swarm
                         .behaviour_mut()
@@ -218,6 +231,7 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
 async fn policz(
     model_url: &str,
     model_hash: &str,
+    runtime: &str,
     klucz: &Keypair,
     req: &PromptRequest,
 ) -> PromptReply {
@@ -318,19 +332,27 @@ async fn policz(
         // M2.5.1: PODPISANY receipt (Ed25519). Klient weryfikuje trzy bramki:
         // podpis ważny, `signer` == klucz node'a, job_id/order_id zgodne.
         // Uwaga: bez podpisu receipt dowodził tylko „ktoś tak twierdzi".
-        receipt: zbuduj_podpisany_receipt(klucz, model_hash, req, tokens_out, ttft_ms, gen_ms),
+        receipt: zbuduj_podpisany_receipt(klucz, model_hash, runtime, req, tokens_out, ttft_ms, gen_ms),
         tokens_out,
         ttft_ms,
         gen_ms,
     })
 }
 
-/// C: odczytuje od vLLM DWA fakty o node: `id` modelu i `max_model_len`.
+/// C: odczytuje od backendu DWA fakty o node: `id` modelu i `max_model_len`.
 ///
-/// Node NIE konfiguruje tego ręcznie — vLLM jest źródłem prawdy o samym sobie.
-/// `id` zasila `Capability.declared` (filtr przydziału po modelu),
+/// Node NIE konfiguruje tego ręcznie — backend jest źródłem prawdy o samym
+/// sobie. `id` zasila `Capability.declared` (filtr przydziału po modelu),
 /// `max_model_len` zasila bramkę kontekstu.
-async fn odczytaj_moje_fakty(model_url: &str) -> (Option<String>, u32) {
+///
+/// NAPRAWA (2026-09-18): wcześniej brano bezwarunkowo `data[0]`. Przy vLLM,
+/// który serwuje jeden model, to działało. Przy backendzie wielomodelowym
+/// (Ollama wystawiła sześć) node OGŁASZAŁ SIECI INNY MODEL, NIŻ FAKTYCZNIE
+/// LICZY — koordynator routowałby po czymś, czego node nie serwuje, a receipt
+/// niósłby jeszcze inną nazwę. Gdy `--model-hash` jest podany, szukamy TEGO
+/// modelu na liście; gdy go nie ma, to nie jest drobiazg do zalogowania, tylko
+/// powód, żeby nie wstawać.
+async fn odczytaj_moje_fakty(model_url: &str, zadany: Option<&str>) -> (Option<String>, u32) {
     let url = format!("{}/v1/models", model_url.trim_end_matches('/'));
     let klient = match reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
@@ -347,9 +369,91 @@ async fn odczytaj_moje_fakty(model_url: &str) -> (Option<String>, u32) {
         Ok(v) => v,
         Err(_) => return (None, 0),
     };
-    let id = v["data"][0]["id"].as_str().map(|s| s.to_string());
-    let max_ctx = v["data"][0]["max_model_len"].as_u64().unwrap_or(0) as u32;
-    (id, max_ctx)
+    let puste = Vec::new();
+    let lista = v["data"].as_array().unwrap_or(&puste);
+    wybierz_wpis(lista, zadany)
+}
+
+/// Który wpis z `/v1/models` opisuje NAS. Wydzielone z zapytania sieciowego,
+/// żeby dało się to przetestować bez serwera — to jest miejsce, w którym node
+/// ostatnio ogłaszał cudzy model.
+fn wybierz_wpis(lista: &[serde_json::Value], zadany: Option<&str>) -> (Option<String>, u32) {
+    let wpis = match zadany {
+        // Szukamy DOKŁADNIE tego modelu, o którym mówimy, że go serwujemy.
+        Some(cel) => lista.iter().find(|m| m["id"].as_str() == Some(cel)),
+        // Bez `--model-hash`: `data[0]` jest jednoznaczne tylko przy jednym
+        // modelu. Przy kilku każdy wybór byłby zgadywaniem.
+        None => match lista.len() {
+            1 => lista.first(),
+            _ => {
+                if lista.len() > 1 {
+                    eprintln!(
+                        "[node] UWAGA: backend serwuje {} modeli, a nie podano --model-hash \
+                         — nie zgaduję, który ogłosić",
+                        lista.len()
+                    );
+                }
+                None
+            }
+        },
+    };
+
+    match wpis {
+        Some(m) => (
+            m["id"].as_str().map(|s| s.to_string()),
+            m["max_model_len"].as_u64().unwrap_or(0) as u32,
+        ),
+        None => {
+            if let Some(cel) = zadany {
+                eprintln!(
+                    "[node] UWAGA: backend NIE wystawia modelu '{cel}' (widzi {} innych)",
+                    lista.len()
+                );
+            }
+            (None, 0)
+        }
+    }
+}
+
+/// Jaki silnik NAPRAWDĘ liczy. Wcześniej receipt twierdził na sztywno
+/// `vllm-openai/1`, także gdy pod spodem stała Ollama (złapane 2026-09-18 na
+/// drugim węźle). Pole `runtime` decyduje o kwalifikacji do puli i o tym, czy
+/// dwa wyniki są w ogóle porównywalne — podpisana nieprawda w tym miejscu
+/// psuje dokładnie to, czemu SIMON ma zapobiegać.
+///
+/// Gdy nie umiemy rozstrzygnąć, wpisujemy `nieznany/1`. Uczciwe „nie wiem"
+/// jest mniej szkodliwe niż pewna zmyślona etykieta.
+async fn wykryj_runtime(model_url: &str) -> String {
+    let baza = model_url.trim_end_matches('/');
+    let klient = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+    {
+        Ok(k) => k,
+        Err(_) => return "nieznany/1".to_string(),
+    };
+    // Ollama: GET /api/version -> {"version":"0.x.y"}
+    if let Ok(o) = klient.get(format!("{baza}/api/version")).send().await {
+        if o.status().is_success() {
+            if let Ok(v) = o.json::<serde_json::Value>().await {
+                if let Some(w) = v["version"].as_str() {
+                    return format!("ollama/{w}");
+                }
+            }
+        }
+    }
+    // vLLM: GET /version -> {"version":"0.x.y"}
+    if let Ok(o) = klient.get(format!("{baza}/version")).send().await {
+        if o.status().is_success() {
+            if let Ok(v) = o.json::<serde_json::Value>().await {
+                if let Some(w) = v["version"].as_str() {
+                    return format!("vllm/{w}");
+                }
+            }
+        }
+    }
+    eprintln!("[node] UWAGA: nie rozpoznaję silnika pod {baza} — receipt powie 'nieznany'");
+    "nieznany/1".to_string()
 }
 
 /// C+1: prawdziwa liczba tokenów promptu przez `/tokenize` vLLM (endpoint
@@ -424,6 +528,7 @@ async fn odczytaj_realny_ctx(model_url: &str, prompt: &str) -> Option<u32> {
 fn zbuduj_podpisany_receipt(
     klucz: &Keypair,
     model_hash: &str,
+    runtime: &str,
     req: &PromptRequest,
     tokens_out: u32,
     ttft_ms: u64,
@@ -440,7 +545,7 @@ fn zbuduj_podpisany_receipt(
         job_id: req.job_id.clone(),
         node_id: klucz.public().to_hex(),
         model_hash: model_hash.to_string(),
-        runtime: "vllm-openai/1".to_string(),
+        runtime: runtime.to_string(),
         precision: Precision::Fp16,
         // M2.5.1b: do policzenia poza API vLLM (runner + hidden states).
         activation_hash: "toploc:NIE_POLICZONY".to_string(),
@@ -492,3 +597,46 @@ fn blad_ctx(
     })
 }
 
+
+#[cfg(test)]
+mod testy_wyboru_modelu {
+    use super::wybierz_wpis;
+    use serde_json::json;
+
+    fn lista() -> Vec<serde_json::Value> {
+        vec![
+            json!({"id": "qwen2.5-coder:14b"}),
+            json!({"id": "bielik:Q4", "max_model_len": 8192}),
+            json!({"id": "gemma4:12b"}),
+        ]
+    }
+
+    #[test]
+    fn bierze_zadany_model_a_nie_pierwszy_z_brzegu() {
+        // Regresja 2026-09-18: node ogłaszał `data[0]`, czyli CUDZY model.
+        let (id, ctx) = wybierz_wpis(&lista(), Some("bielik:Q4"));
+        assert_eq!(id.as_deref(), Some("bielik:Q4"));
+        assert_eq!(ctx, 8192, "max_ctx ma pochodzić z TEGO wpisu, nie z pierwszego");
+    }
+
+    #[test]
+    fn brak_zadanego_modelu_to_nie_jest_cichy_fallback() {
+        let (id, ctx) = wybierz_wpis(&lista(), Some("model-ktorego-nie-ma"));
+        assert!(id.is_none(), "nie wolno ogłosić modelu, którego backend nie ma");
+        assert_eq!(ctx, 0);
+    }
+
+    #[test]
+    fn jeden_model_bez_wskazania_jest_jednoznaczny() {
+        let jeden = vec![json!({"id": "qwen3.8-27b", "max_model_len": 36864})];
+        let (id, ctx) = wybierz_wpis(&jeden, None);
+        assert_eq!(id.as_deref(), Some("qwen3.8-27b"));
+        assert_eq!(ctx, 36864);
+    }
+
+    #[test]
+    fn kilka_modeli_bez_wskazania_to_zgadywanie_wiec_nic() {
+        let (id, _) = wybierz_wpis(&lista(), None);
+        assert!(id.is_none(), "przy kilku modelach wybór data[0] był źródłem błędu");
+    }
+}
