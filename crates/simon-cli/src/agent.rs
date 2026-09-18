@@ -71,7 +71,21 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
         .model_hash
         .clone()
         .unwrap_or_else(|| "qwen3.8-27b".to_string());
-    let klucz = Keypair::generate();
+    // M5.2a: TRWAŁA tożsamość. Wcześniej było tu `Keypair::generate()` przy
+    // każdym uruchomieniu — dwa uruchomienia były dwiema różnymi osobami,
+    // a metrycznik M5.2 nie potrafił przypisać pracy do nikogo.
+    let sciezka_tozsamosci = match opcje.identity_file.as_deref() {
+        Some(p) => std::path::PathBuf::from(p),
+        None => simon_core::tozsamosc::domyslna_sciezka().map_err(|e| e.to_string())?,
+    };
+    let klucz = simon_core::tozsamosc::wczytaj_lub_zaloz(&sciezka_tozsamosci)
+        .map_err(|e| e.to_string())?;
+    // Tylko klucz PUBLICZNY do logu. Sekret nie wychodzi z modułu tożsamości.
+    eprintln!(
+        "[agent] tożsamość: {}… ({})",
+        &klucz.public().to_hex()[..16],
+        sciezka_tozsamosci.display()
+    );
 
     // Znajdź peera docelowego (z --bootstrap .../p2p/<id>).
     let peer = znajdz_peera(&opcje.bootstrap, "--bootstrap")?;
@@ -548,6 +562,9 @@ fn obsluz_odpowiedz(
                         client_observed_ttft_ms: obserwacja.observed_time_to_first_event_ms,
                         client_observed_total_ms: obserwacja.observed_time_to_complete_ms,
                         // Podpis + zwiazanie tresci. Audytu wykonania NIE MA.
+                        // Epoka 1 = trwała tożsamość. Rekordy z epoki 0 podpisywał
+                        // klucz efemeryczny i ich własności NIE DA SIĘ odzyskać.
+                        identity_epoch: 1,
                         verification_status: StatusWeryfikacji::OutputBound,
                         receipt_signature: podpis,
                     };
@@ -677,6 +694,7 @@ mod tests {
             json: false,
             expect_output: None,
             rejestr: None,
+            identity_file: None,
             key_file: None,
             verify_receipt: None,
             expect_job_id: None,

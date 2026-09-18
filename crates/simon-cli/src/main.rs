@@ -53,6 +53,9 @@ OPCJE:
     --json                   [agent] jeden obiekt JSON na stdout (wynik,
                              pomiar, surowy receipt, werdykt weryfikacji)
                              zamiast wydruku dla człowieka — dla demo/integracji
+    --identity-file <plik>   [agent] M5.2a: plik trwałej tożsamości klienta.
+                             Domyślnie katalog danych użytkownika. Sekretu NIE
+                             podaje się w wierszu poleceń — byłby w `ps`.
     --rejestr <plik>         [agent] M5.2: dopisz wykonaną pracę do lokalnego
                              metrycznika (JSON Lines). NIE portfel, NIE saldo —
                              surowe liczniki, czasy mierzone u klienta i poziom
@@ -147,6 +150,10 @@ pub struct Opcje {
     /// NIE jest to portfel ani saldo — zapis, co się wydarzyło i do jakiego
     /// poziomu zostało sprawdzone. Wykrywa też powtórzenie receiptu.
     pub rejestr: Option<String>,
+    /// M5.2a: plik trwałej tożsamości klienta. Bez tego domyślny katalog danych
+    /// użytkownika. NIGDY nie przyjmujemy sekretu jako argumentu ani zmiennej
+    /// środowiskowej — byłby widoczny w `ps` i w historii powłoki.
+    pub identity_file: Option<String>,
 }
 
 impl Opcje {
@@ -173,6 +180,7 @@ impl Opcje {
         let mut expect_model = None;
         let mut expect_output = None;
         let mut rejestr = None;
+        let mut identity_file = None;
 
         let mut i = 0;
         while i < args.len() {
@@ -230,6 +238,7 @@ impl Opcje {
                 "--expect-model" => expect_model = Some(wartosc(&mut i, "--expect-model")?),
                 "--expect-output" => expect_output = Some(wartosc(&mut i, "--expect-output")?),
                 "--rejestr" => rejestr = Some(wartosc(&mut i, "--rejestr")?),
+                "--identity-file" => identity_file = Some(wartosc(&mut i, "--identity-file")?),
                 inny => return Err(format!("nieznany argument: {inny}")),
             }
             i += 1;
@@ -264,6 +273,7 @@ impl Opcje {
             expect_model,
             expect_output,
             rejestr,
+            identity_file,
         })
     }
 }

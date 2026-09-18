@@ -76,6 +76,18 @@ pub struct RekordPracyV1 {
     pub client_observed_ttft_ms: Option<u64>,
     pub client_observed_total_ms: u64,
 
+    /// Epoka tożsamości klienta.
+    ///
+    /// `0` (domyślne przy odczycie starych rekordów) = **LEGACY_EPHEMERAL_IDENTITY**:
+    /// rekord podpisał klucz generowany na jedno uruchomienie. Taki rekord dowodzi,
+    /// że KONKRETNY efemeryczny klucz podpisał pracę — ale **własności nie da się
+    /// odzyskać** (`ownership: UNRECOVERABLE`). Nowa tożsamość nie może
+    /// kryptograficznie udowodnić, że kontrolowała tamte klucze, więc
+    /// **nie wolno przepisać starych rekordów pod nowy klucz**.
+    ///
+    /// `1` = trwała tożsamość klienta (M5.2a).
+    #[serde(default)]
+    pub identity_epoch: u32,
     pub verification_status: StatusWeryfikacji,
     pub receipt_signature: Signature,
 }
@@ -170,6 +182,9 @@ impl Rejestr {
         let mut p = Podsumowanie::default();
         for r in &rekordy {
             p.zlecen += 1;
+            if r.identity_epoch == 0 {
+                p.epoka_efemeryczna += 1;
+            }
             p.prompt_tokens += r.prompt_tokens_total;
             p.completion_tokens += r.completion_tokens;
             p.czas_klienta_ms += r.client_observed_total_ms;
@@ -188,6 +203,8 @@ impl Rejestr {
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Podsumowanie {
     pub zlecen: u64,
+    /// Ile rekordów pochodzi z epoki efemerycznej — własność nieodzyskiwalna.
+    pub epoka_efemeryczna: u64,
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub czas_klienta_ms: u64,
@@ -224,6 +241,7 @@ mod testy {
             completion_tokens: 30,
             client_observed_ttft_ms: None,
             client_observed_total_ms: 914,
+            identity_epoch: 1,
             verification_status: StatusWeryfikacji::OutputBound,
             receipt_signature: k.sign_digest("d"),
         }

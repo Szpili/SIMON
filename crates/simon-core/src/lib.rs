@@ -18,6 +18,7 @@ pub mod crypto;
 pub mod obserwacja;
 pub mod pomiar;
 pub mod rejestr;
+pub mod tozsamosc;
 pub mod receipt;
 
 pub use crypto::{Keypair, PublicKey, Signature};

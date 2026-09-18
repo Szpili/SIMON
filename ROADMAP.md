@@ -371,6 +371,13 @@ Wartość leży gdzie indziej i tak to opisujemy:
       Komunikat w demo brzmi „karta wykonała X jednostek pracy; wynik, liczniki
       i autorstwo są związane podpisanym receiptem, a poziom weryfikacji jest
       pokazany osobno" — **nie** „karta zarobiła X".
+      **Stare rekordy (epoka 0) zostają nietknięte.** Podpisywał je klucz
+      efemeryczny, więc dowodzą, że KONKRETNY klucz podpisał pracę, ale
+      `ownership: UNRECOVERABLE` — nowa tożsamość nie może kryptograficznie
+      udowodnić, że kontrolowała tamte klucze. **Nie wolno ich przepisać pod
+      nowy klucz.** Rekordy niosą `identity_epoch`, a podsumowanie liczy je
+      osobno.
+
       **Zrobione:** `simon_core::rejestr` (JSON Lines, tylko dopisywanie),
       `--rejestr <plik>` w agencie, podsumowanie w demo. Rekord ma pola
       z recenzji; te, których dziś nie mamy (manifesty modelu i tokenizera,
@@ -383,6 +390,51 @@ Wartość leży gdzie indziej i tak to opisujemy:
       receiptu (po `receipt_hash`, także po restarcie procesu). Whitepaper
       twierdził, że klient sprawdza jednorazowość receiptu — nie sprawdzał.
       Teraz jest gdzie to sprawdzić.
+- [x] **M5.2a — trwała tożsamość klienta.** ZROBIONE 2026-09-18.
+
+      **Dziura, którą to naprawia:** agent wołał `Keypair::generate()` przy
+      KAŻDYM uruchomieniu, więc dwa uruchomienia były dwiema różnymi osobami,
+      a `client_pubkey` w metryczniku był za każdym razem innym losowym
+      kluczem. M5.2 ogłoszony jako zrobiony **nie potrafił przypisać pracy do
+      nikogo**. Dowód z żywego pliku: 2 rekordy, 2 klucze.
+
+      Zrobione: `simon_core::tozsamosc`, `--identity-file`, zapis atomowy
+      (plik tymczasowy → fsync → 0600 → rename → ponowny odczyt → porównanie
+      klucza publicznego), katalog danych użytkownika per system.
+      **Nigdy nie regenerujemy klucza po błędzie** — uszkodzony plik, złe prawa
+      albo brak możliwości zapisu zatrzymują start. Cicha regeneracja
+      wyglądałaby jak udany start, a znowu rozcinałaby metrycznik.
+      Sekret nie jest przyjmowany w wierszu poleceń ani w zmiennej
+      środowiskowej (byłby w `ps`) i nie trafia do żadnego logu.
+
+      Zweryfikowane na żywo: **2 zlecenia → 1 klucz klienta**, plik `0600`,
+      zero trafień sekretu w wyjściu agenta.
+
+- [ ] **M5.2b — SPECYFIKACJA wyprowadzania tożsamości.** Przed jakąkolwiek
+      frazą odzyskiwania trzeba zamrozić format:
+      definicja root-secret; rozstrzygnięcie, czy słowa kodują wprost
+      32-bajtowe ziarno SIMON-a, czy używamy pełnego BIP-39 z jego PBKDF2
+      i 64-bajtowym wynikiem jako materiałem dla HKDF (**tych wariantów nie
+      wolno mieszać** — backup dawałby inne klucze w różnych implementacjach);
+      etykiety HKDF z wersją (`SIMON/client-signing/ed25519/v1`,
+      `SIMON/account-root/ed25519/v1`, `SIMON/node-signing/ed25519/<device>/v1`,
+      `SIMON/libp2p/ed25519/<device>/v1`); wektory testowe między językami.
+
+      **Osobny klucz per urządzenie, nie jeden dla wszystkich.** Wyprowadzenie
+      tego samego klucza node'a na dwóch maszynach z jednej frazy przywróciłoby
+      problem identycznych `peer_id`, naprawiony 2026-09-18. Zamiast tego:
+      klucz konta certyfikuje, że dany node należy do konta.
+
+      **Prywatność:** jeden globalny `client_pubkey` to globalny identyfikator
+      korelacyjny — każdy operator node'a połączy całą historię klienta.
+      Docelowo pseudonim per kontrahent albo per pod. Dziś status:
+      `MVP_IDENTITY, privacy-preserving derivation: NOT DESIGNED`.
+
+- [ ] **M5.2c — odzyskiwanie.** Eksport frazy dopiero po jawnym potwierdzeniu,
+      przywracanie wyłącznie do pustego magazynu tożsamości, ochrona przed
+      kolizją, weryfikacja kopii, rotacja i unieważnianie. **Nie nazywamy tego
+      „odzyskiwaniem portfela", bo portfela nie ma.**
+
 - [ ] **M5.3 — normalizacja jednostki.** Pierwsza jawna postać: `C = w_p·P + w_d·D`,
       gdzie `P` to **nie-cache'owane** tokeny promptu, `D` to tokeny wyjścia,
       a wagi są ZMIERZONE dla konkretnego profilu modelu. Manifest pracy musi
