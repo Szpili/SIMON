@@ -8,6 +8,7 @@ use libp2p::request_response::{Event as RrEvent, Message as RrMessage};
 use libp2p::swarm::SwarmEvent;
 use libp2p::{PeerId, Swarm};
 use simon_core::crypto::Keypair;
+use simon_core::obserwacja::{ClientObservationV1, Transport};
 use simon_core::receipt::Receipt;
 use simon_harness::client_protocol::{
     Autoryzacja, JobOrder, RejestrKoordynatorow, FORMAT_V,
@@ -67,10 +68,13 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
     eprintln!("[agent] order_id={}", order.order_id);
     eprintln!("[agent] model={} fee={}", order.model_hash, order.fee_think);
     eprintln!("[agent] wysyłam prompt do {peer} (/simon/prompt/1)...");
+    // Zegar MONOTONICZNY. Nie liczymy roznicy absolutnych znacznikow z dwoch
+    // maszyn — synchronizacja zegarow dolozylaby blad, ktorego nie musimy miec.
+    let t0 = std::time::Instant::now();
     let (reply, siec_ms) = wyslij_i_czekaj(&mut swarm, peer, request).await?;
 
     if opcje.then_bootstrap.is_empty() {
-        return obsluz_odpowiedz(reply, siec_ms, &order.model_hash, opcje.json);
+        return obsluz_odpowiedz(reply, siec_ms, &order.model_hash, opcje.json, t0, &klucz);
     }
 
     // --- B2: łańcuch — etap A zweryfikowany, przekazujemy wynik do etapu B ---
@@ -88,10 +92,11 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
     let tekst_b = zbuduj_prompt_then(&then_prompt_tekst, &wynik_a);
     let (order_b, request_b) = zbuduj_zlecenie(&then_model, &tekst_b, opcje.fee, opcje.max_tokens, &klucz)?;
     eprintln!("[agent] etap B: wysyłam do {then_peer} (/simon/prompt/1)...");
+    let t0b = std::time::Instant::now();
     let (reply_b, siec_ms_b) = wyslij_i_czekaj(&mut swarm, then_peer, request_b).await?;
 
     println!("\n=== ETAP B ===");
-    obsluz_odpowiedz(reply_b, siec_ms_b, &order_b.model_hash, opcje.json)
+    obsluz_odpowiedz(reply_b, siec_ms_b, &order_b.model_hash, opcje.json, t0b, &klucz)
 }
 
 /// Parsuje peer_id z listy multiadresów (`.../p2p/<id>`), używane dla
@@ -442,7 +447,14 @@ fn wyodrebnij_output(reply: PromptReply, oczekiwany_model: &str) -> Result<Strin
 }
 
 /// Wypisuje wynik, weryfikuje receipt i podaje rozbicie pomiaru (format Hermesa).
-fn obsluz_odpowiedz(reply: PromptReply, siec_ms: u64, oczekiwany_model: &str, json: bool) -> Result<(), String> {
+fn obsluz_odpowiedz(
+    reply: PromptReply,
+    siec_ms: u64,
+    oczekiwany_model: &str,
+    json: bool,
+    t0: std::time::Instant,
+    klucz_klienta: &Keypair,
+) -> Result<(), String> {
     match reply {
         PromptReply::Blad(e) => {
             if json {
@@ -459,6 +471,27 @@ fn obsluz_odpowiedz(reply: PromptReply, siec_ms: u64, oczekiwany_model: &str, js
                 eprintln!("[agent][diagnoza] oczekiwano job_id={} model={}", r.job_id, oczekiwany_model);
                 eprintln!("[agent][diagnoza] odebrany receipt: {}", r.receipt);
             }
+            // Obserwacja klienta: czas ZMIERZONY, powstajacy dopiero po odebraniu
+            // odpowiedzi — dlatego NIE moze byc w receipcie podpisanym przez node.
+            let output_bound_ms = t0.elapsed().as_millis() as u64;
+            let obserwacja = ClientObservationV1 {
+                // Odcisk receiptu DOKLADNIE w postaci, w jakiej go odebralismy.
+                receipt_hash: simon_core::content_digest(&r.receipt).unwrap_or_default(),
+                job_id: r.job_id.clone(),
+                client_pubkey: klucz_klienta.public(),
+                // Bez streamingu nie ma TTFT. Czas calej odpowiedzi to co innego.
+                observed_time_to_first_event_ms: None,
+                observed_time_to_complete_ms: output_bound_ms,
+                network_complete_ms: siec_ms,
+                output_bound_ms,
+                execution_audit_complete_ms: None,
+                transport: Transport::Libp2pRequestResponse,
+                streamed: false,
+                client_signature: None,
+            }
+            .sign(klucz_klienta)
+            .map_err(|e| format!("nie mogę podpisać obserwacji: {e}"))?;
+
             if json {
                 let tok_s = if r.gen_ms > 0 {
                     r.tokens_out as f64 / (r.gen_ms as f64 / 1000.0)
@@ -478,6 +511,10 @@ fn obsluz_odpowiedz(reply: PromptReply, siec_ms: u64, oczekiwany_model: &str, js
                     "tok_s": (tok_s * 10.0).round() / 10.0,
                     "receipt_zweryfikowany": weryfikacja,
                     "receipt": receipt,
+                    // Czasy node'a to DEKLARACJA — nazwy mowia to wprost.
+                    "node_declared_ttft_ms": r.ttft_ms,
+                    "node_declared_gen_ms": r.gen_ms,
+                    "obserwacja_klienta": obserwacja,
                 }));
                 return if weryfikacja { Ok(()) } else {
                     Err("receipt nie przechodzi weryfikacji".into())
@@ -485,9 +522,14 @@ fn obsluz_odpowiedz(reply: PromptReply, siec_ms: u64, oczekiwany_model: &str, js
             }
             println!("\n=== WYNIK ===");
             println!("{}", r.output);
-            println!("\n=== POMIAR (format M2.7) ===");
-            println!("TTFT:            {} ms", r.ttft_ms);
-            println!("Generowanie:     {} ms", r.gen_ms);
+            println!("\n=== POMIAR ===");
+            println!("[zadeklarowane przez node — NIE do rozliczeń]");
+            println!("  node_declared_ttft_ms: {}", r.ttft_ms);
+            println!("  node_declared_gen_ms:  {}", r.gen_ms);
+            println!("[zmierzone przez klienta]");
+            println!("  czas do kompletu:      {} ms", obserwacja.observed_time_to_complete_ms);
+            println!("  w tym sieć:            {} ms", obserwacja.network_complete_ms);
+            println!("  TTFT:                  niemierzony (brak streamingu)");
             println!("Tokenów:         {}", r.tokens_out);
             println!("Sieć (roundtrip):{} ms", siec_ms);
             if r.gen_ms > 0 {

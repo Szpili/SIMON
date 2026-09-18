@@ -304,22 +304,23 @@ async fn policz(
     // Prefill bierzemy od backendu, a nie z /tokenize: `usage` jest dostepne
     // w obu silnikach, a /tokenize ma tylko vLLM.
     let prompt_tokens = v["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32;
-    // M2.6: rozbicie pomiaru bez streamingu.
-    // `ttft_ms` z requestu obejmuje całe generowanie (non-streaming zwraca
-    // wszystko naraz), więc NIE jest to prawdziwy TTFT. Rozbijamy go na:
-    //   - narzut HTTP/transportu (roundtrip) mierzony osobnym HEAD-like pingiem,
-    //   - prefill, szacowany z długości promptu i zmierzonej przepustowości prefill,
-    //   - generowanie = reszta czasu requestu (twarda miara, nie heurystyka tok/s).
-    // Prawdziwy TTFT dostaniemy dopiero po przejściu na streaming (M2.6+).
-    let gen_ms = if tokens_out > 0 {
-        // 65 tok/s dla Bielik-11B-AWQ na 3080 Ti (pomiar M2.6).
-        ((tokens_out as f64 / 65.0) * 1000.0) as u64
-    } else {
-        0
-    };
+    // NAPRAWA 2026-09-18: tu bylo `gen_ms = tokens_out / 65.0 * 1000` — stala
+    // zmierzona kiedys dla Bielika 11B na 3080 Ti, stosowana do KAZDEGO wezla
+    // i modelu. Komentarz obok twierdzil, ze to "twarda miara, nie heurystyka
+    // tok/s", czyli dokladnie odwrotnie niz robil kod. Skutek: przepustowosc
+    // liczona z tego pola wychodzila ZAWSZE 65,0 tok/s, niezaleznie od sprzetu.
+    //
+    // Teraz `gen_ms` to REALNIE ZMIERZONY czas wywolania backendu. Bez
+    // streamingu nie da sie oddzielic prefilla od dekodowania, wiec ta liczba
+    // obejmuje oba — i tak jest uczciwiej niz ekstrapolacja z cudzej stalej.
+    // Prawdziwy TTFT bedzie dopiero przy streamingu.
+    //
+    // UWAGA: to nadal DEKLARACJA node'a (`node_declared_gen_ms`). Node mierzy
+    // sam siebie, wiec moze sklamac. Nie wolno tego uzywac do rozliczen.
+    let gen_ms = ttft_ms;
 
     println!(
-        "[node] policzone: {} tokenów ({} znaków wyjścia), ttft={ttft_ms}ms gen~{gen_ms}ms",
+        "[node] policzone: {} tokenów ({} znaków wyjścia), czas backendu={gen_ms}ms (zmierzony, obejmuje prefill+decode)",
         tokens_out,
         output.len()
     );

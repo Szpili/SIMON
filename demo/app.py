@@ -140,10 +140,19 @@ elif w:
     with lewo:
         st.subheader("Wynik")
         st.write(w["output"])
+        obs = w.get("obserwacja_klienta") or {}
         a, b, c = st.columns(3)
-        a.metric("TTFT", f"{w['ttft_ms']} ms")
-        b.metric("Przepustowość", f"{w['tok_s']} tok/s")
-        c.metric("Tokenów", w["tokens_out"])
+        # Jedyny czas, ktory ZMIERZYLISMY sami. Reszta to deklaracja wezla.
+        a.metric("Czas (zmierzony u klienta)", f"{obs.get('observed_time_to_complete_ms', '?')} ms")
+        b.metric("Czas backendu (deklarowany)", f"{w['ttft_ms']} ms")
+        c.metric("Tokenów (deklarowane)", w["tokens_out"])
+        st.caption(
+            "TTFT nie jest mierzony — bez streamingu czas otrzymania całej "
+            "odpowiedzi to co innego niż czas do pierwszego tokenu, więc nie "
+            "nazywamy go TTFT. Czasy węzła to `node_declared_*`: podpis "
+            "gwarantuje, że węzeł tak zadeklarował, nie że poprawnie zmierzył — "
+            "**nie wolno ich używać do rozliczeń, slasha ani rankingu**."
+        )
         st.caption(
             f"podpisana praca: prefill {w['receipt']['prompt_tokens']} tok. + "
             f"decode {w['receipt']['completion_tokens']} tok. — rozdzielone, bo "

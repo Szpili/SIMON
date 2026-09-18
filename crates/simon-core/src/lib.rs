@@ -15,6 +15,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 pub mod crypto;
+pub mod obserwacja;
 pub mod receipt;
 
 pub use crypto::{Keypair, PublicKey, Signature};
