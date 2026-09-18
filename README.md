@@ -29,9 +29,14 @@ number was produced on our own machines and the raw data lives in the repo.
 | Slashing rules for dishonest nodes | **unresolved — see below** |
 
 Platforms proven end-to-end: **Linux (CUDA)** and **macOS on Intel x86_64**,
-including cross-platform interop between them. The Mac in question is a 2012
-Core i7 — which is the point: the harness has to run where a GPU node cannot.
-Apple Silicon and big-endian targets remain unverified, and we do not claim them.
+including cross-platform interop between them.
+
+The Mac is a **2012 Core i7** — which is the point. On 18 September 2026 a
+receipt issued by an RTX 3090 was verified on that laptop: `RECEIPT VALID`,
+then `REJECTED` after one extra space was appended to the answer. No GPU, no
+network, no trust in whoever handed over the files. Reproduce it yourself with
+`examples/` below. Apple Silicon and big-endian targets remain unverified, and
+we do not claim them. `docs/PAZUR-macos-bringup.md` is the runbook.
 
 ## What a receipt proves — and what it does not
 
@@ -124,6 +129,8 @@ llama.cpp elsewhere).
 - `docs/whitepaper/SIMON-Whitepaper-EN.pdf` — full write-up (EN; PL version alongside)
 - `docs/design/DESIGN-VERIFIER-0.md` — verifier economics, drift measurements, and the open questions
 - `ROADMAP.md` — what is done, what is blocked, and by what
+- `przyklady/README.md` — a real receipt you can verify offline in one command
+- `docs/PAZUR-macos-bringup.md` — the macOS bring-up runbook, including the traps
 - `notebooks/SIMON-D2-ROCm.ipynb` — the cross-vendor measurement itself, runnable on
   AMD Developer Cloud; the CUDA baseline is embedded, so it reports a verdict in-session
 
