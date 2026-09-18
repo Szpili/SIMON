@@ -53,6 +53,9 @@ OPCJE:
     --json                   [agent] jeden obiekt JSON na stdout (wynik,
                              pomiar, surowy receipt, werdykt weryfikacji)
                              zamiast wydruku dla człowieka — dla demo/integracji
+    --expect-output <plik>   [z --verify-receipt] sprawdź, czy receipt opisuje
+                             TĘ treść. Bez tego weryfikujesz podpis, ale nie to,
+                             czy dotyczy tekstu, który trzymasz w ręku.
     --verify-receipt <plik>  sprawdź receipt, który ktoś Ci podał (`-` = stdin).
                              Offline, bez sieci. Z --expect-job-id/--expect-model
                              sprawdza też, czy to receipt do TEGO zlecenia.
@@ -122,16 +125,20 @@ pub struct Opcje {
     pub then_prompt: Option<String>,
     /// Demo/integracja: jeden obiekt JSON na stdout zamiast tekstu dla czlowieka.
     pub json: bool,
-    /// Weryfikacja cudzego receiptu — bez sieci, bez zaufania do kogokolwiek.
-    /// To jest cala teza projektu jako jedna komenda: dostales wynik i podpis,
-    /// sprawdzasz je sam. Wartosc: sciezka do pliku albo `-` (stdin).
     /// Sciezka do pliku z kluczem node'a. Wersja `--key <hex>` wystawia ziarno
     /// w `ps` KAZDEMU uzytkownikowi maszyny (i w dzienniku systemd) — do
     /// trwalego wdrozenia uzywaj pliku.
     pub key_file: Option<String>,
+    /// Weryfikacja cudzego receiptu — bez sieci, bez zaufania do kogokolwiek.
+    /// To jest cala teza projektu jako jedna komenda: dostales wynik i podpis,
+    /// sprawdzasz je sam. Wartosc: sciezka do pliku albo `-` (stdin).
     pub verify_receipt: Option<String>,
     pub expect_job_id: Option<String>,
     pub expect_model: Option<String>,
+    /// Plik z odpowiedzia, ktora rzekomo opisuje receipt (`-` = stdin nie dziala,
+    /// bo stdin czyta receipt). Bez tego sprawdzasz podpis, ale NIE to, czy
+    /// dotyczy tekstu, ktory trzymasz.
+    pub expect_output: Option<String>,
 }
 
 impl Opcje {
@@ -156,6 +163,7 @@ impl Opcje {
         let mut verify_receipt = None;
         let mut expect_job_id = None;
         let mut expect_model = None;
+        let mut expect_output = None;
 
         let mut i = 0;
         while i < args.len() {
@@ -211,6 +219,7 @@ impl Opcje {
                 "--verify-receipt" => verify_receipt = Some(wartosc(&mut i, "--verify-receipt")?),
                 "--expect-job-id" => expect_job_id = Some(wartosc(&mut i, "--expect-job-id")?),
                 "--expect-model" => expect_model = Some(wartosc(&mut i, "--expect-model")?),
+                "--expect-output" => expect_output = Some(wartosc(&mut i, "--expect-output")?),
                 inny => return Err(format!("nieznany argument: {inny}")),
             }
             i += 1;
@@ -243,6 +252,7 @@ impl Opcje {
             verify_receipt,
             expect_job_id,
             expect_model,
+            expect_output,
         })
     }
 }
@@ -286,9 +296,23 @@ fn weryfikuj_offline(opcje: &Opcje, zrodlo: &str) -> ExitCode {
     };
 
     let podpis_ok = r.verify_self().is_ok();
+    // Czy receipt opisuje TEN tekst — bramka, ktorej brakowalo do 2026-09-18.
+    let tresc_ok = match opcje.expect_output.as_deref() {
+        Some(sciezka) => match std::fs::read_to_string(sciezka) {
+            Ok(t) => Some(r.zgodny_z_wyjsciem(&t)),
+            Err(e) => {
+                eprintln!("BŁĄD: nie mogę czytać --expect-output {sciezka}: {e}");
+                return ExitCode::FAILURE;
+            }
+        },
+        None => None,
+    };
     let job_ok = opcje.expect_job_id.as_ref().map(|j| *j == r.job_id);
     let model_ok = opcje.expect_model.as_ref().map(|m| *m == r.model_hash);
-    let ok = podpis_ok && job_ok != Some(false) && model_ok != Some(false);
+    let ok = podpis_ok
+        && job_ok != Some(false)
+        && model_ok != Some(false)
+        && tresc_ok != Some(false);
 
     if opcje.json {
         println!("{}", serde_json::json!({
@@ -297,6 +321,9 @@ fn weryfikuj_offline(opcje: &Opcje, zrodlo: &str) -> ExitCode {
             "podpis_ok": podpis_ok,
             "job_id_ok": job_ok,
             "model_ok": model_ok,
+            "tresc_ok": tresc_ok,
+            "prompt_tokens": r.prompt_tokens,
+            "completion_tokens": r.completion_tokens,
             "job_id": r.job_id,
             "node_id": r.node_id,
             "model_hash": r.model_hash,
@@ -307,6 +334,7 @@ fn weryfikuj_offline(opcje: &Opcje, zrodlo: &str) -> ExitCode {
         println!("podpis Ed25519 : {}", if podpis_ok { "OK" } else { "ZŁY" });
         if let Some(v) = job_ok { println!("job_id         : {}", if v { "zgodny" } else { "NIEZGODNY" }); }
         if let Some(v) = model_ok { println!("model_hash     : {}", if v { "zgodny" } else { "NIEZGODNY" }); }
+        if let Some(v) = tresc_ok { println!("treść wyniku   : {}", if v { "zgodna z odciskiem" } else { "NIEZGODNA — to nie jest ten wynik" }); }
         println!("node           : {}", r.node_id);
         println!("werdykt        : {}", if ok { "RECEIPT WAŻNY" } else { "ODRZUCONY" });
     }

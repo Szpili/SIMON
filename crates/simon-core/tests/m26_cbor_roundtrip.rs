@@ -18,6 +18,8 @@ fn przyklad(klucz: &Keypair) -> Receipt {
         precision: Precision::Fp16,
         activation_hash: "toploc:NIE_POLICZONY".into(),
         output_digest: "abc".into(),
+        prompt_tokens: 0,
+        completion_tokens: 0,
         started_at_us: 1_789_626_040_836_287,
         finished_at_us: 1_789_626_040_836_287,
         signer: klucz.public(),

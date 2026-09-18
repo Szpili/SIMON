@@ -30,6 +30,8 @@ fn receipt_z(job_id: &str, node_id: &str, klucz: &Keypair) -> simon_core::receip
         precision: simon_core::receipt::Precision::Bf16,
         activation_hash: "toploc:258B".into(),
         output_digest: "sha256:wynik".into(),
+        prompt_tokens: 0,
+        completion_tokens: 0,
         started_at_us: 100_000_000,
         finished_at_us: 100_400_000,
         signer: klucz.public(),

@@ -59,6 +59,16 @@ WEZLY = wczytaj_wezly()
 st.set_page_config(page_title="SIMON", page_icon="🔏", layout="wide")
 
 
+def do_pliku(tresc: str) -> str:
+    """Zapisuje tekst do pliku tymczasowego — --expect-output czyta z pliku,
+    bo stdin jest juz zajety przez receipt."""
+    import tempfile
+    f = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8")
+    f.write(tresc)
+    f.close()
+    return f.name
+
+
 def wywolaj(args: list[str], wejscie: str | None = None, limit_s: int = 300) -> dict:
     """Uruchamia CLI i wyciąga JSON. Stdout to wynik, stderr to dziennik —
     dlatego szukamy JSON-a od końca, a nie ufamy, że jest dokładnie jedną linią."""
@@ -134,6 +144,11 @@ elif w:
         a.metric("TTFT", f"{w['ttft_ms']} ms")
         b.metric("Przepustowość", f"{w['tok_s']} tok/s")
         c.metric("Tokenów", w["tokens_out"])
+        st.caption(
+            f"podpisana praca: prefill {w['receipt']['prompt_tokens']} tok. + "
+            f"decode {w['receipt']['completion_tokens']} tok. — rozdzielone, bo "
+            "dekodowanie kosztuje ~55× więcej na token niż prefill (zmierzone)"
+        )
     with prawo:
         st.subheader("Receipt")
         st.caption(f"podpisał węzeł `{w['receipt']['node_id'][:24]}…`")
@@ -146,22 +161,32 @@ elif w:
     st.divider()
     st.subheader("Nie wierz na słowo — sprawdź")
     st.markdown(
-        "Receipt jest podpisany kluczem Ed25519 węzła, a podpis obejmuje odcisk "
-        "wyniku i identyfikator zlecenia. Poniżej możesz go zweryfikować, a także "
-        "spróbować oszukać weryfikację **dwoma sposobami, którymi realnie by się to zrobiło**."
+        "Receipt jest podpisany kluczem Ed25519 węzła, a podpis obejmuje **odcisk "
+        "treści odpowiedzi** związany z identyfikatorem zlecenia. Poniżej możesz go "
+        "zweryfikować, a także spróbować oszukać weryfikację **trzema sposobami, "
+        "którymi realnie by się to zrobiło**."
     )
-    k1, k2, k3 = st.columns(3)
+    k1, k2, k3, k4 = st.columns(4)
     surowy = json.dumps(w["receipt"])
 
     if k1.button("Zweryfikuj receipt"):
-        st.session_state.werdykt = ("prawdziwy receipt", wywolaj(
+        st.session_state.werdykt = ("prawdziwy receipt i prawdziwa treść", wywolaj(
             ["--verify-receipt", "-", "--expect-job-id", w["job_id"],
-             "--expect-model", model, "--json"], wejscie=surowy, limit_s=30))
+             "--expect-model", model, "--expect-output", do_pliku(w["output"]),
+             "--json"], wejscie=surowy, limit_s=30))
 
     if k2.button("Podmień wynik"):
         podrobiony = dict(w["receipt"], output_digest="0" * 64)
         st.session_state.werdykt = ("węzeł podmienia wynik po podpisaniu", wywolaj(
             ["--verify-receipt", "-", "--json"], wejscie=json.dumps(podrobiony), limit_s=30))
+
+    if k4.button("Podmień treść odpowiedzi"):
+        # Najgrozniejszy z trzech: podpis jest PRAWDZIWY, wezel istnieje,
+        # zlecenie sie zgadza — tylko tekst jest cudzy.
+        st.session_state.werdykt = ("prawdziwy podpis, ale PODSTAWIONY tekst", wywolaj(
+            ["--verify-receipt", "-", "--json",
+             "--expect-output", do_pliku("Zupełnie inna odpowiedź, której węzeł nigdy nie policzył.")],
+            wejscie=surowy, limit_s=30))
 
     if k3.button("Podstaw pod inne zlecenie"):
         st.session_state.werdykt = ("prawdziwy receipt, ale z CUDZEGO zlecenia", wywolaj(
@@ -184,6 +209,8 @@ elif w:
                               "ale to nie jest dowód na TĘ pracę")
             if v.get("model_ok") is False:
                 powody.append("**inny model niż zamówiony**")
+            if v.get("tresc_ok") is False:
+                powody.append("**to nie jest ten wynik** — podpis prawdziwy, ale opisuje inny tekst")
             st.error("ODRZUCONY: " + "; ".join(powody or [v.get("powod", "nieznany powód")]))
         st.json(v, expanded=False)
 

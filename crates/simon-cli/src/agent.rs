@@ -433,7 +433,7 @@ fn wyodrebnij_output(reply: PromptReply, oczekiwany_model: &str) -> Result<Strin
     match reply {
         PromptReply::Blad(e) => Err(format!("node zwrócił błąd {}: {}", e.kod, e.opis)),
         PromptReply::Ok(r) => {
-            if !zweryfikuj_receipt(&r.receipt, &r.job_id, oczekiwany_model) {
+            if !zweryfikuj_receipt(&r.receipt, &r.job_id, oczekiwany_model, Some(&r.output)) {
                 return Err(format!("receipt nie przechodzi weryfikacji (job_id={})", r.job_id));
             }
             Ok(r.output)
@@ -453,7 +453,8 @@ fn obsluz_odpowiedz(reply: PromptReply, siec_ms: u64, oczekiwany_model: &str, js
         }
         PromptReply::Ok(r) => {
             // M2.5.1: weryfikujemy wobec TEGO zlecenia (job_id + model), nie „jakiegokolwiek".
-            let weryfikacja = zweryfikuj_receipt(&r.receipt, &r.job_id, oczekiwany_model);
+            let weryfikacja =
+                zweryfikuj_receipt(&r.receipt, &r.job_id, oczekiwany_model, Some(&r.output));
             if !weryfikacja {
                 eprintln!("[agent][diagnoza] oczekiwano job_id={} model={}", r.job_id, oczekiwany_model);
                 eprintln!("[agent][diagnoza] odebrany receipt: {}", r.receipt);
@@ -517,6 +518,7 @@ fn zweryfikuj_receipt(
     receipt_json: &str,
     oczekiwany_job_id: &str,
     oczekiwany_model: &str,
+    wyjscie: Option<&str>,
 ) -> bool {
     let Ok(r) = serde_json::from_str::<Receipt>(receipt_json) else {
         return false;
@@ -524,7 +526,16 @@ fn zweryfikuj_receipt(
     if r.verify_self().is_err() {
         return false;
     }
-    r.job_id == oczekiwany_job_id && r.model_hash == oczekiwany_model
+    if r.job_id != oczekiwany_job_id || r.model_hash != oczekiwany_model {
+        return false;
+    }
+    // Bramka 4 (2026-09-18): czy receipt opisuje TEN tekst. Bez niej podpis
+    // dowodzil tylko, ze node cos policzyl — node mogl odeslac dowolna tresc
+    // i wszystkie pozostale bramki i tak zapalaly sie na zielono.
+    match wyjscie {
+        Some(t) => r.zgodny_z_wyjsciem(t),
+        None => true,
+    }
 }
 
 /// Pomocnicze — nieużywane bezpośrednio, ale trzyma typ w zasięgu dla testów.
@@ -555,6 +566,7 @@ mod tests {
             then_model_hash: None,
             then_prompt: None,
             json: false,
+            expect_output: None,
             key_file: None,
             verify_receipt: None,
             expect_job_id: None,
@@ -606,10 +618,10 @@ mod tests {
     fn m125_receipt_bez_podpisu_odrzucony() {
         // M2.5.1: sam JSON z polami to ZA MAŁO — bez podpisu Ed25519 odrzucamy.
         // To jest asercja, która PRZED poprawką była odwrotna (oszust przechodził).
-        assert!(!zweryfikuj_receipt("{}", "j", "m"));
-        assert!(!zweryfikuj_receipt("nie-json", "j", "m"));
+        assert!(!zweryfikuj_receipt("{}", "j", "m", None));
+        assert!(!zweryfikuj_receipt("nie-json", "j", "m", None));
         assert!(
-            !zweryfikuj_receipt(r#"{"job_id":"j","order_id":"o","model_hash":"m"}"#, "j", "m"),
+            !zweryfikuj_receipt(r#"{"job_id":"j","order_id":"o","model_hash":"m"}"#, "j", "m", None),
             "receipt BEZ podpisu nie może przejść"
         );
     }
@@ -625,6 +637,8 @@ mod tests {
             precision: simon_core::receipt::Precision::Fp16,
             activation_hash: "toploc:test".into(),
             output_digest: "d".into(),
+            prompt_tokens: 0,
+            completion_tokens: 0,
             started_at_us: 0,
             finished_at_us: 1_000_000,
             signer: klucz.public(),
@@ -634,11 +648,64 @@ mod tests {
         .expect("podpis");
         let json = serde_json::to_string(&receipt).unwrap();
 
-        assert!(zweryfikuj_receipt(&json, "job-1", "qwen3.8-27b"), "podpisany receipt przechodzi");
+        assert!(zweryfikuj_receipt(&json, "job-1", "qwen3.8-27b", None), "podpisany receipt przechodzi");
         // Zły job_id -> odrzucony (receipt dotyczy innego zlecenia).
-        assert!(!zweryfikuj_receipt(&json, "job-INNY", "qwen3.8-27b"));
+        assert!(!zweryfikuj_receipt(&json, "job-INNY", "qwen3.8-27b", None));
         // Zły model -> odrzucony (D67).
-        assert!(!zweryfikuj_receipt(&json, "job-1", "inny-model"));
+        assert!(!zweryfikuj_receipt(&json, "job-1", "inny-model", None));
+    }
+
+    /// REGRESJA 2026-09-18 — najgrozniejsza dziura, jaka tu byla.
+    ///
+    /// `output_digest` hashowal METADANE (`{job_id, tokens_out, czasy}`), a sama
+    /// odpowiedz szla obok receiptu NIEPODPISANA. Node mogl wiec policzyc
+    /// cokolwiek (albo nic) i odeslac dowolny tekst — podpis byl wazny, job_id
+    /// i model sie zgadzaly, wiec WSZYSTKIE bramki zapalaly sie na zielono.
+    /// Podpis dowodzil "wykonalem jakas prace o tym id", a nie "to jest wynik".
+    #[test]
+    fn receipt_musi_wiazac_tresc_odpowiedzi() {
+        let klucz = simon_core::crypto::Keypair::generate();
+        let prawdziwy = "42 to odpowiedz";
+        let receipt = Receipt {
+            job_id: "job-1".into(),
+            node_id: klucz.public().to_hex(),
+            model_hash: "qwen3.8-27b".into(),
+            runtime: "vllm/0.27.1".into(),
+            precision: simon_core::receipt::Precision::Fp16,
+            activation_hash: "toploc:test".into(),
+            output_digest: simon_core::receipt::odcisk_wyjscia("job-1", prawdziwy).unwrap(),
+            prompt_tokens: 11,
+            completion_tokens: 5,
+            started_at_us: 0,
+            finished_at_us: 1_000_000,
+            signer: klucz.public(),
+            signature: None,
+        }
+        .sign(&klucz)
+        .expect("podpis");
+        let json = serde_json::to_string(&receipt).unwrap();
+
+        assert!(
+            zweryfikuj_receipt(&json, "job-1", "qwen3.8-27b", Some(prawdziwy)),
+            "receipt opisujacy TEN tekst musi przejsc"
+        );
+        assert!(
+            !zweryfikuj_receipt(&json, "job-1", "qwen3.8-27b", Some("cos zupelnie innego")),
+            "node odsylajacy INNY tekst niz podpisany MUSI zostac odrzucony"
+        );
+        // Nawet drobna zmiana: dopisana spacja to juz inny wynik.
+        assert!(!zweryfikuj_receipt(&json, "job-1", "qwen3.8-27b", Some("42 to odpowiedz ")));
+    }
+
+    /// Ten sam tekst, ale podpisany pod INNE zlecenie, nie moze przejsc —
+    /// inaczej dalo by sie recyklingowac jeden poprawny receipt.
+    #[test]
+    fn odcisk_wyjscia_jest_zwiazany_ze_zleceniem() {
+        let t = "identyczna tresc";
+        assert_ne!(
+            simon_core::receipt::odcisk_wyjscia("job-A", t).unwrap(),
+            simon_core::receipt::odcisk_wyjscia("job-B", t).unwrap()
+        );
     }
 
     #[test]
@@ -652,6 +719,8 @@ mod tests {
             precision: simon_core::receipt::Precision::Fp16,
             activation_hash: "toploc:test".into(),
             output_digest: "d".into(),
+            prompt_tokens: 0,
+            completion_tokens: 0,
             started_at_us: 0,
             finished_at_us: 1_000_000,
             signer: klucz.public(),
@@ -663,7 +732,7 @@ mod tests {
         // Podmiana treści PO podpisaniu musi unieważnić receipt.
         receipt.output_digest = "digest-po-kradziezy".into();
         let json = serde_json::to_string(&receipt).unwrap();
-        assert!(!zweryfikuj_receipt(&json, "job-1", "qwen3.8-27b"));
+        assert!(!zweryfikuj_receipt(&json, "job-1", "qwen3.8-27b", None));
     }
 
     #[test]

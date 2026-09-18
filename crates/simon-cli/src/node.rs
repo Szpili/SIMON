@@ -301,6 +301,9 @@ async fn policz(
     }
 
     let tokens_out = v["usage"]["completion_tokens"].as_u64().unwrap_or(0) as u32;
+    // Prefill bierzemy od backendu, a nie z /tokenize: `usage` jest dostepne
+    // w obu silnikach, a /tokenize ma tylko vLLM.
+    let prompt_tokens = v["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32;
     // M2.6: rozbicie pomiaru bez streamingu.
     // `ttft_ms` z requestu obejmuje całe generowanie (non-streaming zwraca
     // wszystko naraz), więc NIE jest to prawdziwy TTFT. Rozbijamy go na:
@@ -324,15 +327,21 @@ async fn policz(
         eprintln!("[node] UWAGA: puste wyjście mimo {tokens_out} tokenów — sprawdź limit `max_tokens`");
     }
 
+    // Receipt PRZED przeniesieniem `output` — podpisujemy dokladnie ten tekst,
+    // ktory zaraz odeslemy.
+    let receipt = zbuduj_podpisany_receipt(
+        klucz, model_hash, runtime, req, &output, prompt_tokens, tokens_out, ttft_ms, gen_ms,
+    );
+
     PromptReply::Ok(PromptResponse {
         v: 1,
         order_id: req.order_id.clone(),
         job_id: req.job_id.clone(),
         output,
-        // M2.5.1: PODPISANY receipt (Ed25519). Klient weryfikuje trzy bramki:
-        // podpis ważny, `signer` == klucz node'a, job_id/order_id zgodne.
-        // Uwaga: bez podpisu receipt dowodził tylko „ktoś tak twierdzi".
-        receipt: zbuduj_podpisany_receipt(klucz, model_hash, runtime, req, tokens_out, ttft_ms, gen_ms),
+        // M2.5.1: PODPISANY receipt (Ed25519). Klient weryfikuje bramki:
+        // podpis ważny, `signer` == klucz node'a, job_id/model zgodne,
+        // ORAZ (od 2026-09-18) że odcisk pokrywa TĘ treść.
+        receipt,
         tokens_out,
         ttft_ms,
         gen_ms,
@@ -530,6 +539,8 @@ fn zbuduj_podpisany_receipt(
     model_hash: &str,
     runtime: &str,
     req: &PromptRequest,
+    output: &str,
+    prompt_tokens: u32,
     tokens_out: u32,
     ttft_ms: u64,
     gen_ms: u64,
@@ -549,12 +560,11 @@ fn zbuduj_podpisany_receipt(
         precision: Precision::Fp16,
         // M2.5.1b: do policzenia poza API vLLM (runner + hidden states).
         activation_hash: "toploc:NIE_POLICZONY".to_string(),
-        output_digest: simon_core::content_digest(&serde_json::json!({
-            "job_id": req.job_id,
-            "tokens_out": tokens_out,
-            "ttft_ms": ttft_ms,
-            "gen_ms": gen_ms,
-        }))
+        // Odcisk TRESCI, nie metadanych. Metadane (czasy) i tak sa podpisane,
+        // bo wchodza do odcisku calego receiptu.
+        prompt_tokens,
+        completion_tokens: tokens_out,
+        output_digest: simon_core::receipt::odcisk_wyjscia(&req.job_id, output)
         .unwrap_or_else(|_| "digest-blad".to_string()),
         started_at_us: teraz,
         finished_at_us: teraz,

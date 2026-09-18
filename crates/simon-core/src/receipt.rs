@@ -43,8 +43,23 @@ pub struct Receipt {
     pub precision: Precision,
     /// LSH aktywacji wg TopLoc (258 B / 32 tokeny, arXiv 2501.16007).
     pub activation_hash: String,
-    /// Odcisk wyniku.
+    /// Odcisk TREŚCI wyniku, związany z `job_id`.
+    ///
+    /// NAPRAWA (2026-09-18): wcześniej hashowano tu METADANE
+    /// (`{job_id, tokens_out, ttft_ms, gen_ms}`), a sama odpowiedź szła obok
+    /// receiptu NIEPODPISANA. Węzeł mógł odesłać dowolny tekst i receipt dalej
+    /// przechodził weryfikację — czyli podpis dowodził „wykonałem jakąś pracę
+    /// o tym id", a nie „to jest jej wynik". Teraz odcisk pokrywa treść,
+    /// a klient MUSI go przeliczyć z tego, co dostał (patrz `zgodny_z_wyjsciem`).
     pub output_digest: String,
+    /// Ile pracy NAPRAWDĘ wykonano — podpisane, bo na tym opiera się rozliczenie.
+    /// Rozdzielone, bo prefill i decode kosztują skrajnie różnie (zmierzone:
+    /// dekodowanie ~55x wolniejsze na token), więc jedna liczba „tokenów"
+    /// byłaby zaproszeniem do arbitrażu.
+    #[serde(default)]
+    pub prompt_tokens: u32,
+    #[serde(default)]
+    pub completion_tokens: u32,
     /// Czas startu w MIKROSEKUNDACH (u64).
     ///
     /// NAPRAWA (2026-09-17): wcześniej `f64`. Float nie ma gwarantowanego
@@ -61,7 +76,22 @@ pub struct Receipt {
     pub signature: Option<Signature>,
 }
 
+/// Odcisk treści wyniku. Wiąże tekst z konkretnym zleceniem, żeby poprawny
+/// receipt z INNEGO zlecenia nie dał się podstawić pod ten sam tekst.
+pub fn odcisk_wyjscia(job_id: &str, output: &str) -> Result<String, SimonError> {
+    content_digest(&serde_json::json!({ "job_id": job_id, "output": output }))
+}
+
 impl Receipt {
+    /// Czy ten receipt opisuje TEN tekst. Bez tej bramki podpis dowodzi tylko,
+    /// że node coś policzył — nie, że to jest to, co trzymasz w ręku.
+    pub fn zgodny_z_wyjsciem(&self, output: &str) -> bool {
+        match odcisk_wyjscia(&self.job_id, output) {
+            Ok(d) => d == self.output_digest,
+            Err(_) => false,
+        }
+    }
+
     /// Odcisk treści receiptu. Podpis nie wchodzi do odcisku.
     pub fn digest(&self) -> Result<String, SimonError> {
         let mut unsigned = self.clone();

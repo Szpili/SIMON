@@ -23,6 +23,8 @@ fn receipt_oszusata() -> Receipt {
         // FAŁSZYWY hash aktywacji — nikt go nie przelicza.
         activation_hash: "toploc:FAKE".into(),
         output_digest: "digest-falszywego-wyniku".into(),
+        prompt_tokens: 0,
+        completion_tokens: 0,
         started_at_us: 0,
         finished_at_us: 1_000_000,
         signer: PublicKey([0u8; 32]),

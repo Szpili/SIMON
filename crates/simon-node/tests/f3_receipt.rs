@@ -17,6 +17,8 @@ fn receipt_for(job_id: &str, node_id: &str) -> Receipt {
         precision: Precision::Bf16,
         activation_hash: "toploc:258B".to_string(),
         output_digest: "sha256:out".to_string(),
+        prompt_tokens: 0,
+        completion_tokens: 0,
         started_at_us: 100_000_000,
         finished_at_us: 100_500_000,
         signer: Keypair::generate().public(),
