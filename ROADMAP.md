@@ -302,6 +302,66 @@ dostaje realne zadania programistyczne — i właśnie to jest dla niej cenne.
 Różne długości promptów · node wypada w trakcie zlecenia · przekroczony timeout ·
 oszust · **dwóch koordynatorów naraz**. Dopiero potem ACP.
 
+## M5 — EKONOMIA: bezczynność zamieniona w moc szczytową (dopisane 2026-09-18)
+
+**Model docelowy (Karol):** podłączasz maszynę, ktoś używa jej, gdy śpisz;
+zbierasz kredyty; rano wydajesz je na zadania agentowe, ewentualnie szybciej
+i na mocniejszym modelu; możesz odłożyć albo przekazać.
+
+**Ta wizja jest sensowna, ale NIE jako „zarabiaj, gdy śpisz".** Rachunek:
+3090 pod obciążeniem ~350 W × 8 h ≈ 2,8 kWh ≈ **3 zł**. Przy zmierzonych
+65 tok/s i *stuprocentowym* obłożeniu to ~1,9 mln tokenów ≈ **2,2 zł** po
+cenach rynkowych modeli otwartych. Czyli przy pełnym obciążeniu jesteśmy pod
+progiem opłacalności, a obłożenia 100% nie będzie. **Ceną z komercyjnym API
+nie wygramy i nie ma sensu próbować.**
+
+Wartość leży gdzie indziej i tak to opisujemy:
+1. praca, która NIE MOŻE wyjść na zewnątrz (nasza własna reguła RODO),
+2. wynik, który da się sprawdzić, a nie tylko dostać,
+3. **zamiana czasu bezczynnego na czas szczytowy** — w nocy jedna karta stoi,
+   rano chcesz pięciu naraz. To jest realna zamiana, nie zarobek.
+
+### Kamienie milowe
+
+- [x] **M5.1 — podpisana ILOŚĆ pracy.** Receipt niesie `prompt_tokens`
+      i `completion_tokens`, ROZDZIELNIE. Jedna liczba „tokenów" byłaby
+      zaproszeniem do arbitrażu: dekodowanie kosztuje ~55× więcej na token niż
+      prefill (nasz pomiar M2.4V). Zrobione 2026-09-18 — razem z naprawą
+      tego, że receipt w ogóle nie wiązał treści odpowiedzi.
+- [ ] **M5.2 — rejestr lokalny.** Suma podpisanych receiptów per węzeł:
+      „ta maszyna wykonała X prefill + Y decode dla Z zleceniodawców".
+      Lokalny, więc UCZCIWY bez konsensusu — i wystarczająco mocny na demo.
+      *To jedyny punkt M5, który ma sens przed 18.10.*
+- [ ] **M5.3 — normalizacja jednostki.** Jawny kurs: waga prefill vs decode,
+      klasa modelu, długość kontekstu. Bez ogłoszonego kursu „tokeny" są
+      walutą o kursie, którego nikt nie zna — a wtedy wygrywa ten, kto
+      pierwszy policzy różnicę.
+- [ ] **M5.4 — wydawanie.** Agent płaci kredytami, node sprawdza saldo.
+      Tu zaczyna się problem: saldo musi być WSPÓLNE, a nie lokalne.
+- [ ] **M5.5 — podwójne wydanie i konsensus.** Właściwy trudny kamień.
+      Nie zaczynamy go przed rozstrzygnięciem M2.4V (slashing), bo to ten sam
+      problem widziany z drugiej strony.
+- [ ] **M5.6 — przekazywanie kredytów.** ŚWIADOMA decyzja, nie domyślna
+      funkcja. Kredyt przenoszalny to już pieniądz: spekulacja, farmy Sybil,
+      pytania regulacyjne. Nieprzenoszalny kredyt to system rozliczeń i tam
+      zostajemy, dopóki nie będzie powodu.
+
+### Atak, o którym trzeba pamiętać od pierwszego dnia
+
+**Samoobsługa (self-dealing):** węzeł wysyła zlecenia sam do siebie i bije
+kredyty z powietrza. Obroną jest weryfikacja z M2.4V — czyli ekonomia i audyt
+to JEDEN problem, nie dwa. Każdy projekt kredytów bez działającego audytu
+kończy się farmą.
+
+### Zadania agentowe — już działają
+
+Łańcuch agent→agent (B2) jest zrobiony: etap A liczy jeden węzeł/model,
+zweryfikowany wynik idzie jako DANE do etapu B na innym węźle. To jest
+dokładnie „rano daję zadania agentowi", tylko bez rozliczeń. Brakuje wyłącznie
+rejestru (M5.2), żeby było widać, ile to kosztowało.
+
+---
+
 ## M3 — WARSTWA ACP
 
 | # | Zadanie | Kryterium |
