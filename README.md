@@ -28,8 +28,10 @@ number was produced on our own machines and the raw data lives in the repo.
 | Agent↔agent orchestration (job B consumes job A's output) | working |
 | Slashing rules for dishonest nodes | **unresolved — see below** |
 
-Platforms proven end-to-end: **Linux (CUDA)** and **macOS (Apple Silicon)**,
-including cross-platform interop between them.
+Platforms proven end-to-end: **Linux (CUDA)** and **macOS on Intel x86_64**,
+including cross-platform interop between them. The Mac in question is a 2012
+Core i7 — which is the point: the harness has to run where a GPU node cannot.
+Apple Silicon and big-endian targets remain unverified, and we do not claim them.
 
 ## What a receipt proves — and what it does not
 
@@ -92,7 +94,7 @@ so rather than shipping a threshold we cannot defend.
 
 SIMON's entire value proposition is running on hardware that is *not* uniform —
 whatever GPU a volunteer happens to own. But our verification work so far has
-been proven on NVIDIA/CUDA and Apple Silicon only, for the mundane reason that
+been proven on NVIDIA/CUDA and an Intel Mac only, for the mundane reason that
 those are the machines we have.
 
 That is a real gap, and it is precisely where the interesting question lives:
