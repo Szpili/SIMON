@@ -9,6 +9,7 @@ use libp2p::swarm::SwarmEvent;
 use libp2p::{PeerId, Swarm};
 use simon_core::crypto::Keypair;
 use simon_core::obserwacja::{ClientObservationV1, Transport};
+use simon_core::rejestr::{RekordPracyV1, Rejestr, StatusWeryfikacji};
 use simon_core::receipt::Receipt;
 use simon_harness::client_protocol::{
     Autoryzacja, JobOrder, RejestrKoordynatorow, FORMAT_V,
@@ -95,7 +96,7 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
     let (reply, siec_ms) = wyslij_i_czekaj(&mut swarm, peer, request).await?;
 
     if opcje.then_bootstrap.is_empty() {
-        return obsluz_odpowiedz(reply, siec_ms, &order.model_hash, opcje.json, t0, &klucz);
+        return obsluz_odpowiedz(reply, siec_ms, &order.model_hash, opcje.json, t0, &klucz, opcje.rejestr.as_deref());
     }
 
     // --- B2: łańcuch — etap A zweryfikowany, przekazujemy wynik do etapu B ---
@@ -117,7 +118,7 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
     let (reply_b, siec_ms_b) = wyslij_i_czekaj(&mut swarm, then_peer, request_b).await?;
 
     println!("\n=== ETAP B ===");
-    obsluz_odpowiedz(reply_b, siec_ms_b, &order_b.model_hash, opcje.json, t0b, &klucz)
+    obsluz_odpowiedz(reply_b, siec_ms_b, &order_b.model_hash, opcje.json, t0b, &klucz, opcje.rejestr.as_deref())
 }
 
 /// Parsuje peer_id z listy multiadresów (`.../p2p/<id>`), używane dla
@@ -477,6 +478,7 @@ fn obsluz_odpowiedz(
     json: bool,
     t0: std::time::Instant,
     klucz_klienta: &Keypair,
+    rejestr: Option<&str>,
 ) -> Result<(), String> {
     match reply {
         PromptReply::Blad(e) => {
@@ -514,6 +516,48 @@ fn obsluz_odpowiedz(
             }
             .sign(klucz_klienta)
             .map_err(|e| format!("nie mogę podpisać obserwacji: {e}"))?;
+
+            // M5.2: zapis wykonanej pracy. Dopisujemy TYLKO to, co przeszlo
+            // weryfikacje — rekord ma opisywac prace, ktora klient uznal za
+            // swoja, a nie proby oszustwa (te sa widoczne jako blad wyzej).
+            if let (Some(sciezka), true) = (rejestr, weryfikacja) {
+                // Bez podpisu weryfikacja by nie przeszla, wiec tu jest zawsze —
+                // ale nie wstawiamy zaslepki "na wszelki wypadek".
+                if let Ok(rec) = serde_json::from_str::<Receipt>(&r.receipt) {
+                  if let Some(podpis) = rec.signature.clone() {
+                    let rekord = RekordPracyV1 {
+                        schema: 1,
+                        receipt_hash: obserwacja.receipt_hash.clone(),
+                        job_id: r.job_id.clone(),
+                        client_pubkey: klucz_klienta.public(),
+                        executor_pubkey: rec.signer,
+                        model_declared: rec.model_hash.clone(),
+                        runtime_declared: rec.runtime.clone(),
+                        // Manifestow nie mamy — pola zostaja NIEOBECNE (M5.1c).
+                        model_manifest_hash: None,
+                        tokenizer_manifest_hash: None,
+                        execution_profile_hash: None,
+                        prompt_commitment: None,
+                        output_commitment: rec.output_digest.clone(),
+                        prompt_tokens_total: rec.prompt_tokens as u64,
+                        // Rozbicie na policzone i z cache'u wymaga danych,
+                        // ktorych backendy nie przekazuja (M5.3).
+                        prompt_tokens_computed: None,
+                        prompt_tokens_cached: None,
+                        completion_tokens: rec.completion_tokens as u64,
+                        client_observed_ttft_ms: obserwacja.observed_time_to_first_event_ms,
+                        client_observed_total_ms: obserwacja.observed_time_to_complete_ms,
+                        // Podpis + zwiazanie tresci. Audytu wykonania NIE MA.
+                        verification_status: StatusWeryfikacji::OutputBound,
+                        receipt_signature: podpis,
+                    };
+                    match Rejestr::otworz(sciezka).and_then(|mut rj| rj.dopisz(&rekord)) {
+                        Ok(()) => eprintln!("[agent] zapisano do metrycznika: {sciezka}"),
+                        Err(e) => eprintln!("[agent] metrycznik: {e}"),
+                    }
+                  }
+                }
+            }
 
             if json {
                 let tok_s = if r.gen_ms > 0 {
@@ -632,6 +676,7 @@ mod tests {
             then_prompt: None,
             json: false,
             expect_output: None,
+            rejestr: None,
             key_file: None,
             verify_receipt: None,
             expect_job_id: None,

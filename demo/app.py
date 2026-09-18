@@ -28,6 +28,8 @@ NODE = os.environ.get("SIMON_NODE", "")
 PUBLICZNY = os.environ.get("SIMON_PUBLIC") == "1"
 LIMIT_NA_GODZINE = int(os.environ.get("SIMON_LIMIT_H", "40"))
 LICZNIK = pathlib.Path(os.environ.get("SIMON_LICZNIK", "/tmp/simon-demo-licznik.json"))
+# M5.2: metrycznik wykonanej pracy. NIE portfel i NIE saldo.
+REJESTR = os.environ.get("SIMON_REJESTR", "")
 
 
 def wczytaj_wezly() -> list[dict]:
@@ -125,7 +127,8 @@ if st.button("Zleć zadanie", type="primary", disabled=not node):
         with st.spinner("zlecenie leci do węzła..."):
             st.session_state.wynik = wywolaj([
                 "--role", "agent", "--bootstrap", node, "--prompt", prompt[:2000],
-                "--model-hash", model, "--max-tokens", str(max_tokens), "--json"])
+                "--model-hash", model, "--max-tokens", str(max_tokens), "--json"]
+                + (["--rejestr", REJESTR] if REJESTR else []))
         st.session_state.pop("werdykt", None)
 
 if not node:
@@ -239,6 +242,37 @@ elif w:
         "późniejszą zmianę, ale nie czyni ich prawdziwymi. Czasy `ttft`/`gen` "
         "też pochodzą od węzła — mierzony niezależnie jest tylko czas obiegu."
     )
+
+if REJESTR and pathlib.Path(REJESTR).is_file():
+    st.divider()
+    st.subheader("Co ta sieć dotąd wykonała")
+    try:
+        rekordy = [json.loads(l) for l in pathlib.Path(REJESTR).read_text().splitlines() if l.strip()]
+    except (OSError, ValueError):
+        rekordy = []
+    if rekordy:
+        per_wezel: dict[str, dict] = {}
+        for r in rekordy:
+            k = r["runtime_declared"]
+            w = per_wezel.setdefault(k, {"zlecen": 0, "prefill": 0, "decode": 0, "ms": 0})
+            w["zlecen"] += 1
+            w["prefill"] += r["prompt_tokens_total"]
+            w["decode"] += r["completion_tokens"]
+            w["ms"] += r["client_observed_total_ms"]
+        st.table([
+            {"silnik": k, "zleceń": w["zlecen"], "prefill (tok.)": w["prefill"],
+             "decode (tok.)": w["decode"], "czas u klienta (s)": round(w["ms"] / 1000, 1)}
+            for k, w in per_wezel.items()
+        ])
+        st.caption(
+            f"**{len(rekordy)} jednostek pracy.** Wynik, liczniki i autorstwo są związane "
+            "podpisanym receiptem; poziom weryfikacji jest pokazany osobno i wynosi dziś "
+            "*podpis + związanie treści* — **nie** audyt wykonania. "
+            "To metrycznik, nie portfel: nie ma tu salda, nagrody ani przelicznika, bo "
+            "„wykonane i zweryfikowane\" nie znaczy „kupione przez niezależny popyt”. "
+            "Liczniki tokenów pochodzą z deklaracji węzła; niezależnie zmierzony jest "
+            "wyłącznie czas po stronie klienta."
+        )
 
 st.divider()
 st.caption(

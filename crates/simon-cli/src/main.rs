@@ -53,6 +53,10 @@ OPCJE:
     --json                   [agent] jeden obiekt JSON na stdout (wynik,
                              pomiar, surowy receipt, werdykt weryfikacji)
                              zamiast wydruku dla człowieka — dla demo/integracji
+    --rejestr <plik>         [agent] M5.2: dopisz wykonaną pracę do lokalnego
+                             metrycznika (JSON Lines). NIE portfel, NIE saldo —
+                             surowe liczniki, czasy mierzone u klienta i poziom
+                             weryfikacji. Wykrywa powtórzenie receiptu.
     --expect-output <plik>   [z --verify-receipt] sprawdź, czy receipt opisuje
                              TĘ treść. Bez tego weryfikujesz podpis, ale nie to,
                              czy dotyczy tekstu, który trzymasz w ręku.
@@ -139,6 +143,10 @@ pub struct Opcje {
     /// bo stdin czyta receipt). Bez tego sprawdzasz podpis, ale NIE to, czy
     /// dotyczy tekstu, ktory trzymasz.
     pub expect_output: Option<String>,
+    /// M5.2: plik lokalnego metrycznika pracy (JSON Lines, tylko dopisywanie).
+    /// NIE jest to portfel ani saldo — zapis, co się wydarzyło i do jakiego
+    /// poziomu zostało sprawdzone. Wykrywa też powtórzenie receiptu.
+    pub rejestr: Option<String>,
 }
 
 impl Opcje {
@@ -164,6 +172,7 @@ impl Opcje {
         let mut expect_job_id = None;
         let mut expect_model = None;
         let mut expect_output = None;
+        let mut rejestr = None;
 
         let mut i = 0;
         while i < args.len() {
@@ -220,6 +229,7 @@ impl Opcje {
                 "--expect-job-id" => expect_job_id = Some(wartosc(&mut i, "--expect-job-id")?),
                 "--expect-model" => expect_model = Some(wartosc(&mut i, "--expect-model")?),
                 "--expect-output" => expect_output = Some(wartosc(&mut i, "--expect-output")?),
+                "--rejestr" => rejestr = Some(wartosc(&mut i, "--rejestr")?),
                 inny => return Err(format!("nieznany argument: {inny}")),
             }
             i += 1;
@@ -253,6 +263,7 @@ impl Opcje {
             expect_job_id,
             expect_model,
             expect_output,
+            rejestr,
         })
     }
 }

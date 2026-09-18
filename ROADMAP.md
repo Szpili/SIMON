@@ -353,7 +353,7 @@ Wartość leży gdzie indziej i tak to opisujemy:
       tool_calls ‖ attachments)`. Dziś hashujemy zdekodowany tekst — a różne
       sekwencje tokenów mogą dać ten sam tekst. Do interoperacyjności także
       kanonizacja RFC 8785 zamiast `serde_json::to_string`.
-- [ ] **M5.2 — lokalny, dopisywalny metrycznik podpisanej pracy.**
+- [x] **M5.2 — lokalny, dopisywalny metrycznik podpisanej pracy.** ZROBIONE 2026-09-18.
       NIE portfel, NIE saldo. Rekord minimalny: hash receiptu, `job_id`, klucze
       klienta i wykonawcy, manifesty (model / tokenizer / profil wykonania),
       `prompt_commitment`, `output_commitment`, liczniki rozbite na
@@ -371,7 +371,18 @@ Wartość leży gdzie indziej i tak to opisujemy:
       Komunikat w demo brzmi „karta wykonała X jednostek pracy; wynik, liczniki
       i autorstwo są związane podpisanym receiptem, a poziom weryfikacji jest
       pokazany osobno" — **nie** „karta zarobiła X".
-      *To jedyny punkt M5, który ma sens przed 18.10.*
+      **Zrobione:** `simon_core::rejestr` (JSON Lines, tylko dopisywanie),
+      `--rejestr <plik>` w agencie, podsumowanie w demo. Rekord ma pola
+      z recenzji; te, których dziś nie mamy (manifesty modelu i tokenizera,
+      `prompt_commitment`, rozbicie prefilla na policzony i z cache'u), są
+      **NIEOBECNE, nie wyzerowane** — zaślepka wyglądałaby jak dane.
+      `verification_status` rozróżnia pięć poziomów; dziś osiągalny jest
+      `OutputBound`.
+
+      **Efekt uboczny, który domyka lukę:** rejestr wykrywa powtórzenie
+      receiptu (po `receipt_hash`, także po restarcie procesu). Whitepaper
+      twierdził, że klient sprawdza jednorazowość receiptu — nie sprawdzał.
+      Teraz jest gdzie to sprawdzić.
 - [ ] **M5.3 — normalizacja jednostki.** Pierwsza jawna postać: `C = w_p·P + w_d·D`,
       gdzie `P` to **nie-cache'owane** tokeny promptu, `D` to tokeny wyjścia,
       a wagi są ZMIERZONE dla konkretnego profilu modelu. Manifest pracy musi
