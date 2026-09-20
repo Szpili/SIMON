@@ -12,11 +12,15 @@ import time
 from pathlib import Path
 
 
-def sprawdz(plik: Path, limit_na_godzine: int, teraz: float | None = None) -> str | None:
+def sprawdz(plik: Path, limit_na_godzine: int, teraz: float | None = None,
+            jezyk: str = "pl") -> str | None:
     """Zwraca None, gdy wolno; komunikat dla użytkownika, gdy limit wyczerpany.
 
     Wywołanie, które przechodzi, OD RAZU zapisuje swój znacznik — inaczej dwa
     kliknięcia w tej samej sekundzie obeszłyby limit.
+
+    `jezyk` wybiera język komunikatu ("pl" domyślnie, "en" dla demo/app.en.py).
+    Logika limitu i arytmetyka okna są wspólne — tłumaczymy tylko napis.
     """
     teraz = time.time() if teraz is None else teraz
     try:
@@ -29,6 +33,9 @@ def sprawdz(plik: Path, limit_na_godzine: int, teraz: float | None = None) -> st
 
     if len(znaczniki) >= limit_na_godzine:
         za_ile = int((3600 - (teraz - min(znaczniki))) / 60) + 1
+        if jezyk == "en":
+            return (f"demo limit: {limit_na_godzine} jobs per hour. "
+                    f"Try again in {za_ile} min.")
         return (f"limit demo: {limit_na_godzine} zleceń na godzinę. "
                 f"Spróbuj za {za_ile} min.")
 

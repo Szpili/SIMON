@@ -275,7 +275,8 @@ THINK — bon, NIEPRZELEWALNY
 | Składnik | Wartość | Źródło |
 |---|---|---|
 | TTFT | 1,74 s | ZMIERZONE (vLLM, prefix caching OFF) |
-| Generowanie 27B na RTX 3090 | 21,8 tok/s | ZMIERZONE |
+| Dekodowanie 27B na RTX 3090 | 21,8 tok/s | ZMIERZONE — warunki niżej |
+| Pełny cykl klienta przez SIMON | 64,94 tok/s | ZMIERZONE — warunki niżej |
 | Prefill (sesje 500→36 500 tok.) | ~2500-2900 tok/s, stabilny do 99% limitu | ZMIERZONE |
 | Błąd heurystyki znakowej (proza PL) | <2% | ZMIERZONE |
 | Błąd heurystyki (gęsty JSON) | −48% | ZMIERZONE |
@@ -288,6 +289,22 @@ THINK — bon, NIEPRZELEWALNY
 **Wniosek z pomiarów heurystyki:** błąd zależy od **typu treści nieznanego z góry** (proza/JSON/base64), nie od długości. **Nie da się go załatać jednym mnożnikiem** — jedynym wyjściem jest pytanie tokenizera o prawdę (`/tokenize`). To zamknęło dyskusję „czy heurystyka wystarczy".
 
 **Odpowiedź na 500 tokenów: ~25-30 s** — i użytkownik **nic nie widzi przez cały czas**, bo wynik pokazywany jest po weryfikacji.
+
+### Dwie liczby przepustowości i dlaczego się różnią
+
+Obie są prawdziwe i mierzą **co innego**. Podajemy warunki, bo liczba nazwana
+pomiarem bez warunków nie jest pomiarem, który da się obronić.
+
+| Metryka | Wartość | Warunki pomiaru | Co opisuje |
+|---|---|---|---|
+| Dekodowanie 27B/3090 | 21,8 tok/s | vLLM, **prefix caching WYŁĄCZONY**, pojedyncze żądanie, pomiar lokalny 2026-09-17 — **zanim istniał transport SIMON** | szybkość samego generowania w tamtej konfiguracji |
+| Pełny cykl klienta | 64,94 tok/s | 40 tokenów wyjścia, krótki prompt, czas **zmierzony po stronie klienta** (transport + prefill + dekodowanie), vLLM 0.27.1 w konfiguracji domyślnej, 2026-09-18 | czas, jaki realnie widzi zleceniodawca |
+
+**Uwaga, której nie zamiatamy:** pełny cykl wychodzi SZYBCIEJ niż samo
+dekodowanie z pierwszego pomiaru, co wygląda paradoksalnie. Udokumentowana
+różnica konfiguracji to wyłączony wtedy prefix caching. **Czy to tłumaczy całą
+trzykrotną różnicę — nie wiemy i tego nie twierdzimy.** Rozstrzygnie to dopiero
+pomiar obu przypadków jedną metodyką.
 
 > **⚠️ Największa rzecz do przemyślenia.** „Weryfikuj przed pokazaniem" zabija UX przy 22 tok/s. API DeepSeeka oddaje to samo w 2-3 s i strumieniuje. Alternatywa: **optymistyczne zdanie** (strumieniuj od razu, sprawdzaj wyrywkowo po fakcie, oszusta karz utratą stawki). **Po tych liczbach warto do tego wrócić. To jest otwarte, nie rozstrzygnięte.**
 

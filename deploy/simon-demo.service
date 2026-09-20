@@ -1,5 +1,8 @@
 [Unit]
-Description=SIMON demo publiczne (Streamlit za Tailscale Funnel)
+Description=SIMON demo publiczne, wersja EN (Streamlit za Tailscale Funnel)
+# Publicznie serwujemy app.en.py — jury jest miedzynarodowe.
+# app.py (PL) zostaje do uzytku lokalnego; DLUG: dwie kopie sie rozjada,
+# docelowo jeden plik z przelacznikiem jezyka.
 After=simon-node.service
 Wants=simon-node.service
 
@@ -8,8 +11,9 @@ Type=simple
 EnvironmentFile=%h/.simon/env
 Environment=SIMON_PUBLIC=1
 Environment=SIMON_LIMIT_H=40
+Environment=SIMON_REJESTR=%h/.simon/praca.jsonl
 Environment=SIMON_BIN=%h/SIMON/target/release/simon
-ExecStart=%h/.local/bin/streamlit run %h/SIMON/demo/app.py \
+ExecStart=%h/.local/bin/streamlit run %h/SIMON/demo/app.en.py \
     --server.port 8602 --server.address 127.0.0.1 --server.headless true \
     --browser.gatherUsageStats false
 Restart=always

@@ -276,7 +276,8 @@ THINK — voucher, NON-TRANSFERABLE
 | Component | Value | Source |
 |---|---|---|
 | TTFT | 1.74 s | MEASURED (vLLM, prefix caching OFF) |
-| Generation, 27B on an RTX 3090 | 21.8 tok/s | MEASURED |
+| Decoding, 27B on an RTX 3090 | 21.8 tok/s | MEASURED — conditions below |
+| Full client cycle through SIMON | 64.94 tok/s | MEASURED — conditions below |
 | Prefill (sessions of 500→36,500 tokens) | ~2500-2900 tok/s, stable to 99% of the limit | MEASURED |
 | Error of the character heuristic (Polish prose) | <2% | MEASURED |
 | Error of the heuristic (dense JSON) | −48% | MEASURED |
@@ -289,6 +290,23 @@ THINK — voucher, NON-TRANSFERABLE
 **What the heuristic measurements tell us:** the error depends on **the type of content, which is not known in advance** (prose/JSON/base64), not on length. **It cannot be patched with a single multiplier** — the only way out is to ask the tokeniser for the truth (`/tokenize`). That closed the question of whether a heuristic would do.
 
 **A 500-token answer: ~25-30 s** — and the user **sees nothing for the whole duration**, because the result is shown only after verification.
+
+### Two throughput figures, and why they differ
+
+Both are true and they measure **different things**. We state the conditions,
+because a number called a measurement without its conditions is not a
+measurement anyone can defend.
+
+| Metric | Value | Measurement conditions | What it describes |
+|---|---|---|---|
+| Decoding, 27B/3090 | 21.8 tok/s | vLLM, **prefix caching OFF**, single request, measured locally on 2026-09-17 — **before SIMON's transport existed** | raw generation speed in that configuration |
+| Full client cycle | 64.94 tok/s | 40 output tokens, short prompt, time **measured on the client** (transport + prefill + decoding), vLLM 0.27.1 in default configuration, 2026-09-18 | the latency a requester actually sees |
+
+**What we are not sweeping away:** the full cycle comes out FASTER than raw
+decoding did in the first measurement, which looks paradoxical. The documented
+configuration difference is that prefix caching was off then. **Whether that
+accounts for the whole threefold gap we do not know, and we do not claim it
+does.** Only measuring both cases with one methodology will settle it.
 
 > **⚠️ The biggest thing to reconsider.** "Verify before showing" destroys the UX at 22 tok/s. The DeepSeek API returns the same thing in 2-3 s and streams it. The alternative: **optimistic delivery** (stream immediately, sample-check afterwards, and slash the cheater's stake). **These numbers make it worth revisiting. This is open, not settled.**
 
