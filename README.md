@@ -36,7 +36,7 @@ receipt issued by an RTX 3090 was verified on that laptop: `RECEIPT VALID`,
 then `REJECTED` after one extra space was appended to the answer. No GPU, no
 network, no trust in whoever handed over the files. Reproduce it yourself with
 `examples/` below. Apple Silicon and big-endian targets remain unverified, and
-we do not claim them. `docs/PAZUR-macos-bringup.md` is the runbook.
+we do not claim them. `docs/PAZUR-macos-bringup.md` is the runbook (Polish).
 
 ## What a receipt proves — and what it does not
 
@@ -64,7 +64,7 @@ that is not implemented.
 The token counters are the node's signed *declaration*: the signature stops
 them being changed afterwards, it does not make them true. The same holds for
 the reported timings — only round-trip latency is measured independently, so
-**settlement must never rest on node-reported time**. `docs/SECURITY-LOG.md`
+**settlement must never rest on node-reported time**. `docs/SECURITY-LOG.en.md`
 records the previous behaviour of each fix, not just the fix.
 
 ## Measured results
@@ -127,10 +127,11 @@ llama.cpp elsewhere).
 ## Documentation
 
 - `docs/whitepaper/SIMON-Whitepaper-EN.pdf` — full write-up (EN; PL version alongside)
-- `docs/design/DESIGN-VERIFIER-0.md` — verifier economics, drift measurements, and the open questions
-- `ROADMAP.md` — what is done, what is blocked, and by what
-- `przyklady/README.md` — a real receipt you can verify offline in one command
-- `docs/PAZUR-macos-bringup.md` — the macOS bring-up runbook, including the traps
+- `docs/design/DESIGN-VERIFIER-0.md` — verifier economics, drift measurements, open questions *(Polish)*
+- `ROADMAP.md` — what is done, what is blocked, and by what *(Polish)*
+- `przyklady/README.en.md` — a real receipt you can verify offline in one command
+- `docs/SECURITY-LOG.en.md` — every fix with the behaviour it replaced, and the current status table
+- `docs/PAZUR-macos-bringup.md` — the macOS bring-up runbook, including the traps *(Polish)*
 - `notebooks/SIMON-D2-ROCm.ipynb` — the cross-vendor measurement itself, runnable on
   AMD Developer Cloud; the CUDA baseline is embedded, so it reports a verdict in-session
 

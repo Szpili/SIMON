@@ -101,7 +101,7 @@ computation.
 signature, the `job_id` and model match, and — since 2026-09-18 — **that the
 digest in the receipt covers the text actually received** (previously the
 signature covered only metadata, so a node could return any text; see
-`docs/SECURITY-LOG.md`).
+`docs/SECURITY-LOG.en.md`).
 
 > **CORRECTION.** An earlier version of this paragraph said the client verifies
 > that the receipt is single-use. **No such check exists.** Receipt reuse is

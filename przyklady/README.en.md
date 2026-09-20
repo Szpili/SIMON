@@ -34,7 +34,7 @@ planting a receipt from a different execution are all rejected.
 **It does NOT prove:** that the declared model generated it. A malicious node can
 sign arbitrary text together with a correctly computed `output_digest`. Binding
 `model + prompt + execution + output` requires an execution audit, which **does
-not exist** — see `docs/SECURITY-LOG.md`.
+not exist** — see `docs/SECURITY-LOG.en.md`.
 
 The token counters in the receipt are a **declaration by the node**: the
 signature makes it impossible to change them later, but it does not make them
