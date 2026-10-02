@@ -1,0 +1,21 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: dark; }
+html, body { background: #0a0a0a; color: #e5e5e5; font-family: Inter, system-ui, sans-serif; }
+code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+:focus-visible { outline: 2px solid #22c55e; outline-offset: 2px; }
+
+.scanlines { position: relative; }
+.scanlines::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
+  background: repeating-linear-gradient(to bottom, rgba(255,255,255,0.025) 0, rgba(255,255,255,0.025) 1px, transparent 1px, transparent 3px);
+}
+.btn {
+  @apply mono inline-flex items-center justify-center border border-line bg-panel px-4 py-2 text-sm text-neutral-100 transition-colors hover:border-neutral-500 hover:bg-neutral-900;
+}
+.btn-primary { @apply border-valid bg-valid text-black font-bold hover:bg-green-400 hover:border-green-400; }
+.btn-danger { @apply border-bad text-bad hover:bg-bad/10 hover:border-bad; }
+.btn:disabled { @apply cursor-not-allowed opacity-40; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
