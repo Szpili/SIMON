@@ -1,6 +1,30 @@
 /* @ts-self-types="./simon_verify.d.ts" */
 
 /**
+ * Bramka M3: ocenia audyt wykonania (containment w top-k + margines).
+ * `audyt_json` = `{"kroki":[{indeks,node_token,topk:[[id,lp],..]}]}`.
+ * @param {string} audyt_json
+ * @param {number} k
+ * @param {number} max_margin
+ * @param {number} max_poza
+ * @returns {string}
+ */
+export function ocena_m3(audyt_json, k, max_margin, max_poza) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ptr0 = passStringToWasm0(audyt_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.ocena_m3(ptr0, len0, k, max_margin, max_poza);
+        deferred2_0 = ret[0];
+        deferred2_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
+/**
  * Odcisk treści wyniku, liczący się z receiptem — do podglądu/diagnostyki.
  * Ten sam wzór co w `odcisk_wyjscia` rdzenia.
  * @param {string} job_id

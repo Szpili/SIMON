@@ -173,6 +173,23 @@ pub fn weryfikuj_m1(
     }
 }
 
+/// Bramka M3: ocenia audyt wykonania (containment w top-k + margines).
+/// `audyt_json` = `{"kroki":[{indeks,node_token,topk:[[id,lp],..]}]}`.
+#[wasm_bindgen]
+pub fn ocena_m3(audyt_json: &str, k: u32, max_margin: f64, max_poza: f64) -> String {
+    let polityka = simon_core::m3::Polityka {
+        k: k as usize,
+        max_margin,
+        max_poza,
+    };
+    match simon_core::m3::ocena_json(audyt_json, &polityka) {
+        Ok(w) => serde_json::to_string(&w).unwrap_or_else(|_| "{\"ok\":false}".into()),
+        Err(e) => {
+            serde_json::json!({"ok": false, "powod": format!("zły audyt: {e}")}).to_string()
+        }
+    }
+}
+
 #[cfg(test)]
 mod testy {
     use super::weryfikuj;
@@ -265,5 +282,26 @@ mod testy {
         // zły nonce
         let bad2 = super::weryfikuj_m1(&rj, "TH", "INNY", "[1,2,3]", "[7,8,9]");
         assert_eq!(pole(&bad2, "ok"), serde_json::json!(false), "{bad2}");
+    }
+
+    #[test]
+    fn m3_uczciwy_audyt_przechodzi_a_cheater_nie() {
+        // Uczciwy: node w top-2, margines ≤ 0,25.
+        let dobry = r#"{"kroki":[
+            {"indeks":0,"node_token":528,"topk":[[528,-1.20],[28742,-1.37]]},
+            {"indeks":1,"node_token":302,"topk":[[28725,-0.90],[302,-0.96]]}
+        ]}"#;
+        let w = super::ocena_m3(dobry, 2, 0.25, 0.02);
+        assert_eq!(pole(&w, "ok"), serde_json::json!(true), "{w}");
+        assert_eq!(pole(&w, "w_topk"), serde_json::json!(2), "{w}");
+
+        // Cheater: jeden token poza top-k.
+        let zly = r#"{"kroki":[
+            {"indeks":0,"node_token":528,"topk":[[528,-1.20]]},
+            {"indeks":1,"node_token":999999,"topk":[[28725,-0.90],[302,-0.96]]}
+        ]}"#;
+        let w2 = super::ocena_m3(zly, 2, 0.25, 0.02);
+        assert_eq!(pole(&w2, "ok"), serde_json::json!(false), "{w2}");
+        assert_eq!(pole(&w2, "poza_topk"), serde_json::json!(1), "{w2}");
     }
 }

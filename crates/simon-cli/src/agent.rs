@@ -700,6 +700,7 @@ mod tests {
             expect_job_id: None,
             expect_model: None,
             tokens: None,
+            audyt: None,
         }
     }
 

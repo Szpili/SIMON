@@ -66,6 +66,9 @@ OPCJE:
     --tokens <plik>          [z --verify-receipt] M1: plik JSON
                              {tokenizer_hash, client_nonce, prompt_token_ids[],
                              output_token_ids[]} — sprawdź wiązanie wejścia/stanu.
+    --audyt <plik>           [z --verify-receipt] M3: plik JSON
+                             {kroki:[{indeks,node_token,topk:[[id,lp],..]}]} —
+                             ocena containment top-k (polityka domyślna k=2).
     --verify-receipt <plik>  sprawdź receipt, który ktoś Ci podał (`-` = stdin).
                              Offline, bez sieci. Z --expect-job-id/--expect-model
                              sprawdza też, czy to receipt do TEGO zlecenia.
@@ -167,6 +170,9 @@ pub struct Opcje {
     /// M1: plik JSON z wiązaniem wejścia/stanu do sprawdzenia w receipcie:
     /// `{tokenizer_hash, client_nonce, prompt_token_ids[], output_token_ids[]}`.
     pub tokens: Option<String>,
+    /// M3: plik JSON z audytem wykonania: `{"kroki":[{indeks,node_token,topk:[[id,lp]..]}]}`.
+    /// Oceniany polityką containment (top-k + margines).
+    pub audyt: Option<String>,
 }
 
 impl Opcje {
@@ -195,6 +201,7 @@ impl Opcje {
         let mut rejestr = None;
         let mut identity_file = None;
         let mut tokens = None;
+        let mut audyt = None;
 
         let mut i = 0;
         while i < args.len() {
@@ -254,6 +261,7 @@ impl Opcje {
                 "--rejestr" => rejestr = Some(wartosc(&mut i, "--rejestr")?),
                 "--identity-file" => identity_file = Some(wartosc(&mut i, "--identity-file")?),
                 "--tokens" => tokens = Some(wartosc(&mut i, "--tokens")?),
+                "--audyt" => audyt = Some(wartosc(&mut i, "--audyt")?),
                 inny => return Err(format!("nieznany argument: {inny}")),
             }
             i += 1;
@@ -290,6 +298,7 @@ impl Opcje {
             rejestr,
             identity_file,
             tokens,
+            audyt,
         })
     }
 }
@@ -382,11 +391,34 @@ fn weryfikuj_offline(opcje: &Opcje, zrodlo: &str) -> ExitCode {
     };
     let m1_ok = m1_wynik.as_ref().map(|w| w.is_ok());
 
+    // M3: opcjonalny audyt containment (top-k + margines).
+    let m3_wynik = match opcje.audyt.as_deref() {
+        Some(sciezka) => {
+            let tekst = match std::fs::read_to_string(sciezka) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("BŁĄD: nie mogę czytać --audyt {sciezka}: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            match simon_core::m3::ocena_json(&tekst, &simon_core::m3::Polityka::default()) {
+                Ok(w) => Some(w),
+                Err(e) => {
+                    eprintln!("BŁĄD: zły format --audyt {sciezka}: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+        None => None,
+    };
+    let m3_ok = m3_wynik.as_ref().map(|w| w.ok);
+
     let ok = podpis_ok
         && job_ok != Some(false)
         && model_ok != Some(false)
         && tresc_ok != Some(false)
-        && m1_ok != Some(false);
+        && m1_ok != Some(false)
+        && m3_ok != Some(false);
 
     if opcje.json {
         println!("{}", serde_json::json!({
@@ -398,6 +430,7 @@ fn weryfikuj_offline(opcje: &Opcje, zrodlo: &str) -> ExitCode {
             "tresc_ok": tresc_ok,
             "poziom": r.poziom(),
             "m1_ok": m1_ok,
+            "m3_ok": m3_ok,
             "prompt_tokens": r.prompt_tokens,
             "completion_tokens": r.completion_tokens,
             "job_id": r.job_id,
@@ -415,6 +448,16 @@ fn weryfikuj_offline(opcje: &Opcje, zrodlo: &str) -> ExitCode {
             match w {
                 Ok(()) => println!("wiązanie M1    : OK (tokenizer + nonce + prompt + wyjście)"),
                 Err(e) => println!("wiązanie M1    : ZŁE — {e}"),
+            }
+        }
+        if let Some(w) = m3_wynik.as_ref() {
+            println!(
+                "audyt M3       : {} (kroków={}, w top-k={}, poza={}, najgorszy rank={}, margines={:.4})",
+                if w.ok { "OK" } else { "ODRZUCONY" },
+                w.krokow, w.w_topk, w.poza_topk, w.najgorszy_rank, w.najgorszy_margin
+            );
+            if let Some(p) = &w.powod {
+                println!("                 {p}");
             }
         }
         println!("poziom dowodu  : {}", r.poziom());

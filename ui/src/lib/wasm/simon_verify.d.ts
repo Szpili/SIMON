@@ -2,6 +2,12 @@
 /* eslint-disable */
 
 /**
+ * Bramka M3: ocenia audyt wykonania (containment w top-k + margines).
+ * `audyt_json` = `{"kroki":[{indeks,node_token,topk:[[id,lp],..]}]}`.
+ */
+export function ocena_m3(audyt_json: string, k: number, max_margin: number, max_poza: number): string;
+
+/**
  * Odcisk treści wyniku, liczący się z receiptem — do podglądu/diagnostyki.
  * Ten sam wzór co w `odcisk_wyjscia` rdzenia.
  */
@@ -30,6 +36,7 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
+    readonly ocena_m3: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly odcisk_wyjscia: (a: number, b: number, c: number, d: number) => [number, number];
     readonly weryfikuj: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
     readonly weryfikuj_m1: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number];
