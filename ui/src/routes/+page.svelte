@@ -15,7 +15,7 @@
   <pre class="mono max-w-full overflow-x-auto text-[9px] leading-[1.15] text-valid sm:text-sm sm:leading-[1.15]" aria-label="SIMON">{logo}</pre>
 
   <p class="mt-10 max-w-xl text-xl leading-relaxed text-neutral-100 sm:text-2xl">
-    Every inference job produces an Ed25519-signed receipt. Anyone can re-run one forward pass and audit it offline.
+    Every inference job produces an Ed25519-signed receipt bound to its output. Anyone can verify it offline — in the browser, with the same Rust verifier the node harness uses.
   </p>
 
   <ul class="mt-6 flex flex-wrap gap-2">

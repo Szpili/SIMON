@@ -1,0 +1,19 @@
+[package]
+name = "simon-verify-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "SIMON — weryfikacja receiptu offline (jedno źródło prawdy z simon-core), eksport WASM"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+simon-core = { path = "../simon-core" }
+serde.workspace = true
+serde_json.workspace = true
+# Wersja MUSI zgadzać się 1:1 z zainstalowanym `wasm-bindgen` CLI (inaczej
+# generator odrzuca artefakt). Workspace i tak pinuje 0.2.108 przez
+# `libp2p-swarm -> wasm-bindgen-futures`, więc CLI też jest w 0.2.108.
+wasm-bindgen = "0.2"

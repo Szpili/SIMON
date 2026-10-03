@@ -17,7 +17,12 @@ use thiserror::Error;
 pub mod crypto;
 pub mod obserwacja;
 pub mod pomiar;
+// `rejestr` (I/O plikowe) i `tozsamosc` (pliki klucza, HOME/LOCALAPPDATA,
+// std::process) sa host-only — nie istnieja na wasm32-unknown-unknown.
+// Weryfikacja receiptu ich nie potrzebuje, a bez tego WASM sie nie zbuduje.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod rejestr;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod tozsamosc;
 pub mod receipt;
 

@@ -66,6 +66,10 @@ OPCJE:
     --verify-receipt <plik>  sprawdź receipt, który ktoś Ci podał (`-` = stdin).
                              Offline, bez sieci. Z --expect-job-id/--expect-model
                              sprawdza też, czy to receipt do TEGO zlecenia.
+
+PODKOMENDA (alias na --verify-receipt):
+    simon verify <receipt> [--output <plik>] [--job-id <id>] [--model <m>] [--json]
+                             to samo, czytelniej. `--output` = `--expect-output`.
     --key-file <plik>        [node] jak --key, ale ziarno czytane z pliku.
                              UŻYWAJ TEGO we wdrożeniu: --key <hex> jest widoczny
                              w `ps` dla każdego użytkownika maszyny.
@@ -94,6 +98,9 @@ PRZYKŁADY:
         --prompt "napisz funkcję sumującą dwie liczby w Rust" \
         --then-bootstrap /ip4/<IP_TESTER>/tcp/9002 \
         --then-prompt "znajdź przypadek brzegowy dla tej funkcji"
+
+    # weryfikacja cudzego receiptu offline (ta sama komenda co PODKOMENDA)
+    simon verify przyklady/receipt.json --output przyklady/odpowiedz.txt
 
 UWAGA (RULES #1): prompt idzie kanałem PUNKT-PUNKT (/simon/prompt/1),
 nigdy przez gossipsub. Gossipsubem idzie tylko zlecenie bez treści.
@@ -362,8 +369,63 @@ fn weryfikuj_offline(opcje: &Opcje, zrodlo: &str) -> ExitCode {
     if ok { ExitCode::SUCCESS } else { ExitCode::FAILURE }
 }
 
+/// `simon verify <receipt> [--output f] [--job-id id] [--model m] [--json]`
+/// rozwija się do flag `--verify-receipt` / `--expect-*` — ta sama ścieżka, ten
+/// sam kod (`weryfikuj_offline`), zero drugiej implementacji. Każdy inny
+/// argument (w tym nieznany) idzie jak jest; parser go zgłosi.
+fn rozwin_podkomende(args: Vec<String>) -> Vec<String> {
+    if args.first().map(String::as_str) != Some("verify") {
+        return args;
+    }
+    let mut out: Vec<String> = Vec::new();
+    let mut receipt: Option<String> = None;
+    let mut i = 1;
+    while i < args.len() {
+        let a = args[i].clone();
+        // Flaga z wartością: `cel` to nazwa po przejściu, `args[i+1]` to wartość.
+        let z_wartoscia = |out: &mut Vec<String>, cel: &str, i: &mut usize| {
+            out.push(cel.to_string());
+            if let Some(v) = args.get(*i + 1) {
+                out.push(v.clone());
+                *i += 1;
+            }
+        };
+        match a.as_str() {
+            "--output" | "-o" => z_wartoscia(&mut out, "--expect-output", &mut i),
+            "--job-id" => z_wartoscia(&mut out, "--expect-job-id", &mut i),
+            "--model" => z_wartoscia(&mut out, "--expect-model", &mut i),
+            "--json" => out.push("--json".into()),
+            "-h" | "--help" => out.push("--help".into()),
+            _ if a == "-" || !a.starts_with('-') => {
+                if receipt.is_none() {
+                    receipt = Some(a);
+                } else {
+                    out.push(a); // nadmiarowy pozycyjny — parser zgłosi
+                }
+            }
+            _ => out.push(a),
+        }
+        i += 1;
+    }
+
+    let mut final_args: Vec<String> = Vec::new();
+    match receipt {
+        Some(r) => {
+            final_args.push("--verify-receipt".into());
+            final_args.push(r);
+        }
+        // `simon verify` bez pliku i bez --help: niech parser powie, czego brak.
+        None if !out.iter().any(|s| s == "--help") => {
+            final_args.push("--verify-receipt".into());
+        }
+        None => {}
+    }
+    final_args.extend(out);
+    final_args
+}
+
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args = rozwin_podkomende(std::env::args().skip(1).collect());
     let opcje = match Opcje::parse(&args) {
         Ok(o) => o,
         Err(msg) => {

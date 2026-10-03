@@ -5,6 +5,7 @@
 //! na krypto + stake, nigdy na ilości policzonej inferencji.
 
 use ed25519_dalek::{Signature as DalekSignature, Signer, Verifier};
+#[cfg(not(target_arch = "wasm32"))]
 use rand::rngs::OsRng;
 
 use crate::SimonError;
@@ -25,6 +26,11 @@ pub struct Signature(#[serde(with = "hex_bytes64")] pub [u8; 64]);
 
 impl Keypair {
     /// Generuje nową parę kluczy z CSPRNG systemowego.
+    ///
+    /// Host-only: na wasm32-unknown-unknown nie ma systemowego CSPRNG bez
+    /// JS-glu, a weryfikacja receiptu (jedyne, co robi WASM) nie generuje
+    /// kluczy — tylko weryfikuje podpisy istniejącymi.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn generate() -> Self {
         Self {
             inner: ed25519_dalek::SigningKey::generate(&mut OsRng),

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/simon-core", "crates/simon-node", "crates/simon-harness", "crates/simon-cli"]
+members = ["crates/simon-core", "crates/simon-node", "crates/simon-harness", "crates/simon-cli", "crates/simon-verify-wasm"]
 
 [workspace.package]
 version = "0.1.0"

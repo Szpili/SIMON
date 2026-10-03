@@ -1,0 +1,15 @@
+# Normalize text files to LF so a Windows checkout stops rewriting the whole
+# tree to CRLF (that produced a ~17k-line phantom diff with no real change).
+* text=auto eol=lf
+
+# Binaries — never convert.
+*.wasm binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.gz binary
+*.tar binary
+*.zip binary

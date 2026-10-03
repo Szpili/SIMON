@@ -3084,6 +3084,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "simon-verify-wasm"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "simon-core",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "siphasher"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
