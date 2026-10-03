@@ -571,6 +571,7 @@ fn zbuduj_podpisany_receipt(
         finished_at_us: teraz,
         signer: klucz.public(),
         signature: None,
+        wiazania: None,
     };
 
     match receipt.sign(klucz) {

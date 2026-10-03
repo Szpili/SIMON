@@ -771,6 +771,7 @@ mod tests {
             finished_at_us: 1_000_000,
             signer: klucz.public(),
             signature: None,
+            wiazania: None,
         }
         .sign(&klucz)
         .expect("podpis");
@@ -808,6 +809,7 @@ mod tests {
             finished_at_us: 1_000_000,
             signer: klucz.public(),
             signature: None,
+            wiazania: None,
         }
         .sign(&klucz)
         .expect("podpis");
@@ -846,6 +848,7 @@ mod tests {
             finished_at_us: 1,
             signer: klucz.public(),
             signature: None,
+            wiazania: None,
         }
         .sign(&klucz)
         .expect("podpis");
@@ -907,6 +910,7 @@ mod tests {
             finished_at_us: 1_000_000,
             signer: klucz.public(),
             signature: None,
+            wiazania: None,
         }
         .sign(&klucz)
         .expect("podpis");

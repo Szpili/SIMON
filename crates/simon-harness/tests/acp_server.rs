@@ -36,6 +36,7 @@ fn receipt_z(job_id: &str, node_id: &str, klucz: &Keypair) -> simon_core::receip
         finished_at_us: 100_400_000,
         signer: klucz.public(),
         signature: None,
+        wiazania: None,
     }
 }
 

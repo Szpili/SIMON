@@ -29,6 +29,7 @@ fn receipt_oszusata() -> Receipt {
         finished_at_us: 1_000_000,
         signer: PublicKey([0u8; 32]),
         signature: None,
+        wiazania: None,
     }
 }
 

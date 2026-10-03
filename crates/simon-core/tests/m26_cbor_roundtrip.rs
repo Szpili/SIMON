@@ -24,6 +24,7 @@ fn przyklad(klucz: &Keypair) -> Receipt {
         finished_at_us: 1_789_626_040_836_287,
         signer: klucz.public(),
         signature: None,
+        wiazania: None,
     }
 }
 

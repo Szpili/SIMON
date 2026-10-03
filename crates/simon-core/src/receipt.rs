@@ -32,6 +32,24 @@ pub enum Precision {
 /// Pole `signature` NIE wchodzi do odcisku treści — podpis podpisuje resztę.
 /// Pole `signer` JEST częścią treści (mówi KTO podpisał) i musi zgadzać się
 /// z kluczem zarejestrowanym w rejestrze koordynatora.
+/// Wiązanie M1: wejście (tokenizer, nonce, tokeny promptu) + stan (parametry
+/// próbkowania, ziarno) + odcisk wyjścia po tokenach. JEDNO opcjonalne pole
+/// w receipcie — stare literały i podpisy się nie psują.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WiazaniaM1 {
+    pub schema_version: u32,
+    pub receipt_level: u8,
+    /// Profil wykonania dla audytu (np. "llama.cpp/Q4_K_M/cpu"). Bez niego
+    /// re-run na innym sprzęcie nie ma szans się zgodzić (patrz E0).
+    pub exec_profile: String,
+    pub tokenizer_hash: String,
+    pub prompt_digest: String,
+    pub output_token_chain: String,
+    pub client_nonce: String,
+    pub sampling_params_hash: String,
+    pub rng_seed: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Receipt {
     pub job_id: String,
@@ -74,11 +92,33 @@ pub struct Receipt {
     /// Podpis nad odciskiem treści. Wyłączony z odcisku.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub signature: Option<Signature>,
+
+    /// M1: opcjonalne wiązanie wejścia/stanu. `None` = receipt legacy —
+    /// serializuje się wtedy bajt w bajt jak przed M1, więc stare podpisy
+    /// i fixtures pozostają ważne.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub wiazania: Option<WiazaniaM1>,
 }
 
 /// Separator domeny. Bez niego ten sam hash mogłby zostać podstawiony
 /// w innym miejscu protokołu jako co innego.
 pub const DOMENA_ODCISKU_WYJSCIA: &str = "SIMON/OUTPUT/v1";
+
+// --- M1 (wiązanie wejścia i stanu) — separatory domen ---------------------
+/// Domeny M1. Każda z osobna, żeby ten sam bajt-strumień nie mógł znaczyć
+/// czego innego w innym miejscu protokołu.
+pub const DOMENA_PROMPTU: &str = "SIMON/PROMPT/v1";
+pub const DOMENA_LANCUCHA: &str = "SIMON/CHAIN/v1";
+pub const DOMENA_PARAMETROW: &str = "SIMON/SAMPLING/v1";
+pub const DOMENA_TOKENIZERA: &str = "SIMON/TOKENIZER/v1";
+
+/// Wersja schematu receiptu. `None` = legacy (v0). Nowe pola są opcjonalne,
+/// więc receipt bez nich serializuje się DOKŁADNIE tak jak przed M1 — stare
+/// podpisy i `przyklady/receipt.json` pozostają ważne.
+pub const SCHEMA_VERSION_M1: u32 = 2;
+
+/// Poziom dowodu: 0 = tylko podpisany output; 1 = +wiązanie wejścia/stanu (M1).
+pub const RECEIPT_LEVEL_M1: u8 = 1;
 
 /// Odcisk treści wyniku, związany z konkretnym zleceniem — żeby poprawny
 /// receipt z INNEGO zlecenia nie dał się podstawić pod ten sam tekst.
@@ -100,6 +140,68 @@ pub fn odcisk_wyjscia(job_id: &str, output: &str) -> Result<String, SimonError> 
     }))
 }
 
+/// Odcisk WEJŚCIA: tokenizer + client nonce + dokładne `prompt_token_ids`.
+///
+/// Wiąże to, co klient naprawdę wysłał, z tym, co node twierdzi, że przetworzył
+/// — zamyka truncację promptu, zły tokenizer i re-templating. Kanonizacja przez
+/// `content_digest` (tablica u32 w JSON, bez floatów) — spójna z `odcisk_wyjscia`.
+pub fn odcisk_promptu(
+    tokenizer_hash: &str,
+    client_nonce: &str,
+    prompt_token_ids: &[u32],
+) -> Result<String, SimonError> {
+    content_digest(&serde_json::json!({
+        "domena": DOMENA_PROMPTU,
+        "tokenizer_hash": tokenizer_hash,
+        "nonce": client_nonce,
+        "tokens": prompt_token_ids,
+    }))
+}
+
+/// Odcisk WYJŚCIA po tokenach, związany z odciskiem promptu (M1).
+/// Commit na sekwencji tokenów, nie na tekście — bo różne sekwencje mogą
+/// zdekodować się do tego samego tekstu, a audyt dotyczy sekwencji.
+pub fn lancuch_tokenow(
+    prompt_digest: &str,
+    output_token_ids: &[u32],
+) -> Result<String, SimonError> {
+    content_digest(&serde_json::json!({
+        "domena": DOMENA_LANCUCHA,
+        "prompt": prompt_digest,
+        "tokens": output_token_ids,
+    }))
+}
+
+/// Odcisk parametrów próbkowania. Wartości jako liczby całkowite (\*_milli),
+/// bo podpisywana treść NIE MOŻE zawierać floatów (patrz NAPRAWA 2026-09-17).
+/// Bez tego audyt re-runem nie ma stanu startowego.
+pub fn odcisk_parametrow(
+    temperature_milli: i64,
+    top_p_milli: i64,
+    top_k: u32,
+    min_p_milli: i64,
+    repeat_penalty_milli: i64,
+) -> Result<String, SimonError> {
+    content_digest(&serde_json::json!({
+        "domena": DOMENA_PARAMETROW,
+        "temperature_milli": temperature_milli,
+        "top_p_milli": top_p_milli,
+        "top_k": top_k,
+        "min_p_milli": min_p_milli,
+        "repeat_penalty_milli": repeat_penalty_milli,
+    }))
+}
+
+/// Odcisk pliku tokenizera (`tokenizer.json`) — część manifestu modelu.
+pub fn odcisk_tokenizera(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(DOMENA_TOKENIZERA.as_bytes());
+    h.update([0u8]); // separator — odciski nie mogą się sklejać
+    h.update(bytes);
+    hex::encode(h.finalize())
+}
+
 impl Receipt {
     /// Czy ten receipt opisuje TEN tekst. Bez tej bramki podpis dowodzi tylko,
     /// że node coś policzył — nie, że to jest to, co trzymasz w ręku.
@@ -108,6 +210,73 @@ impl Receipt {
             Ok(d) => d == self.output_digest,
             Err(_) => false,
         }
+    }
+
+    /// Poziom dowodu tego receiptu (0 = legacy, 1 = M1).
+    pub fn poziom(&self) -> u8 {
+        self.wiazania.as_ref().map(|w| w.receipt_level).unwrap_or(0)
+    }
+
+    /// Ustawia pola M1 (budowniczy dla node'a i testów).
+    pub fn z_wiazaniem_m1(
+        mut self,
+        tokenizer_hash: String,
+        client_nonce: String,
+        prompt_token_ids: &[u32],
+        output_token_ids: &[u32],
+        sampling_params_hash: String,
+        rng_seed: u64,
+        exec_profile: String,
+    ) -> Result<Self, SimonError> {
+        let pd = odcisk_promptu(&tokenizer_hash, &client_nonce, prompt_token_ids)?;
+        let lc = lancuch_tokenow(&pd, output_token_ids)?;
+        self.wiazania = Some(WiazaniaM1 {
+            schema_version: SCHEMA_VERSION_M1,
+            receipt_level: RECEIPT_LEVEL_M1,
+            exec_profile,
+            tokenizer_hash,
+            prompt_digest: pd,
+            output_token_chain: lc,
+            client_nonce,
+            sampling_params_hash,
+            rng_seed,
+        });
+        Ok(self)
+    }
+
+    /// Bramka M1: czy receipt wiąże DOKŁADNIE ten tokenizer, nonce, prompt i
+    /// wyjście (po tokenach). Weryfikacja CPU — bez wag i bez GPU.
+    pub fn zweryfikuj_m1(
+        &self,
+        tokenizer_hash: &str,
+        client_nonce: &str,
+        prompt_token_ids: &[u32],
+        output_token_ids: &[u32],
+    ) -> Result<(), SimonError> {
+        let w = self.wiazania.as_ref().ok_or_else(|| {
+            SimonError::ReceiptMismatch("brak wiązań M1 (poziom 0)".into())
+        })?;
+        if w.tokenizer_hash != tokenizer_hash {
+            return Err(SimonError::ReceiptMismatch(
+                "tokenizer_hash niezgodny z receiptem".into(),
+            ));
+        }
+        if w.client_nonce != client_nonce {
+            return Err(SimonError::ReceiptMismatch("client_nonce niezgodny".into()));
+        }
+        let oczekiwany_pd = odcisk_promptu(tokenizer_hash, client_nonce, prompt_token_ids)?;
+        if w.prompt_digest != oczekiwany_pd {
+            return Err(SimonError::ReceiptMismatch(
+                "prompt_digest niezgodny — to nie ten prompt".into(),
+            ));
+        }
+        let oczekiwany_lc = lancuch_tokenow(&w.prompt_digest, output_token_ids)?;
+        if w.output_token_chain != oczekiwany_lc {
+            return Err(SimonError::ReceiptMismatch(
+                "output_token_chain niezgodny — to nie ten output".into(),
+            ));
+        }
+        Ok(())
     }
 
     /// Odcisk treści receiptu. Podpis nie wchodzi do odcisku.
@@ -190,5 +359,101 @@ impl Receipt {
     )]
     pub fn elapsed_secs(&self) -> f64 {
         (self.finished_at_us.saturating_sub(self.started_at_us)) as f64 / 1_000_000.0
+    }
+}
+
+#[cfg(test)]
+mod testy_m1 {
+    use super::*;
+    use crate::crypto::Keypair;
+
+    fn bazowy() -> Receipt {
+        Receipt {
+            job_id: "job-test".into(),
+            node_id: "node-test".into(),
+            model_hash: "mistral-7b".into(),
+            runtime: "llama.cpp/0.3".into(),
+            precision: Precision::Fp16,
+            activation_hash: "toploc:NIE_POLICZONY".into(),
+            output_digest: odcisk_wyjscia("job-test", "hello").unwrap(),
+            prompt_tokens: 3,
+            completion_tokens: 2,
+            started_at_us: 1,
+            finished_at_us: 2,
+            signer: Keypair::from_seed(&[7u8; 32]).public(),
+            signature: None,
+            wiazania: None,
+        }
+    }
+
+    /// Regresja kluczowa: dodanie pól M1 (opcjonalnych) NIE MOŻE zmienić
+    /// odcisku receiptu legacy — inaczej wszystkie stare podpisy padają.
+    #[test]
+    fn stary_receipt_z_przykladow_dalej_weryfikuje_podpis() {
+        let r: Receipt =
+            serde_json::from_str(include_str!("../../../przyklady/receipt.json").trim()).unwrap();
+        assert_eq!(r.poziom(), 0);
+        assert!(r.verify_self().is_ok(), "podpis legacy musi dalej działać");
+        assert!(r.zgodny_z_wyjsciem(include_str!("../../../przyklady/odpowiedz.txt")));
+    }
+
+    #[test]
+    fn receipt_legacy_bez_pol_m1_serializuje_sie_staro() {
+        let s = serde_json::to_string(&bazowy()).unwrap();
+        for pole in [
+            "schema_version",
+            "receipt_level",
+            "exec_profile",
+            "tokenizer_hash",
+            "prompt_digest",
+            "output_token_chain",
+            "client_nonce",
+            "sampling_params_hash",
+            "rng_seed",
+        ] {
+            assert!(!s.contains(pole), "pole {pole} nie może się serializować gdy None: {s}");
+        }
+    }
+
+    #[test]
+    fn m1_przechodzi_i_tamper_lamie() {
+        let k = Keypair::from_seed(&[9u8; 32]);
+        let prompt = [10u32, 20, 30];
+        let out = [40u32, 50, 60];
+        let r = bazowy()
+            .z_wiazaniem_m1(
+                "tokhash".into(),
+                "nonce-1".into(),
+                &prompt,
+                &out,
+                "params".into(),
+                42,
+                "llama.cpp/Q4_K_M/cpu".into(),
+            )
+            .unwrap()
+            .sign(&k)
+            .unwrap();
+        assert_eq!(r.poziom(), 1);
+        assert!(r.verify_self().is_ok());
+        assert!(r.zweryfikuj_m1("tokhash", "nonce-1", &prompt, &out).is_ok());
+        let mut out2 = out;
+        out2[1] = 999;
+        assert!(r.zweryfikuj_m1("tokhash", "nonce-1", &prompt, &out2).is_err());
+        assert!(r.zweryfikuj_m1("tokhash", "nonce-2", &prompt, &out).is_err());
+        assert!(r.zweryfikuj_m1("tokhash-x", "nonce-1", &prompt, &out).is_err());
+    }
+
+    #[test]
+    fn domeny_sa_rozdzielone() {
+        assert_ne!(
+            odcisk_promptu("t", "n", &[1, 2, 3]).unwrap(),
+            lancuch_tokenow("t", &[1, 2, 3]).unwrap()
+        );
+        assert_ne!(
+            odcisk_parametrow(0, 1000, 1, 0, 1000).unwrap(),
+            odcisk_parametrow(1, 1000, 1, 0, 1000).unwrap()
+        );
+        assert_eq!(odcisk_tokenizera(b"abc"), odcisk_tokenizera(b"abc"));
+        assert_ne!(odcisk_tokenizera(b"abc"), odcisk_tokenizera(b"abd"));
     }
 }

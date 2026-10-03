@@ -23,6 +23,7 @@ fn receipt_for(job_id: &str, node_id: &str) -> Receipt {
         finished_at_us: 100_500_000,
         signer: Keypair::generate().public(),
         signature: None,
+        wiazania: None,
     }
 }
 
