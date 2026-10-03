@@ -19,12 +19,20 @@ export function odcisk_wyjscia(job_id: string, output: string): string | undefin
  */
 export function weryfikuj(receipt_json: string, output?: string | null, oczekiwany_job_id?: string | null, oczekiwany_model?: string | null): string;
 
+/**
+ * Bramka M1: czy receipt wiąże DOKŁADNIE ten tokenizer, nonce, prompt i wyjście
+ * (po tokenach). Tokeny podajemy jako JSON-owe tablice u32. Czysty CPU — bez
+ * wag i bez GPU. To ta sama logika co `Receipt::zweryfikuj_m1` w rdzeniu.
+ */
+export function weryfikuj_m1(receipt_json: string, tokenizer_hash: string, client_nonce: string, prompt_token_ids_json: string, output_token_ids_json: string): string;
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly odcisk_wyjscia: (a: number, b: number, c: number, d: number) => [number, number];
     readonly weryfikuj: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
+    readonly weryfikuj_m1: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number];
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

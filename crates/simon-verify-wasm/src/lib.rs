@@ -125,6 +125,54 @@ pub fn odcisk_wyjscia(job_id: &str, output: &str) -> Option<String> {
     simon_core::receipt::odcisk_wyjscia(job_id, output).ok()
 }
 
+/// Bramka M1: czy receipt wiąże DOKŁADNIE ten tokenizer, nonce, prompt i wyjście
+/// (po tokenach). Tokeny podajemy jako JSON-owe tablice u32. Czysty CPU — bez
+/// wag i bez GPU. To ta sama logika co `Receipt::zweryfikuj_m1` w rdzeniu.
+#[wasm_bindgen]
+pub fn weryfikuj_m1(
+    receipt_json: &str,
+    tokenizer_hash: &str,
+    client_nonce: &str,
+    prompt_token_ids_json: &str,
+    output_token_ids_json: &str,
+) -> String {
+    let r: Receipt = match serde_json::from_str(receipt_json.trim()) {
+        Ok(r) => r,
+        Err(e) => {
+            return serde_json::json!({
+                "ok": false, "poziom": 0,
+                "powod": format!("nieparsowalny receipt: {e}")
+            })
+            .to_string()
+        }
+    };
+    let p: Vec<u32> = match serde_json::from_str(prompt_token_ids_json) {
+        Ok(v) => v,
+        Err(e) => {
+            return serde_json::json!({
+                "ok": false, "poziom": r.poziom(),
+                "powod": format!("prompt_token_ids_json: {e}")
+            })
+            .to_string()
+        }
+    };
+    let o: Vec<u32> = match serde_json::from_str(output_token_ids_json) {
+        Ok(v) => v,
+        Err(e) => {
+            return serde_json::json!({
+                "ok": false, "poziom": r.poziom(),
+                "powod": format!("output_token_ids_json: {e}")
+            })
+            .to_string()
+        }
+    };
+    match r.zweryfikuj_m1(tokenizer_hash, client_nonce, &p, &o) {
+        Ok(()) => serde_json::json!({"ok": true, "poziom": r.poziom(), "powod": null}).to_string(),
+        Err(e) => serde_json::json!({"ok": false, "poziom": r.poziom(), "powod": e.to_string()})
+            .to_string(),
+    }
+}
+
 #[cfg(test)]
 mod testy {
     use super::weryfikuj;
@@ -166,5 +214,56 @@ mod testy {
         let w = weryfikuj("{}", Some("cokolwiek".into()), None, None);
         assert_eq!(pole(&w, "ok"), serde_json::json!(false), "{w}");
         assert_eq!(pole(&w, "parsuje_sie"), serde_json::json!(false), "{w}");
+    }
+
+    #[test]
+    fn m1_wiazanie_przechodzi_i_tamper_lamie() {
+        use simon_core::crypto::Keypair;
+        use simon_core::receipt::{Precision, Receipt};
+
+        let k = Keypair::from_seed(&[3u8; 32]);
+        let prompt = [1u32, 2, 3];
+        let out = [7u32, 8, 9];
+        let base = Receipt {
+            job_id: "j".into(),
+            node_id: "n".into(),
+            model_hash: "m".into(),
+            runtime: "llama.cpp/0.3".into(),
+            precision: Precision::Fp16,
+            activation_hash: "toploc:NIE_POLICZONY".into(),
+            output_digest: simon_core::receipt::odcisk_wyjscia("j", "x").unwrap(),
+            prompt_tokens: 3,
+            completion_tokens: 3,
+            started_at_us: 0,
+            finished_at_us: 1,
+            signer: k.public(),
+            signature: None,
+            wiazania: None,
+        };
+        let r = base
+            .z_wiazaniem_m1(
+                "TH".into(),
+                "NONCE".into(),
+                &prompt,
+                &out,
+                "SP".into(),
+                7,
+                "llama.cpp/Q4_K_M/cpu".into(),
+            )
+            .unwrap()
+            .sign(&k)
+            .unwrap();
+        let rj = serde_json::to_string(&r).unwrap();
+
+        // poprawnie
+        let ok = super::weryfikuj_m1(&rj, "TH", "NONCE", "[1,2,3]", "[7,8,9]");
+        assert_eq!(pole(&ok, "ok"), serde_json::json!(true), "{ok}");
+        assert_eq!(pole(&ok, "poziom"), serde_json::json!(1), "{ok}");
+        // podmieniony output token
+        let bad = super::weryfikuj_m1(&rj, "TH", "NONCE", "[1,2,3]", "[7,8,999]");
+        assert_eq!(pole(&bad, "ok"), serde_json::json!(false), "{bad}");
+        // zły nonce
+        let bad2 = super::weryfikuj_m1(&rj, "TH", "INNY", "[1,2,3]", "[7,8,9]");
+        assert_eq!(pole(&bad2, "ok"), serde_json::json!(false), "{bad2}");
     }
 }

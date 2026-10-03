@@ -63,6 +63,9 @@ OPCJE:
     --expect-output <plik>   [z --verify-receipt] sprawdź, czy receipt opisuje
                              TĘ treść. Bez tego weryfikujesz podpis, ale nie to,
                              czy dotyczy tekstu, który trzymasz w ręku.
+    --tokens <plik>          [z --verify-receipt] M1: plik JSON
+                             {tokenizer_hash, client_nonce, prompt_token_ids[],
+                             output_token_ids[]} — sprawdź wiązanie wejścia/stanu.
     --verify-receipt <plik>  sprawdź receipt, który ktoś Ci podał (`-` = stdin).
                              Offline, bez sieci. Z --expect-job-id/--expect-model
                              sprawdza też, czy to receipt do TEGO zlecenia.
@@ -161,6 +164,9 @@ pub struct Opcje {
     /// użytkownika. NIGDY nie przyjmujemy sekretu jako argumentu ani zmiennej
     /// środowiskowej — byłby widoczny w `ps` i w historii powłoki.
     pub identity_file: Option<String>,
+    /// M1: plik JSON z wiązaniem wejścia/stanu do sprawdzenia w receipcie:
+    /// `{tokenizer_hash, client_nonce, prompt_token_ids[], output_token_ids[]}`.
+    pub tokens: Option<String>,
 }
 
 impl Opcje {
@@ -188,6 +194,7 @@ impl Opcje {
         let mut expect_output = None;
         let mut rejestr = None;
         let mut identity_file = None;
+        let mut tokens = None;
 
         let mut i = 0;
         while i < args.len() {
@@ -246,6 +253,7 @@ impl Opcje {
                 "--expect-output" => expect_output = Some(wartosc(&mut i, "--expect-output")?),
                 "--rejestr" => rejestr = Some(wartosc(&mut i, "--rejestr")?),
                 "--identity-file" => identity_file = Some(wartosc(&mut i, "--identity-file")?),
+                "--tokens" => tokens = Some(wartosc(&mut i, "--tokens")?),
                 inny => return Err(format!("nieznany argument: {inny}")),
             }
             i += 1;
@@ -281,8 +289,17 @@ impl Opcje {
             expect_output,
             rejestr,
             identity_file,
+            tokens,
         })
     }
+}
+
+#[derive(serde::Deserialize)]
+struct PlikTokenow {
+    tokenizer_hash: String,
+    client_nonce: String,
+    prompt_token_ids: Vec<u32>,
+    output_token_ids: Vec<u32>,
 }
 
 /// `--verify-receipt`: sprawdza receipt, ktory ktos nam podal. Bez sieci,
@@ -337,10 +354,39 @@ fn weryfikuj_offline(opcje: &Opcje, zrodlo: &str) -> ExitCode {
     };
     let job_ok = opcje.expect_job_id.as_ref().map(|j| *j == r.job_id);
     let model_ok = opcje.expect_model.as_ref().map(|m| *m == r.model_hash);
+
+    // M1: opcjonalne wiązanie wejścia/stanu (tokeny po stronie klienta).
+    let m1_wynik = match opcje.tokens.as_deref() {
+        Some(sciezka) => {
+            let tekst = match std::fs::read_to_string(sciezka) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("BŁĄD: nie mogę czytać --tokens {sciezka}: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            match serde_json::from_str::<PlikTokenow>(&tekst) {
+                Ok(p) => Some(r.zweryfikuj_m1(
+                    &p.tokenizer_hash,
+                    &p.client_nonce,
+                    &p.prompt_token_ids,
+                    &p.output_token_ids,
+                )),
+                Err(e) => {
+                    eprintln!("BŁĄD: zły format --tokens {sciezka}: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+        None => None,
+    };
+    let m1_ok = m1_wynik.as_ref().map(|w| w.is_ok());
+
     let ok = podpis_ok
         && job_ok != Some(false)
         && model_ok != Some(false)
-        && tresc_ok != Some(false);
+        && tresc_ok != Some(false)
+        && m1_ok != Some(false);
 
     if opcje.json {
         println!("{}", serde_json::json!({
@@ -350,6 +396,8 @@ fn weryfikuj_offline(opcje: &Opcje, zrodlo: &str) -> ExitCode {
             "job_id_ok": job_ok,
             "model_ok": model_ok,
             "tresc_ok": tresc_ok,
+            "poziom": r.poziom(),
+            "m1_ok": m1_ok,
             "prompt_tokens": r.prompt_tokens,
             "completion_tokens": r.completion_tokens,
             "job_id": r.job_id,
@@ -363,6 +411,13 @@ fn weryfikuj_offline(opcje: &Opcje, zrodlo: &str) -> ExitCode {
         if let Some(v) = job_ok { println!("job_id         : {}", if v { "zgodny" } else { "NIEZGODNY" }); }
         if let Some(v) = model_ok { println!("model_hash     : {}", if v { "zgodny" } else { "NIEZGODNY" }); }
         if let Some(v) = tresc_ok { println!("treść wyniku   : {}", if v { "zgodna z odciskiem" } else { "NIEZGODNA — to nie jest ten wynik" }); }
+        if let Some(w) = m1_wynik.as_ref() {
+            match w {
+                Ok(()) => println!("wiązanie M1    : OK (tokenizer + nonce + prompt + wyjście)"),
+                Err(e) => println!("wiązanie M1    : ZŁE — {e}"),
+            }
+        }
+        println!("poziom dowodu  : {}", r.poziom());
         println!("node           : {}", r.node_id);
         println!("werdykt        : {}", if ok { "RECEIPT WAŻNY" } else { "ODRZUCONY" });
     }

@@ -699,6 +699,7 @@ mod tests {
             verify_receipt: None,
             expect_job_id: None,
             expect_model: None,
+            tokens: None,
         }
     }
 

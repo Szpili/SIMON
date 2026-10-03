@@ -57,6 +57,40 @@ export function weryfikuj(receipt_json, output, oczekiwany_job_id, oczekiwany_mo
     }
 }
 
+/**
+ * Bramka M1: czy receipt wiąże DOKŁADNIE ten tokenizer, nonce, prompt i wyjście
+ * (po tokenach). Tokeny podajemy jako JSON-owe tablice u32. Czysty CPU — bez
+ * wag i bez GPU. To ta sama logika co `Receipt::zweryfikuj_m1` w rdzeniu.
+ * @param {string} receipt_json
+ * @param {string} tokenizer_hash
+ * @param {string} client_nonce
+ * @param {string} prompt_token_ids_json
+ * @param {string} output_token_ids_json
+ * @returns {string}
+ */
+export function weryfikuj_m1(receipt_json, tokenizer_hash, client_nonce, prompt_token_ids_json, output_token_ids_json) {
+    let deferred6_0;
+    let deferred6_1;
+    try {
+        const ptr0 = passStringToWasm0(receipt_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(tokenizer_hash, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(client_nonce, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ptr3 = passStringToWasm0(prompt_token_ids_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len3 = WASM_VECTOR_LEN;
+        const ptr4 = passStringToWasm0(output_token_ids_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len4 = WASM_VECTOR_LEN;
+        const ret = wasm.weryfikuj_m1(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4);
+        deferred6_0 = ret[0];
+        deferred6_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred6_0, deferred6_1, 1);
+    }
+}
+
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,

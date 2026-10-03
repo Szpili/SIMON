@@ -1,0 +1,26 @@
+{
+  "job_id": "job-m1-demo",
+  "node_id": "197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d61",
+  "model_hash": "mistral-7b-instruct-v0.2.Q4_K_M",
+  "runtime": "llama.cpp/511f9c13",
+  "precision": "fp16",
+  "activation_hash": "toploc:NIE_POLICZONY",
+  "output_digest": "cbb035b7f73eb917a6975ff388a862707f7c170ea6d2611b57f8b082beed195b",
+  "prompt_tokens": 40,
+  "completion_tokens": 60,
+  "started_at_us": 0,
+  "finished_at_us": 1,
+  "signer": "197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d61",
+  "signature": "ccda436644126950cd1065859b5745cd1f2a796b0fc09acfbc5370d91dd583fdc7381c3e4cc8cbf47eaa66a979a93ada2c9638957f3b4252d1395428fbfb9a01",
+  "wiazania": {
+    "schema_version": 2,
+    "receipt_level": 1,
+    "exec_profile": "llama.cpp/Q4_K_M/cpu",
+    "tokenizer_hash": "2552671e214385091f32976b598185e3a9821c0535d049895dd74f6be61761e1",
+    "prompt_digest": "0850d0cd268ff950493b07c51848e6b750f30a673937ac4bbf641076b41e557a",
+    "output_token_chain": "92def90987243d8d48bc5f8d7fd9828520beee3f2d9ee8b4d260ee569fca21bf",
+    "client_nonce": "demo-nonce-2026-10-04",
+    "sampling_params_hash": "caf1dc03123eae508c76655ff8f69b752e5e81bb02d499935caeacde389b89ac",
+    "rng_seed": 42
+  }
+}
