@@ -7,7 +7,7 @@
 // WASM ładujemy leniwie, wyłącznie w przeglądarce — strona jest prerenderowana
 // (adapter-static), więc import modułu i `init()` nie mogą dziać się na serwerze.
 
-import type { Verdict } from './receipt';
+import type { Verdict, WerdyktM1, WerdyktM3 } from './receipt';
 
 type WasmModule = typeof import('./wasm/simon_verify.js');
 
@@ -47,4 +47,35 @@ export async function verifyReceipt(
 export async function outputDigest(jobId: string, output: string): Promise<string | null> {
   const m = await load();
   return m.odcisk_wyjscia(jobId, output) ?? null;
+}
+
+/** Bramka M1: tokenizer + nonce + prompt + wyjście po tokenach (CPU, bez GPU). */
+export async function verifyM1(
+  receiptJson: string,
+  tokenizerHash: string,
+  clientNonce: string,
+  promptTokens: number[],
+  outputTokens: number[]
+): Promise<WerdyktM1> {
+  const m = await load();
+  const raw = m.weryfikuj_m1(
+    receiptJson,
+    tokenizerHash,
+    clientNonce,
+    JSON.stringify(promptTokens),
+    JSON.stringify(outputTokens)
+  );
+  return JSON.parse(raw) as WerdyktM1;
+}
+
+/** Bramka M3: ocena audytu containment (top-k + margines). */
+export async function ocenaM3(
+  audytJson: string,
+  k = 2,
+  maxMargin = 0.25,
+  maxPoza = 0.02
+): Promise<WerdyktM3> {
+  const m = await load();
+  const raw = m.ocena_m3(audytJson, k, maxMargin, maxPoza);
+  return JSON.parse(raw) as WerdyktM3;
 }

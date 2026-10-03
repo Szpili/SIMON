@@ -3,6 +3,19 @@
 //! Świadomie NIE ma tu logiki kryptograficznej. Weryfikacja żyje w Rust
 //! (`simon-core`, eksport WASM w `./wasm/`); ten plik tylko opisuje dane.
 
+/** M1: wiązanie wejścia/stanu zapisane w receipcie (opcjonalne). */
+export interface WiazaniaM1 {
+  schema_version: number;
+  receipt_level: number;
+  exec_profile: string;
+  tokenizer_hash: string;
+  prompt_digest: string;
+  output_token_chain: string;
+  client_nonce: string;
+  sampling_params_hash: string;
+  rng_seed: number;
+}
+
 export interface Receipt {
   job_id: string;
   node_id: string;
@@ -23,6 +36,41 @@ export interface Receipt {
   signer: string;
   /** Podpis Ed25519 (hex, 64 B) nad odciskiem CAŁEGO receiptu. */
   signature?: string;
+  /** M1: opcjonalne wiązanie wejścia/stanu (brak = receipt poziomu 0). */
+  wiazania?: WiazaniaM1 | null;
+}
+
+/** M1: zadanie klienta (tokeny + tokenizer + nonce) do bramki wejścia. */
+export interface ZadanieM1 {
+  tokenizer_hash: string;
+  client_nonce: string;
+  prompt_token_ids: number[];
+  output_token_ids: number[];
+}
+
+/** Werdykt bramki M1. */
+export interface WerdyktM1 {
+  ok: boolean;
+  poziom: number;
+  powod: string | null;
+}
+
+/** Audyt M3: krok = token node'a vs top-k verifiera. */
+export interface KrokM3 {
+  indeks: number;
+  node_token: number;
+  topk: [number, number][];
+}
+
+/** Werdykt containment M3. */
+export interface WerdyktM3 {
+  krokow: number;
+  w_topk: number;
+  poza_topk: number;
+  najgorszy_rank: number;
+  najgorszy_margin: number;
+  ok: boolean;
+  powod: string | null;
 }
 
 /** Werdykt zwracany przez WASM (`simon-verify-wasm`) — osobne bramki. */
