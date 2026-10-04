@@ -522,8 +522,73 @@ fn rozwin_podkomende(args: Vec<String>) -> Vec<String> {
     final_args
 }
 
+/// `simon audyt <plik.json> [--poziom N]` — ocenia sam audyt M3 (containment top-k),
+/// bez receiptu. Dla verifier-loop: inferencję robi strona zewnętrzna (llama.cpp),
+/// a decyzję (Pass/SoftFail/HardFail) liczy Rust. `--poziom` = poziom receiptu (dom. 1).
+fn audyt_podkomenda(args: &[String]) -> ExitCode {
+    let mut plik: Option<&str> = None;
+    let mut poziom: u8 = 1;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--poziom" => {
+                i += 1;
+                poziom = args.get(i).and_then(|s| s.parse().ok()).unwrap_or(1);
+            }
+            "-h" | "--help" => {
+                println!(
+                    "simon audyt <plik.json> [--poziom N]\n  \
+                     ocenia audyt M3 (kroki: node_token vs top-k) polityką k=2/margin 0,25;\n  \
+                     decyzja: Pass / SoftFail (bez slasha) / HardFail / BrakPodstaw"
+                );
+                return ExitCode::SUCCESS;
+            }
+            inny => plik = Some(inny),
+        }
+        i += 1;
+    }
+    let Some(sciezka) = plik else {
+        eprintln!("BŁĄD: podaj plik audytu: simon audyt <plik.json>");
+        return ExitCode::FAILURE;
+    };
+    let tekst = match std::fs::read_to_string(sciezka) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("BŁĄD: nie mogę czytać {sciezka}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match simon_core::m3::ocena_json(&tekst, &simon_core::m3::Polityka::default()) {
+        Ok(w) => {
+            let d = simon_core::m3::decyzja(&w, poziom, &simon_core::m3::Progi::default());
+            println!(
+                "audyt      : kroków={} w top-k={} poza-top-k={} najgorszy rank={} margines={:.4}",
+                w.krokow, w.w_topk, w.poza_topk, w.najgorszy_rank, w.najgorszy_margin
+            );
+            println!("werdykt M3 : {}", if w.ok { "OK" } else { "NIE" });
+            println!("decyzja    : {d:?} (poziom receiptu {poziom})");
+            if let Some(p) = &w.powod {
+                println!("powód      : {p}");
+            }
+            if matches!(d, simon_core::m3::Decyzja::HardFail) {
+                ExitCode::FAILURE
+            } else {
+                ExitCode::SUCCESS
+            }
+        }
+        Err(e) => {
+            eprintln!("BŁĄD: zły audyt: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn main() -> ExitCode {
-    let args = rozwin_podkomende(std::env::args().skip(1).collect());
+    let args0: Vec<String> = std::env::args().skip(1).collect();
+    if args0.first().map(String::as_str) == Some("audyt") {
+        return audyt_podkomenda(&args0);
+    }
+    let args = rozwin_podkomende(args0);
     let opcje = match Opcje::parse(&args) {
         Ok(o) => o,
         Err(msg) => {

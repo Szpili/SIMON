@@ -171,6 +171,59 @@ pub fn ocena_json(json: &str, p: &Polityka) -> Result<Werdykt, SimonError> {
     Ok(ocena(&a.kroki, p))
 }
 
+/// Decyzja rozliczeniowa z audytu M3. **Kluczowa reguła** (E0/M3 kalibracja):
+/// nigdy nie slasujemy za pojedynczy token ani za równość tokenów. Soft-fail to
+/// eskalacja do człowieka/dalszego audytu BEZ slasha.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Decyzja {
+    /// Audyt przeszedł — rozlicz normalnie.
+    Pass,
+    /// Dryf niejednoznaczny — eskalacja BEZ slasha.
+    SoftFail,
+    /// Wyraźne odejście — slash.
+    HardFail,
+    /// Brak podstaw: receipt poniżej poziomu 1 (brak wiązania wejścia) albo pusty audyt.
+    BrakPodstaw,
+}
+
+/// Progi decyzji. `twardy_poza` = od jakiego ułamka kroków poza top-k zaczyna się slash.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Progi {
+    pub twardy_poza: f64,
+}
+
+impl Default for Progi {
+    fn default() -> Self {
+        Self { twardy_poza: 0.05 }
+    }
+}
+
+/// Zamienia werdykt M3 + poziom receiptu na decyzję rozliczeniową.
+///
+/// Bramki:
+/// 1. `receipt_level < 1` → `BrakPodstaw` (nie ma wiązania wejścia, nie ma czego
+///    audytować — dziś receipty są poziomu 0).
+/// 2. puste kroki → `BrakPodstaw` (nie slasujemy na podstawie niczego).
+/// 3. `ok` → `Pass`.
+/// 4. ułamek kroków podejrzanych ≥ `twardy_poza` → `HardFail`, inaczej `SoftFail`.
+///
+/// „Podejrzany" = poza top-k albo w top-k z marginesem > `max_margin` (patrz `ocena`).
+pub fn decyzja(w: &Werdykt, receipt_level: u8, progi: &Progi) -> Decyzja {
+    if receipt_level < 1 || w.krokow == 0 {
+        return Decyzja::BrakPodstaw;
+    }
+    if w.ok {
+        return Decyzja::Pass;
+    }
+    let ułamek = w.poza_topk as f64 / w.krokow as f64;
+    if ułamek >= progi.twardy_poza {
+        Decyzja::HardFail
+    } else {
+        Decyzja::SoftFail
+    }
+}
+
 #[cfg(test)]
 mod testy {
     use super::*;
@@ -227,6 +280,42 @@ mod testy {
         let w = ocena(&[], &Polityka::default());
         assert!(!w.ok);
         assert_eq!(w.krokow, 0);
+    }
+
+    #[test]
+    fn decyzja_blokuje_slash_bez_poziomu_1_i_przy_pustym_audycie() {
+        let w = ocena(&[], &Polityka::default());
+        assert_eq!(decyzja(&w, 1, &Progi::default()), Decyzja::BrakPodstaw);
+        let kroki = vec![Krok { indeks: 0, node_token: 1, topk: topk(&[(1, -0.1)]) }];
+        let w2 = ocena(&kroki, &Polityka::default());
+        assert_eq!(decyzja(&w2, 0, &Progi::default()), Decyzja::BrakPodstaw);
+    }
+
+    #[test]
+    fn decyzja_soft_bez_slasha_przy_jednym_odstepstwie() {
+        // 1 podejrzany krok na 30 (3,3%): > max_poza (2%) ale < twardy próg (5%)
+        // → audyt NIE ok, ale decyzja SoftFail, NIE slash.
+        let mut kroki: Vec<Krok> = (0..29)
+            .map(|i| Krok { indeks: i, node_token: 1, topk: topk(&[(1, -0.1)]) })
+            .collect();
+        kroki.push(Krok { indeks: 29, node_token: 999, topk: topk(&[(1, -0.1), (2, -0.2)]) });
+        let w = ocena(&kroki, &Polityka::default());
+        assert!(!w.ok, "{w:?}");
+        assert_eq!(decyzja(&w, 1, &Progi::default()), Decyzja::SoftFail);
+    }
+
+    #[test]
+    fn decyzja_hard_przy_wielu_odstepstwach() {
+        // 10/50 = 20% ≥ 5% → HardFail.
+        let kroki: Vec<Krok> = (0..50)
+            .map(|i| Krok {
+                indeks: i,
+                node_token: if i < 10 { 999 } else { 1 },
+                topk: topk(&[(1, -0.1)]),
+            })
+            .collect();
+        let w = ocena(&kroki, &Polityka::default());
+        assert_eq!(decyzja(&w, 1, &Progi::default()), Decyzja::HardFail);
     }
 
     #[test]
