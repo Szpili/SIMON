@@ -17,6 +17,7 @@ use thiserror::Error;
 pub mod crypto;
 pub mod cap;
 pub mod m3;
+pub mod przeplyw;
 pub mod obserwacja;
 pub mod pomiar;
 // `rejestr` (I/O plikowe) i `tozsamosc` (pliki klucza, HOME/LOCALAPPDATA,
