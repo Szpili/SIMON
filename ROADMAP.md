@@ -1016,3 +1016,59 @@ nieudowodnionym verifierem.
 symulacji oraz adversarialnego testnetu. Verifier nie może zarabiać wyłącznie za
 złapanie oszusta — przy uczciwej sieci traci przychód i racjonalnie przestaje
 sprawdzać (*verifier's dilemma*).
+
+---
+
+## MILESTONES 2026-10-04 — wiązanie wykonania, odporność na injection, mały guard
+
+Dopisane po pracy 2026-10-03/04 (commity `da3bcd0`…`8a562a7`, na `origin/main`).
+Kolejność realizacji na końcu sekcji.
+
+### M6 — WIĄZANIE WYKONANIA (M1 + M3) — ✅ WDROŻONE 2026-10-04
+- **M1 (wiązanie wejścia/stanu)** — `WiazaniaM1` w `Receipt` (`tokenizer_hash`, `client_nonce`,
+  `prompt_digest`, `output_token_chain`, `sampling_params_hash`, `rng_seed`, `exec_profile`,
+  `schema/receipt level`). Pola OPCJONALNE (`skip_serializing_if=None`) → stare podpisy i
+  `przyklady/receipt.json` pozostają ważne (regresja w testach). Bramka CPU: `simon verify …
+  --tokens <plik>`, WASM `weryfikuj_m1`. Commit `724826d`, `20b91af`.
+- **M3 (audyt wykonania)** — containment w top-k, NIE równość tokenów. `simon_core::m3`
+  (`Polityka{k=2, max_margin=0,25, max_poza=0,02}`, `Werdykt`, `odcisk_audytu`), CLI `--audyt`,
+  WASM `ocena_m3`. Commit `44070e0`. UI demo poziom 0/1: `8a562a7`.
+- **Bramka pomiarowa (E0):** temp=0 greedy NIE jest przenośny CPU↔GPU (kontrola GPU×GPU
+  bit-identyczna; CPU vs GPU różni się 4/4, od ~3 tokenów). Kalibracja: dywergencja to zawsze
+  top-1 vs top-2 (margines 0,07–0,17); gdy verifier podąża trajektorią node'a, token node'a jest
+  w top-2 w 150/150 kroków. **Slashing po top-1/równości tokenów = fałszywe oskarżenia.**
+  Fakty: `~/brain/facts/simon-e0-fp-divergence-2026-10-04.md`, `simon-m3-topk-kalibracja-2026-10-04.md`.
+- **Uczciwy residual:** receipt dowodzi „node przetworzył dokładnie te tokeny, a wynik jest zgodny
+  z modelem statystycznie (top-k)"; wykonanie pozostaje **ekonomiczno-statystyczne**, nie dowiedzione
+  kryptograficznie (brak TEE; ZKML 10^4–10^6× kosztu).
+- **Do zrobienia:** realny verifier-loop (spięcie `m3::ocena` z re-runem llama.cpp), reguły
+  slashingu keyed po `receipt_level`.
+
+### M7 — ODPORNOŚĆ NA PROMPT INJECTION (I1..I5) — PLAN
+Injection to przepływ uprawnień, nie treść. Cztery filary: klient = jedyny arbiter provenance;
+LLM wypełnia sloty (schemat + capability ceiling + walidacja każdego parametru); `Zezwolenie`
+operatora z pełnymi parametrami (zero ambient authority); IFC bez deklasacji do sinków.
+- **I1** provenance wejścia (`{etykieta,digest}` w `JobOrder`; output node'a zawsze `peer`).
+- **I2** schemat wyjścia + capability ceiling.
+- **I3** `Zezwolenie{akcja, zwalidowane_parametry, ttl, budżet}` + log provenance.
+- **I4** re-provenance + sanityzacja RAG/tool/peer; łańcuch A→B bez propagacji zaufania.
+- **I5** limity (THINK per krok) + need-to-know (prompt-leak, denial-of-wallet).
+- Krytyk: `~/reports/simon-injection-krytyk-2026-10-04.md`; fakt:
+  `~/brain/facts/simon-odpornosc-na-prompt-injection-2026-10-04.md`.
+- **Pierwszy test:** „malicious JSON parameter" (`log_message` z `args.msg="rm -rf /"`) — brak
+  walidacji parametru = dziura.
+- **Uczciwy residual:** bez TEE to redukcja blast-radius przez strukturę, nie absolut.
+
+### M8 — MAŁY GUARD CPU (Joe nie udźwignął) — ✅ WDROŻONE 2026-10-04
+- `tools/simon-guard/` = reguły PII/sekret (`pii_pl`) + Bielik-Guard 0.5B (toksyczność 5 kat.).
+- 51 przypadków CPU: reguły PII 7/12, SEKRET 11/12, ~0,1 ms; model 0.5B 149,6 ms, CZYSTE FP 1/15.
+- **Injection NIE łapany** (0–3/12) — guard to moderacja, nie obrona przed injection. RULES #1:
+  guard widzi treść.
+- Serwis: `~/.config/systemd/user/simon-guard-small.service` → `127.0.0.1:19301`.
+- Fakt: `~/brain/facts/simon-maly-guard-cpu-2026-10-04.md`.
+
+### Kolejność realizacji (po kolei)
+1. M6 domknięcie — realny verifier-loop + slashing keyed po `receipt_level`.
+2. M7/I2 + pierwszy test (malicious JSON) — największy zysk, najniższy koszt.
+3. M7/I1 — provenance w `JobOrder`.
+4. M8 dalsze — pakiet ONNX dla małych node'ów + wpięcie guarda w harness.
