@@ -16,6 +16,7 @@ use thiserror::Error;
 
 pub mod crypto;
 pub mod cap;
+pub mod limity;
 pub mod m3;
 pub mod przeplyw;
 pub mod obserwacja;
