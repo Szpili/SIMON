@@ -16,6 +16,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
+use crate::crypto::{Keypair, PublicKey, Signature};
+
 /// Ograniczenie pojedynczego parametru akcji.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "typ", rename_all = "snake_case")]
@@ -192,6 +194,127 @@ pub fn waliduj_json(sufit: &Sufit, propozycja_json: &str) -> Result<(), Odmowa> 
     waliduj(sufit, &p.tool, &p.args)
 }
 
+/// I3 (M7) — **Zezwolenie operatora**. Model może PROSIĆ; harness wykonuje tylko po
+/// jawnym, świeżym i zwalidowanym zezwoleniu. Wymagania z krytyki (bunny): krypto-wiązane
+/// z tożsamością klienta, zakres dokładnej akcji+parametrów, TTL, budżet, single-use
+/// (replay-safe), odwoływalne, wymuszone na granicy zdolności (nie „ambient authority").
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Zezwolenie {
+    /// Unikalny identyfikator (nonce) — single-use / replay-safe.
+    pub id: String,
+    /// Dokładna nazwa akcji z sufitu.
+    pub akcja: String,
+    /// Odcisk ZATWIERDZONYCH parametrów (operator zatwierdza WARTOŚCI, nie typ).
+    pub parametry_digest: String,
+    /// Klucz publiczny wystawcy (hex) — tożsamość klienta/operatora.
+    pub wystawca: String,
+    /// TTL (mikrosekundy, zegar wystawcy).
+    pub wazne_do_us: u64,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub budzet: Option<i64>,
+    /// Podpis Ed25519 po odcisku zezwolenia. Wyłączony z odcisku.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub podpis: Option<String>,
+}
+
+/// Kanoniczny odcisk parametrów akcji (co dokładnie zatwierdzono).
+pub fn odcisk_parametrow_akcji(akcja: &str, parametry: &Value) -> Result<String, crate::SimonError> {
+    crate::content_digest(&serde_json::json!({
+        "domena": "SIMON/GRANT-PARAMS/v1",
+        "akcja": akcja,
+        "parametry": parametry,
+    }))
+}
+
+impl Zezwolenie {
+    /// Odcisk zezwolenia (podpis nie wchodzi).
+    pub fn digest(&self) -> Result<String, crate::SimonError> {
+        let mut z = self.clone();
+        z.podpis = None;
+        crate::content_digest(&z)
+    }
+
+    /// Podpisuje zezwolenie kluczem operatora (ustawia `wystawca`).
+    pub fn podpisz(mut self, kp: &Keypair) -> Result<Self, crate::SimonError> {
+        self.wystawca = kp.public().to_hex();
+        let d = self.digest()?;
+        self.podpis = Some(hex::encode(kp.sign_digest(&d).0));
+        Ok(self)
+    }
+}
+
+/// Kontekst sprawdzenia zezwolenia (stan bieżący).
+pub struct Kontekst<'a> {
+    pub teraz_us: u64,
+    /// Oczekiwana tożsamość operatora (hex) — zaufana strona.
+    pub oczekiwany_wystawca: &'a str,
+    /// Id zezwoleń odwołanych.
+    pub odwolane: &'a [String],
+    /// Id zezwoleń już użytych (single-use).
+    pub uzyte: &'a [String],
+}
+
+/// Powód odrzucenia zezwolenia.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OdmowaZ {
+    ZlyFormat,
+    Podpis,
+    Wystawca,
+    Wygaslo,
+    Odwolane,
+    Uzyte,
+    ZlaAkcja,
+    Parametry,
+}
+
+/// Sprawdza zezwolenie wobec akcji, parametrów i kontekstu. Wszystkie bramki muszą przejść.
+pub fn sprawdz(
+    sufit: &Sufit,
+    z: &Zezwolenie,
+    akcja: &str,
+    parametry: &Value,
+    k: &Kontekst<'_>,
+) -> Result<(), OdmowaZ> {
+    if z.id.is_empty() {
+        return Err(OdmowaZ::ZlyFormat);
+    }
+    // 1) podpis pod kluczem wystawcy
+    let pk = PublicKey::from_hex(&z.wystawca).map_err(|_| OdmowaZ::ZlyFormat)?;
+    let sig_hex = z.podpis.as_ref().ok_or(OdmowaZ::Podpis)?;
+    let raw = hex::decode(sig_hex).map_err(|_| OdmowaZ::ZlyFormat)?;
+    let arr: [u8; 64] = raw.try_into().map_err(|_| OdmowaZ::ZlyFormat)?;
+    let digest = z.digest().map_err(|_| OdmowaZ::ZlyFormat)?;
+    pk.verify_digest(&digest, &Signature(arr))
+        .map_err(|_| OdmowaZ::Podpis)?;
+    // 2) tożsamość wystawcy
+    if z.wystawca != k.oczekiwany_wystawca {
+        return Err(OdmowaZ::Wystawca);
+    }
+    // 3) TTL
+    if k.teraz_us > z.wazne_do_us {
+        return Err(OdmowaZ::Wygaslo);
+    }
+    // 4) odwołane / użyte
+    if k.odwolane.iter().any(|x| x == &z.id) {
+        return Err(OdmowaZ::Odwolane);
+    }
+    if k.uzyte.iter().any(|x| x == &z.id) {
+        return Err(OdmowaZ::Uzyte);
+    }
+    // 5) dokładna akcja i parametry (zatwierdzone WARTOŚCI)
+    if z.akcja != akcja {
+        return Err(OdmowaZ::ZlaAkcja);
+    }
+    let d = odcisk_parametrow_akcji(akcja, parametry).map_err(|_| OdmowaZ::ZlyFormat)?;
+    if d != z.parametry_digest {
+        return Err(OdmowaZ::Parametry);
+    }
+    // 6) i muszą przechodzić capability ceiling
+    waliduj(sufit, akcja, parametry).map_err(|_| OdmowaZ::Parametry)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod testy {
     use super::*;
@@ -257,6 +380,83 @@ mod testy {
             waliduj_json(&s, r#"{"tool":"log_message","args":{"msg":"hi","x":1}}"#),
             Err(Odmowa::NadmiarowyParametr { .. })
         ));
+    }
+
+    #[test]
+    fn zezwolenie_dziala_i_lamie_sie_na_kazdej_bramce() {
+        let s = sufit();
+        let op = Keypair::from_seed(&[5u8; 32]);
+        let pk_hex = op.public().to_hex();
+        let inny_hex = Keypair::from_seed(&[6u8; 32]).public().to_hex();
+        let akcja = "log_message";
+        let par = serde_json::json!({"msg": "hello"});
+        let z = Zezwolenie {
+            id: "g-1".into(),
+            akcja: akcja.into(),
+            parametry_digest: odcisk_parametrow_akcji(akcja, &par).unwrap(),
+            wystawca: String::new(),
+            wazne_do_us: 1_000_000,
+            budzet: Some(10),
+            podpis: None,
+        }
+        .podpisz(&op)
+        .unwrap();
+
+        fn kk<'a>(
+            teraz: u64,
+            w: &'a str,
+            odwol: &'a [String],
+            uzyte: &'a [String],
+        ) -> Kontekst<'a> {
+            Kontekst {
+                teraz_us: teraz,
+                oczekiwany_wystawca: w,
+                odwolane: odwol,
+                uzyte,
+            }
+        }
+        let odw: Vec<String> = vec!["g-1".into()];
+
+        // ścieżka szczęśliwa
+        assert!(sprawdz(&s, &z, akcja, &par, &kk(500_000, &pk_hex, &[], &[])).is_ok());
+        // inne parametry — operator zatwierdził WARTOŚCI
+        let inne = serde_json::json!({"msg": "rm -rf /"});
+        assert_eq!(
+            sprawdz(&s, &z, akcja, &inne, &kk(500_000, &pk_hex, &[], &[])),
+            Err(OdmowaZ::Parametry)
+        );
+        // inna akcja
+        assert_eq!(
+            sprawdz(&s, &z, "shell", &par, &kk(500_000, &pk_hex, &[], &[])),
+            Err(OdmowaZ::ZlaAkcja)
+        );
+        // wygasło
+        assert_eq!(
+            sprawdz(&s, &z, akcja, &par, &kk(2_000_000, &pk_hex, &[], &[])),
+            Err(OdmowaZ::Wygaslo)
+        );
+        // odwołane
+        assert_eq!(
+            sprawdz(&s, &z, akcja, &par, &kk(500_000, &pk_hex, &odw, &[])),
+            Err(OdmowaZ::Odwolane)
+        );
+        // użyte (single-use)
+        assert_eq!(
+            sprawdz(&s, &z, akcja, &par, &kk(500_000, &pk_hex, &[], &odw)),
+            Err(OdmowaZ::Uzyte)
+        );
+        // zły wystawca
+        assert_eq!(
+            sprawdz(&s, &z, akcja, &par, &kk(500_000, &inny_hex, &[], &[])),
+            Err(OdmowaZ::Wystawca)
+        );
+        // podmieniony podpis
+        let mut z2 = z.clone();
+        z2.podpis = Some("00".repeat(64));
+        assert_eq!(
+            sprawdz(&s, &z2, akcja, &par, &kk(500_000, &pk_hex, &[], &[])),
+            Err(OdmowaZ::Podpis)
+        );
     }
 
     #[test]
