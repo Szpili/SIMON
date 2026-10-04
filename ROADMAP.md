@@ -1052,15 +1052,20 @@ Kolejność realizacji na końcu sekcji.
 - **Do zrobienia:** realny verifier-loop (spięcie `m3::ocena` z re-runem llama.cpp), reguły
   slashingu keyed po `receipt_level`.
 
-### M7 — ODPORNOŚĆ NA PROMPT INJECTION (I1..I5) — PLAN
-Injection to przepływ uprawnień, nie treść. Cztery filary: klient = jedyny arbiter provenance;
-LLM wypełnia sloty (schemat + capability ceiling + walidacja każdego parametru); `Zezwolenie`
-operatora z pełnymi parametrami (zero ambient authority); IFC bez deklasacji do sinków.
-- **I1** provenance wejścia (`{etykieta,digest}` w `JobOrder`; output node'a zawsze `peer`).
-- **I2** schemat wyjścia + capability ceiling.
-- **I3** `Zezwolenie{akcja, zwalidowane_parametry, ttl, budżet}` + log provenance.
-- **I4** re-provenance + sanityzacja RAG/tool/peer; łańcuch A→B bez propagacji zaufania.
-- **I5** limity (THINK per krok) + need-to-know (prompt-leak, denial-of-wallet).
+### M7 — ODPORNOŚĆ NA PROMPT INJECTION (I1..I5) — W TOKU
+Injection to przepływ uprawnień, nie treść. Krytyk (bunny): najsilniejsze I2/I3; **I1 = teatr**
+(etykieta nie odbiera uprawnień), I4 tylko zawężone do konkretnych przepływów.
+- **I2 schemat wyjścia + capability ceiling** — ✅ WDROŻONE (`simon_core::cap`: `Sufit`,
+  walidacja każdego parametru, `waliduj_json`; test „malicious JSON").
+- **I3 `Zezwolenie`** — ✅ WDROŻONE (`simon_core::cap::Zezwolenie`: krypto-wiązane z kluczem
+  operatora, zakres akcja+odcisk WARTOŚCI, TTL, single-use, odwoływalne, wymuszone na granicy
+  zdolności; testy na każdej bramce).
+- **I1 provenance** — **ZDEGRADOWANE do konwencji interfejsu** (etykieta `peer` z zerowymi
+  przywilejami), NIE filar bezpieczeństwa (bunny: label ≠ capability; bez TEE klient nie dowodzi
+  wykonania zdalnego node'a).
+- **I4** — zawęzić do konkretnych przepływów (`Trust` enum; model-derived→args, retrieved→instrukcje,
+  peer→kolejne zlecenie, tool→parametry uprzywilejowane); bez twierdzenia „pełne IFC”.
+- **I5** — limity zasobów (THINK per krok, deadline, budżety) + need-to-know; TODO.
 - Krytyk: `~/reports/simon-injection-krytyk-2026-10-04.md`; fakt:
   `~/brain/facts/simon-odpornosc-na-prompt-injection-2026-10-04.md`.
 - **Pierwszy test:** „malicious JSON parameter" (`log_message` z `args.msg="rm -rf /"`) — brak
