@@ -44,6 +44,14 @@ Repositioning: SIMON is **verifiable inference-result publication**, not verifia
    *what an injected instruction can do*, but neither is prevention).
 7. That a stake or reputation makes dishonest behaviour impossible.
 
+## M3 status (formalised 2026-10-04)
+
+M3 (reference-policy / trajectory-consistency check) is **demoted: a diagnostic, not an
+enforcement gate**. It must not be a release or security dependency, must not trigger automatic
+slashing on its own, and must not be described as execution verification. The negative result —
+same-family quantization substitution was not separated — is recorded here and in
+`ROADMAP.md`. Keep it only as a telemetry/anomaly heuristic for gross fabrication.
+
 ## Sentences we may publish
 
 - "Every inference result is bound by an Ed25519 signature to the operator key, the prompt token

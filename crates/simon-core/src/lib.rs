@@ -18,6 +18,7 @@ pub mod crypto;
 pub mod cap;
 pub mod limity;
 pub mod m3;
+pub mod protokol;
 pub mod przeplyw;
 pub mod obserwacja;
 pub mod pomiar;
