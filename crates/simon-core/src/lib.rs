@@ -15,6 +15,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 pub mod crypto;
+pub mod cap;
 pub mod m3;
 pub mod obserwacja;
 pub mod pomiar;
