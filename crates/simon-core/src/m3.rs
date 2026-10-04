@@ -60,6 +60,12 @@ pub struct Werdykt {
     pub najgorszy_rank: usize,
     /// Największy margines logprob względem top-1.
     pub najgorszy_margin: f64,
+    /// Średnie NLL (ujemny logprob) tokenu node'a pod rozkładem verifiera, po
+    /// krokach, w których token jest w top-k. **Drugi sygnał obok ranku** (krytyk
+    /// bunny: sam rank/margines nie wystarcza). Wyżej = mniej prawdopodobny.
+    pub sredni_nll: f64,
+    /// Ile kroków, w których tokenu node'a NIE MA w top-k w ogóle.
+    pub poza_lista: usize,
     pub ok: bool,
     pub powod: Option<String>,
 }
@@ -78,6 +84,9 @@ pub fn ocena(kroki: &[Krok], p: &Polityka) -> Werdykt {
     let mut poza = 0usize;
     let mut najgorszy_rank = 0usize;
     let mut najgorszy_margin = 0.0f64;
+    let mut suma_nll = 0.0f64;
+    let mut ile_nll = 0usize;
+    let mut poza_lista = 0usize;
     let mut powod: Option<String> = None;
 
     for (i, kr) in kroki.iter().enumerate() {
@@ -91,6 +100,8 @@ pub fn ocena(kroki: &[Krok], p: &Polityka) -> Werdykt {
         match traf {
             Some((rank0, (_, lp))) => {
                 let rank = rank0 + 1;
+                suma_nll += -lp;
+                ile_nll += 1;
                 let margin = match top1_lp {
                     Some(t1) => (t1 - *lp).max(0.0),
                     None => 0.0,
@@ -115,6 +126,7 @@ pub fn ocena(kroki: &[Krok], p: &Polityka) -> Werdykt {
             }
             None => {
                 poza += 1;
+                poza_lista += 1;
                 if powod.is_none() {
                     powod = Some(format!(
                         "krok {i} (idx {}): token {} POZA top-{}",
@@ -141,6 +153,8 @@ pub fn ocena(kroki: &[Krok], p: &Polityka) -> Werdykt {
         poza_topk: poza,
         najgorszy_rank,
         najgorszy_margin,
+        sredni_nll: if ile_nll > 0 { suma_nll / ile_nll as f64 } else { 0.0 },
+        poza_lista,
         ok,
         powod,
     }
@@ -299,6 +313,21 @@ mod testy {
         let kroki = vec![Krok { indeks: 0, node_token: 1, topk: topk(&[(1, -0.1)]) }];
         let w2 = ocena(&kroki, &Polityka::default());
         assert_eq!(decyzja(&w2, 0, &Progi::default()), Decyzja::BrakPodstaw);
+    }
+
+    #[test]
+    fn sredni_nll_liczy_sie_z_tokenu_nodea() {
+        // krok 0: node w top-k (rank 1, margines 0), logprob -2.0 → NLL 2.0.
+        // krok 1: tokenu node'a NIE MA w top-k → poza_lista+. 
+        let kroki = vec![
+            Krok { indeks: 0, node_token: 1, topk: topk(&[(1, -2.0), (2, -2.5)]) },
+            Krok { indeks: 1, node_token: 9, topk: topk(&[(1, -0.1)]) },
+        ];
+        let w = ocena(&kroki, &Polityka::default());
+        assert!((w.sredni_nll - 2.0).abs() < 1e-9, "{w:?}");
+        assert_eq!(w.poza_lista, 1);
+        assert_eq!(w.poza_topk, 1);
+        assert_eq!(w.w_topk, 1);
     }
 
     #[test]
