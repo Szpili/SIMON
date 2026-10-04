@@ -171,47 +171,57 @@ pub fn ocena_json(json: &str, p: &Polityka) -> Result<Werdykt, SimonError> {
     Ok(ocena(&a.kroki, p))
 }
 
-/// Decyzja rozliczeniowa z audytu M3. **Kluczowa reguła** (E0/M3 kalibracja):
-/// nigdy nie slasujemy za pojedynczy token ani za równość tokenów. Soft-fail to
-/// eskalacja do człowieka/dalszego audytu BEZ slasha.
+/// Decyzja z audytu M3. **To jest spójność z polityką referencyjną, NIE dowód
+/// tożsamości modelu ani dowód wykonania** (krytyk bunny, 2026-10-04). Wyjaśnienie:
+/// `ReceiptValid` (podpis) oddzielamy od `ReferenceCompatible`; „nie udowodniono
+/// niezgodności" **nie znaczy** „uczciwy" — stąd `InsufficientEvidence`.
+/// **Kluczowa reguła** (E0/M3 kalibracja): nigdy nie slasujemy za pojedynczy token.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Decyzja {
-    /// Audyt przeszedł — rozlicz normalnie.
+    /// Audyt zgodny z polityką referencyjną — brak sygnału odchylenia.
     Pass,
     /// Dryf niejednoznaczny — eskalacja BEZ slasha.
     SoftFail,
-    /// Wyraźne odejście — slash.
+    /// Wyraźne, wielokrotne odejście — kandydat do slasha (po niezależnym sporze).
     HardFail,
+    /// Za mało kroków, żeby cokolwiek rozstrzygnąć. NIE jest to „uczciwy".
+    InsufficientEvidence,
     /// Brak podstaw: receipt poniżej poziomu 1 (brak wiązania wejścia) albo pusty audyt.
     BrakPodstaw,
 }
 
 /// Progi decyzji. `twardy_poza` = od jakiego ułamka kroków poza top-k zaczyna się slash.
+/// `min_krokow` = poniżej tylu sprawdzonych kroków zwracamy `InsufficientEvidence`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Progi {
     pub twardy_poza: f64,
+    pub min_krokow: usize,
 }
 
 impl Default for Progi {
     fn default() -> Self {
-        Self { twardy_poza: 0.05 }
+        Self { twardy_poza: 0.05, min_krokow: 8 }
     }
 }
 
-/// Zamienia werdykt M3 + poziom receiptu na decyzję rozliczeniową.
+/// Zamienia werdykt M3 + poziom receiptu na decyzję.
 ///
 /// Bramki:
 /// 1. `receipt_level < 1` → `BrakPodstaw` (nie ma wiązania wejścia, nie ma czego
 ///    audytować — dziś receipty są poziomu 0).
-/// 2. puste kroki → `BrakPodstaw` (nie slasujemy na podstawie niczego).
-/// 3. `ok` → `Pass`.
-/// 4. ułamek kroków podejrzanych ≥ `twardy_poza` → `HardFail`, inaczej `SoftFail`.
+/// 2. puste kroki → `BrakPodstaw` (nie orzekamy na podstawie niczego).
+/// 3. `krokow < min_krokow` → `InsufficientEvidence` (za mało, by cokolwiek twierdzić).
+/// 4. `ok` → `Pass`.
+/// 5. ułamek kroków podejrzanych ≥ `twardy_poza` → `HardFail`, inaczej `SoftFail`.
 ///
 /// „Podejrzany" = poza top-k albo w top-k z marginesem > `max_margin` (patrz `ocena`).
 pub fn decyzja(w: &Werdykt, receipt_level: u8, progi: &Progi) -> Decyzja {
     if receipt_level < 1 || w.krokow == 0 {
         return Decyzja::BrakPodstaw;
+    }
+    if w.krokow < progi.min_krokow {
+        return Decyzja::InsufficientEvidence;
     }
     if w.ok {
         return Decyzja::Pass;
@@ -289,6 +299,17 @@ mod testy {
         let kroki = vec![Krok { indeks: 0, node_token: 1, topk: topk(&[(1, -0.1)]) }];
         let w2 = ocena(&kroki, &Polityka::default());
         assert_eq!(decyzja(&w2, 0, &Progi::default()), Decyzja::BrakPodstaw);
+    }
+
+    #[test]
+    fn decyzja_za_malo_krokow_to_insufficient_evidence_nie_pass() {
+        // 3 zgodne kroki < min_krokow=8 → InsufficientEvidence („nie udowodniono" ≠ „uczciwy").
+        let kroki: Vec<Krok> = (0..3)
+            .map(|i| Krok { indeks: i, node_token: 1, topk: topk(&[(1, -0.1)]) })
+            .collect();
+        let w = ocena(&kroki, &Polityka::default());
+        assert!(w.ok, "audyt sam jest ok: {w:?}");
+        assert_eq!(decyzja(&w, 1, &Progi::default()), Decyzja::InsufficientEvidence);
     }
 
     #[test]

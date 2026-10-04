@@ -192,6 +192,56 @@ pub fn odcisk_parametrow(
     }))
 }
 
+/// Kanoniczny commitment parametrów próbkowania (krytyk bunny, 2026-10-04):
+/// hash JSON-a użytkownika to za mało. Bindujemy **strukturę**, bez floatów
+/// (liczby całkowite ×1e6).
+///
+/// **Czego to NIE jest:** obietnicą, że inny silnik/sprzęt odtworzy ten sam
+/// strumień RNG. `rng_seed` + ten odcisk opisują **deklarowany stan wejściowy**,
+/// a nie gwarancję reprodukcji (llama.cpp vs vLLM różnią się samplerem, batchowaniem
+/// i kernelami). `exec_profile` pozostaje **twierdzeniem nieufnym**.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SamplingCommitment {
+    pub temperature_x1e6: u32,
+    pub top_k: u16,
+    pub top_p_x1e6: u32,
+    pub min_p_x1e6: u32,
+    pub typical_p_x1e6: u32,
+    pub repeat_penalty_x1e6: u32,
+    pub frequency_penalty_x1e6: u32,
+    pub presence_penalty_x1e6: u32,
+    pub mirostat_version: u8,
+    pub mirostat_tau_x1e6: u32,
+    pub mirostat_eta_x1e6: u32,
+}
+
+impl SamplingCommitment {
+    /// Kanoniczny odcisk (domena `SIMON/SAMPLING/v1`), bez floatów.
+    pub fn odcisk(&self) -> Result<String, SimonError> {
+        content_digest(&serde_json::json!({
+            "domena": DOMENA_PARAMETROW,
+            "commitment": self,
+        }))
+    }
+
+    /// Typowy greedy (temp=0, top_k=1) — stan z pomiarów E0/M3.
+    pub fn greedy() -> Self {
+        Self {
+            temperature_x1e6: 0,
+            top_k: 1,
+            top_p_x1e6: 1_000_000,
+            min_p_x1e6: 0,
+            typical_p_x1e6: 1_000_000,
+            repeat_penalty_x1e6: 1_000_000,
+            frequency_penalty_x1e6: 0,
+            presence_penalty_x1e6: 0,
+            mirostat_version: 0,
+            mirostat_tau_x1e6: 5_000_000,
+            mirostat_eta_x1e6: 100_000,
+        }
+    }
+}
+
 /// Odcisk pliku tokenizera (`tokenizer.json`) — część manifestu modelu.
 pub fn odcisk_tokenizera(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
@@ -441,6 +491,20 @@ mod testy_m1 {
         assert!(r.zweryfikuj_m1("tokhash", "nonce-1", &prompt, &out2).is_err());
         assert!(r.zweryfikuj_m1("tokhash", "nonce-2", &prompt, &out).is_err());
         assert!(r.zweryfikuj_m1("tokhash-x", "nonce-1", &prompt, &out).is_err());
+    }
+
+    #[test]
+    fn sampling_commitment_jest_kanoniczny_i_bez_floatow() {
+        let c = SamplingCommitment::greedy();
+        let d1 = c.odcisk().unwrap();
+        let d2 = SamplingCommitment::greedy().odcisk().unwrap();
+        assert_eq!(d1, d2, "ten sam commitment = ten sam odcisk");
+        let mut c2 = c.clone();
+        c2.top_p_x1e6 = 900_000;
+        assert_ne!(d1, c2.odcisk().unwrap());
+        // Serde nie może wyprodukować floatów (podpisywana treść bez floatów).
+        let s = serde_json::to_string(&c).unwrap();
+        assert!(!s.contains('.'), "commitment nie może zawierać floatów: {s}");
     }
 
     #[test]
