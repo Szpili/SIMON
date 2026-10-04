@@ -1038,9 +1038,17 @@ Kolejność realizacji na końcu sekcji.
   top-1 vs top-2 (margines 0,07–0,17); gdy verifier podąża trajektorią node'a, token node'a jest
   w top-2 w 150/150 kroków. **Slashing po top-1/równości tokenów = fałszywe oskarżenia.**
   Fakty: `~/brain/facts/simon-e0-fp-divergence-2026-10-04.md`, `simon-m3-topk-kalibracja-2026-10-04.md`.
-- **Uczciwy residual:** receipt dowodzi „node przetworzył dokładnie te tokeny, a wynik jest zgodny
-  z modelem statystycznie (top-k)"; wykonanie pozostaje **ekonomiczno-statystyczne**, nie dowiedzione
-  kryptograficznie (brak TEE; ZKML 10^4–10^6× kosztu).
+- **Uczciwy residual:** receipt dowodzi „node przetworzył dokładnie te tokeny"; M3 to
+  **spójność z polityką referencyjną**, NIE dowód tożsamości modelu ani wykonania. Wykonanie
+  pozostaje **ekonomiczno-statystyczne** (brak TEE; ZKML 10^4–10^6× kosztu).
+- **⚠️ MACIERZ SUBSTITUTION (2026-10-04, [fakt](~/brain/facts/simon-m3-substitution-matrix-2026-10-04.md)):**
+  Bielik-11B, wspólny tokenizer: **M3 (top-2) NIE odróżnia uczciwego Q4→Q4 od podmiany Q4→Q8**
+  (subst `ALL PASS` na factual/code; honest ma pojedyncze odchyły). Czyli **M3 łapie grube
+  fabrykacje, NIE podmianę kwantyzacji/modelu**. `HardFail` tylko przy wielu silnych odchyłach
+  lub niepoprawności kryptograficznej; do wykrycia podmiany potrzebny niezależny dowód
+  (inny backend/rodzina, agregaty NLL, TEE/CC) albo warstwa ekonomiczna. Publikować:
+  „wykrywa **grube odejście** od polityki referencyjnej", nie „weryfikacja wykonania".
+  Pomiar: n=4 prompty × 40 tok, 1 klasa ataku — ograniczony, ale kierunek jednoznaczny.
 - **Do zrobienia:** realny verifier-loop (spięcie `m3::ocena` z re-runem llama.cpp), reguły
   slashingu keyed po `receipt_level`.
 
