@@ -583,10 +583,88 @@ fn audyt_podkomenda(args: &[String]) -> ExitCode {
     }
 }
 
+/// `simon guard [--url U] [--stdin] "tekst"` — brama wejścia (guard CPU na loopbacku).
+/// POST `{text}` → `{ryzyko, pii, sekret, kategorie, ms_*}`. Wyjście != 0 gdy `ryzyko`.
+/// To jest wpięcie guarda w harness po stronie klienta (pre-send); ten sam wzorzec
+/// działa dla node'a (pre-compute). UWAGA: guard widzi treść (RULES #1) i NIE łapie
+/// prompt injection — patrz `docs/THREAT-MODEL.md`.
+fn guard_podkomenda(args: &[String]) -> ExitCode {
+    let mut url = "http://127.0.0.1:19301/guard".to_string();
+    let mut tekst: Option<String> = None;
+    let mut ze_stdin = false;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--url" => {
+                i += 1;
+                if let Some(u) = args.get(i) {
+                    url = u.clone();
+                }
+            }
+            "--stdin" => ze_stdin = true,
+            "-h" | "--help" => {
+                println!("simon guard [--url http://127.0.0.1:19301/guard] [--stdin] \"tekst\"");
+                return ExitCode::SUCCESS;
+            }
+            inny => tekst = Some(inny.to_string()),
+        }
+        i += 1;
+    }
+    if ze_stdin {
+        use std::io::Read;
+        let mut s = String::new();
+        if std::io::stdin().read_to_string(&mut s).is_err() {
+            eprintln!("BŁĄD: nie mogę czytać stdin");
+            return ExitCode::FAILURE;
+        }
+        tekst = Some(s);
+    }
+    let Some(t) = tekst else {
+        eprintln!("BŁĄD: podaj tekst albo --stdin");
+        return ExitCode::FAILURE;
+    };
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("BŁĄD: runtime: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    rt.block_on(async move {
+        let klient = reqwest::Client::new();
+        match klient
+            .post(&url)
+            .json(&serde_json::json!({ "text": t }))
+            .send()
+            .await
+        {
+            Ok(odp) => {
+                let v: serde_json::Value = odp.json().await.unwrap_or_default();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&v).unwrap_or_else(|_| "{}".into())
+                );
+                if v.get("ryzyko").and_then(|x| x.as_bool()).unwrap_or(false) {
+                    ExitCode::FAILURE
+                } else {
+                    ExitCode::SUCCESS
+                }
+            }
+            Err(e) => {
+                eprintln!("BŁĄD: guard niedostępny pod {url} ({e})");
+                ExitCode::FAILURE
+            }
+        }
+    })
+}
+
 fn main() -> ExitCode {
     let args0: Vec<String> = std::env::args().skip(1).collect();
     if args0.first().map(String::as_str) == Some("audyt") {
         return audyt_podkomenda(&args0);
+    }
+    if args0.first().map(String::as_str) == Some("guard") {
+        return guard_podkomenda(&args0);
     }
     let args = rozwin_podkomende(args0);
     let opcje = match Opcje::parse(&args) {
