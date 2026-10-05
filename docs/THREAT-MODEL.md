@@ -7,7 +7,10 @@ claim. Every public sentence about security must map to one of three labels:
 |---|---|
 | **Cryptographically proven** | Follows from Ed25519 signatures and content commitments. Verifiable offline, on a CPU. |
 | **Empirically detected** | Only the result of a named, reproduced measurement. No general guarantee. |
+| **Policy / heuristic** | Risk reduction by deterministic policy (capability ceiling, grant, IFC, resource budgets) or heuristics (guard classifier). Explicitly **not** a proof. |
 | **Not proven** | Explicitly out of scope without a TEE. Never present it as a guarantee. |
+
+SIMON is a **publication-attestation** layer, not an execution-proof layer.
 
 Repositioning: SIMON is **verifiable inference-result publication**, not verifiable inference
 **execution**. The receipt is an integrity/authorship commitment, not execution attestation.
@@ -32,6 +35,19 @@ Repositioning: SIMON is **verifiable inference-result publication**, not verifia
    separate either. This is published as a **negative result**.
 3. The CPU guard catches part of PII/secrets: rules PII 7/12, secrets 11/12 (0.1 ms); Bielik-Guard
    0.5B toxicity ~150 ms, clean false-positive 1/15. It does **not** catch prompt injection.
+
+## Policy / heuristic (risk reduction, not proof)
+
+1. Capability ceiling + per-parameter validation: the LLM fills slots, it does not define actions.
+2. Operator grant (`Zezwolenie`): exact action + approved values, TTL, single-use, revocable.
+3. Information flow: untrusted content cannot reach action args / instructions / system prompt
+   without an operator declassification.
+4. Resource budgets: deadline, token/byte/tool-step, cancellation.
+5. The CPU guard and any classifier: bounded by their measured coverage and false-positive rate
+   (and they see the content).
+
+These reduce blast radius. They do **not** prevent prompt injection, and they are not cryptographic
+proofs. Say "we reduce risk", never "we prevent".
 
 ## Not proven (never claim)
 
