@@ -460,7 +460,14 @@ fn weryfikuj_offline(opcje: &Opcje, zrodlo: &str) -> ExitCode {
                 println!("                 {p}");
             }
         }
-        println!("poziom dowodu  : {}", r.poziom());
+        let pz = r.poziom();
+        println!("poziom dowodu  : {pz}");
+        if pz == 0 {
+            println!(
+                "UWAGA          : poziom 0 = tylko autorstwo/podpis; BRAK wiązania wejścia/stanu (M1).\n                 \
+                 Nie przedstawiać jako weryfikacji wykonania (docs/THREAT-MODEL.md)."
+            );
+        }
         println!("node           : {}", r.node_id);
         println!("werdykt        : {}", if ok { "RECEIPT WAŻNY" } else { "ODRZUCONY" });
     }
