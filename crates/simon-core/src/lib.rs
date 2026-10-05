@@ -20,6 +20,7 @@ pub mod limity;
 pub mod m3;
 pub mod protokol;
 pub mod przeplyw;
+pub mod web;
 pub mod obserwacja;
 pub mod pomiar;
 // `rejestr` (I/O plikowe) i `tozsamosc` (pliki klucza, HOME/LOCALAPPDATA,
