@@ -15,13 +15,25 @@ Użycie:
       --n 3 --tokens 20 --topk 5 --out /tmp/sub.jsonl
 """
 from __future__ import annotations
-import argparse, json, math, sys, urllib.request
+import argparse, json, math, sys, time, urllib.request, urllib.error
 
-def _post(base, path, body, timeout=900):
-    req = urllib.request.Request(base.rstrip("/") + path, data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.load(r)
+def _post(base, path, body, timeout=900, proby=4):
+    # llama.cpp potrafi zwrócić 500 (np. "Content-only format") na pojedynczym żądaniu —
+    # retry z backoffem, żeby długi run nie padał na jednym kroku.
+    ostatni = None
+    for k in range(proby):
+        try:
+            req = urllib.request.Request(base.rstrip("/") + path, data=json.dumps(body).encode(),
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            ostatni = e
+            if e.code in (500, 502, 503, 504) and k < proby - 1:
+                time.sleep(2 * (k + 1))
+                continue
+            raise
+    raise ostatni
 
 def props(base):
     return _post(base, "/props", {}) if False else json.load(urllib.request.urlopen(base.rstrip("/") + "/props", timeout=20))
@@ -111,29 +123,43 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ref", required=True)
     ap.add_argument("--sub", required=True)
+    # honest cross-device: ten sam model/GGUF/commit co --ref, ale inne urządzenie/offload.
+    # Bez tego `honest == reference` jest tautologiczne (dystans 0).
+    ap.add_argument("--honest", default=None, help="endpoint honest (domyślnie = --ref)")
     ap.add_argument("--n", type=int, default=3)
     ap.add_argument("--tokens", type=int, default=20)
     ap.add_argument("--topk", type=int, default=5)
     ap.add_argument("--out", default="/tmp/sub.jsonl")
     a = ap.parse_args()
 
-    ok, pole = tokenizer_ok(a.ref, a.sub)
+    honest_ep = a.honest or a.ref
+    ok1, p1 = tokenizer_ok(a.ref, a.sub)
+    ok2, p2 = tokenizer_ok(a.ref, honest_ep)
+    ok = ok1 and ok2
+    pole = p1 or p2
     print(f"tokenizer exact: {'OK' if ok else 'DIFF w '+str(pole)}")
     if not ok:
         print("STOP: tokenizery różne — nie mieszaj."); return 2
+    print(f"honest endpoint: {honest_ep} ({'cross-device' if honest_ep != a.ref else 'SAME as reference - tautologiczne'})")
 
     f = open(a.out, "w", encoding="utf-8")
     honest_scores, sub_scores = [], []
+    pominięte = 0
     for pid in range(a.n):
-        prompt = PROMPTY[pid % len(PROMPTY)]
-        pids = _post(a.ref, "/tokenize", {"content": prompt})["tokens"]
-        seq, ref_top = gen_reference(a.ref, pids, a.tokens, a.topk)
-        honest_top = force_eval(a.ref, pids, seq, a.topk)      # ten sam model (reference)
-        sub_top = force_eval(a.sub, pids, seq, a.topk)         # substitute (14B)
-        # random-token control: losowe tokeny zamiast modelu
-        import random; random.seed(pid)
-        rand_tokens = [random.randint(0, 100000) for _ in seq]
-        rand_top = force_eval(a.sub, pids, rand_tokens, a.topk)
+        try:
+            prompt = PROMPTY[pid % len(PROMPTY)]
+            pids = _post(a.ref, "/tokenize", {"content": prompt})["tokens"]
+            seq, ref_top = gen_reference(a.ref, pids, a.tokens, a.topk)
+            honest_top = force_eval(honest_ep, pids, seq, a.topk)  # honest (cross-device albo ref)
+            sub_top = force_eval(a.sub, pids, seq, a.topk)         # substitute
+            # random-token control: losowe tokeny zamiast modelu
+            import random; random.seed(pid)
+            rand_tokens = [random.randint(0, 100000) for _ in seq]
+            rand_top = force_eval(a.sub, pids, rand_tokens, a.topk)
+        except Exception as e:  # noqa: BLE001 — pojedynczy prompt/server-500 nie zabija runu
+            pominięte += 1
+            print(f"p{pid}: SKIP ({str(e)[:80]})")
+            continue
 
         def agregat(tops, label):
             ms = [metryki(ref_top[t], tops[t], a.topk) for t in range(len(seq))]
@@ -142,15 +168,16 @@ def main():
             f.write(json.dumps(avg, ensure_ascii=False) + "\n")
             return avg
 
-        h = agregat(honest_top, "honest")
+        h = agregat(honest_top, "honest_cross_device" if honest_ep != a.ref else "honest_same_reference")
         s = agregat(sub_top, "substitute")
         r = agregat(rand_top, "random_control")
         honest_scores.append(h["top2_overlap"]); sub_scores.append(s["top2_overlap"])
-        print(f"p{pid}: honest top2={h['top2_overlap']:.3f} kl={h['kl']:.4f} | "
+        print(f"p{pid}: honest({h['label']}) top2={h['top2_overlap']:.3f} kl={h['kl']:.4f} | "
               f"sub top2={s['top2_overlap']:.3f} kl={s['kl']:.4f} | "
               f"random top2={r['top2_overlap']:.3f}")
 
     f.close()
+    print(f"pominięte prompty: {pominięte}")
     print(f"\nAUROC(honest vs substitute) by top2_overlap = {auroc(sub_scores, honest_scores):.3f}")
     print(f"mean top2: honest={sum(honest_scores)/len(honest_scores):.3f}  "
           f"substitute={sum(sub_scores)/len(sub_scores):.3f}")
