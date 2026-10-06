@@ -1,0 +1,32 @@
+Explain in two sentences why a signature does not prove a computation.
+Write a Python function that returns the n-th Fibonacci number iteratively.
+Summarize the causes of the First World War in four sentences.
+List the first ten prime numbers separated by commas.
+What is the capital of Australia? Answer in one word.
+Write a haiku about the sea.
+Translate 'good morning' into Polish, German, and Japanese.
+Explain photosynthesis to a ten-year-old in three sentences.
+Give three reasons to prefer local inference over a cloud API.
+Write a SQL query that selects the top 5 customers by total spend.
+What is 17 times 23 plus 41? Show the steps.
+Name the largest planet in the solar system and its diameter.
+Describe the difference between TCP and UDP in two sentences.
+Write a Rust function that reverses a string in place.
+List four causes of inflation in a market economy.
+Explain what a Merkle tree is in plain language.
+Compose a polite email declining a meeting invitation.
+What are the symptoms of dehydration in adults?
+Write the first stanza of a poem about autumn.
+Explain the difference between symmetric and asymmetric encryption.
+Give a two-sentence summary of the plot of Romeo and Juliet.
+How do you compute the median of a list of numbers?
+Name three countries in South America and their capitals.
+Describe a binary search algorithm in three steps.
+Write a short product description for a mechanical keyboard.
+What is the boiling point of water at sea level in Celsius?
+Explain why the sky is blue in two sentences.
+List five vegetables that grow well in a temperate climate.
+Write a one-paragraph story about a lost dog.
+Explain the difference between a process and a thread.
+Give three tips for writing clear technical documentation.
+What is the time complexity of quicksort in the average case?
