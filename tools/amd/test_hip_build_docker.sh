@@ -19,10 +19,13 @@ docker pull "$IMG"
 echo "== HIP configure + build (no GPU) =="
 docker run --rm -v "$LLAMA":/src -w /src "$IMG" bash -lc "
   set -e
+  export DEBIAN_FRONTEND=noninteractive
   command -v cmake >/dev/null || { apt-get update -qq && apt-get install -y -qq cmake >/dev/null; }
+  # PATERN ZLAPANY PRZEZ PRE-TEST: baza dev-ubuntu nie ma hipBLAS, a ggml-hip go wymaga.
+  ls /opt/rocm/lib/cmake/hipblas/hipblasConfig.cmake >/dev/null 2>&1 \
+    || { apt-get update -qq && apt-get install -y -qq hipblas-dev rocblas-dev >/dev/null; }
   export ROCM_PATH=\${ROCM_PATH:-/opt/rocm}
   cmake -S /src -B /src/build-hip -DGGML_HIP=ON -DAMDGPU_TARGETS=$TARGET -DCMAKE_BUILD_TYPE=Release
-  nproc
   cmake --build /src/build-hip --config Release -j\$(nproc) --target llama-cli
   echo 'HIP BUILD OK (no GPU needed)'
 "

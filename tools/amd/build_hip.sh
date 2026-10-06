@@ -10,6 +10,10 @@ BUILD="$LLAMA/build-hip"
 [ -d "$ROCM" ]      || { echo "no ROCm at $ROCM (set ROCM_PATH)"; exit 1; }
 [ -d "$LLAMA" ]     || { echo "no llama.cpp at $LLAMA (set LLAMA_CPP)"; exit 1; }
 command -v cmake >/dev/null || { echo "cmake MISSING"; exit 1; }
+# ggml-hip requires hipBLAS. Check before a long build.
+ls "$ROCM"/lib/cmake/hipblas/hipblasConfig.cmake >/dev/null 2>&1 \
+  || { echo "MISSING hipBLAS ($ROCM/lib/cmake/hipblas/hipblasConfig.cmake)."; \
+       echo "install: apt-get install -y hipblas-dev rocblas-dev  (or use a -complete ROCm image)"; exit 1; }
 
 echo "== configuring llama.cpp (HIP, $GPU_TARGET) =="
 cmake -S "$LLAMA" -B "$BUILD" \
