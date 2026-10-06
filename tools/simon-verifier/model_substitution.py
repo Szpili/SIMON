@@ -117,6 +117,35 @@ PROMPTY = [
     "Explain in two sentences why a signature does not prove a computation.",
     "Write a Python function that returns the n-th Fibonacci number iteratively.",
     "Summarize the causes of the First World War in four sentences.",
+    "List the first ten prime numbers separated by commas.",
+    "What is the capital of Australia? Answer in one word.",
+    "Write a haiku about the sea.",
+    "Translate 'good morning' into Polish, German, and Japanese.",
+    "Explain photosynthesis to a ten-year-old in three sentences.",
+    "Give three reasons to prefer local inference over a cloud API.",
+    "Write a SQL query that selects the top 5 customers by total spend.",
+    "What is 17 times 23 plus 41? Show the steps.",
+    "Name the largest planet in the solar system and its diameter.",
+    "Describe the difference between TCP and UDP in two sentences.",
+    "Write a Rust function that reverses a string in place.",
+    "List four causes of inflation in a market economy.",
+    "Explain what a Merkle tree is in plain language.",
+    "Compose a polite email declining a meeting invitation.",
+    "What are the symptoms of dehydration in adults?",
+    "Write the first stanza of a poem about autumn.",
+    "Explain the difference between symmetric and asymmetric encryption.",
+    "Give a two-sentence summary of the plot of Romeo and Juliet.",
+    "How do you compute the median of a list of numbers?",
+    "Name three countries in South America and their capitals.",
+    "Describe a binary search algorithm in three steps.",
+    "Write a short product description for a mechanical keyboard.",
+    "What is the boiling point of water at sea level in Celsius?",
+    "Explain why the sky is blue in two sentences.",
+    "List five vegetables that grow well in a temperate climate.",
+    "Write a one-paragraph story about a lost dog.",
+    "Explain the difference between a process and a thread.",
+    "Give three tips for writing clear technical documentation.",
+    "What is the time complexity of quicksort in the average case?",
 ]
 
 def main():
@@ -144,12 +173,16 @@ def main():
 
     f = open(a.out, "w", encoding="utf-8")
     honest_scores, sub_scores = [], []
+    honest_c2, sub_c2 = [], []   # contain2 = shipowana metryka m3::ocena
     pominięte = 0
     for pid in range(a.n):
         try:
             prompt = PROMPTY[pid % len(PROMPTY)]
             pids = _post(a.ref, "/tokenize", {"content": prompt})["tokens"]
-            seq, ref_top = gen_reference(a.ref, pids, a.tokens, a.topk)
+            seq, _ = gen_reference(a.ref, pids, a.tokens, a.topk)
+            # REGIME-MATCHED: ref_top przez force_eval (cache_prompt:True, 1-token), tak jak ramiona.
+            # (fable 2026-10-06: wcześniej ref_top był batched n_predict=20 → mieszał device z prefill-vs-cache.)
+            ref_top = force_eval(a.ref, pids, seq, a.topk)
             honest_top = force_eval(honest_ep, pids, seq, a.topk)  # honest (cross-device albo ref)
             sub_top = force_eval(a.sub, pids, seq, a.topk)         # substitute
             # random-token control: losowe tokeny zamiast modelu
@@ -161,10 +194,13 @@ def main():
             print(f"p{pid}: SKIP ({str(e)[:80]})")
             continue
 
+        import hashlib
+        seq_hash = hashlib.sha256(",".join(map(str, seq)).encode()).hexdigest()[:16]
+
         def agregat(tops, label):
             ms = [metryki(ref_top[t], tops[t], a.topk) for t in range(len(seq))]
             avg = {key: sum(m[key] for m in ms) / len(ms) for key in ms[0]}
-            avg.update({"prompt_id": pid, "label": label, "n": len(seq)})
+            avg.update({"prompt_id": pid, "label": label, "n": len(seq), "seq_hash": seq_hash})
             f.write(json.dumps(avg, ensure_ascii=False) + "\n")
             return avg
 
@@ -172,15 +208,20 @@ def main():
         s = agregat(sub_top, "substitute")
         r = agregat(rand_top, "random_control")
         honest_scores.append(h["top2_overlap"]); sub_scores.append(s["top2_overlap"])
+        honest_c2.append(h["contain2"]); sub_c2.append(s["contain2"])
         print(f"p{pid}: honest({h['label']}) top2={h['top2_overlap']:.3f} kl={h['kl']:.4f} | "
               f"sub top2={s['top2_overlap']:.3f} kl={s['kl']:.4f} | "
               f"random top2={r['top2_overlap']:.3f}")
 
     f.close()
     print(f"pominięte prompty: {pominięte}")
-    print(f"\nAUROC(honest vs substitute) by top2_overlap = {auroc(sub_scores, honest_scores):.3f}")
+    # SHIPOWANA metryka to contain2 (m3::ocena), nie top2_overlap (fable 2026-10-06).
+    print(f"\nAUROC by top2_overlap          = {auroc(sub_scores, honest_scores):.3f}")
+    print(f"AUROC by contain2 (SHIPOWANE)  = {auroc(sub_c2, honest_c2):.3f}")
     print(f"mean top2: honest={sum(honest_scores)/len(honest_scores):.3f}  "
-          f"substitute={sum(sub_scores)/len(sub_scores):.3f}")
+          f"substitute={sum(sub_scores)/len(sub_scores):.3f}  |  "
+          f"mean contain2: honest={sum(honest_c2)/max(1,len(honest_c2)):.3f} "
+          f"substitute={sum(sub_c2)/max(1,len(sub_c2)):.3f}")
     print(f"JSONL: {a.out}")
     return 0
 

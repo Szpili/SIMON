@@ -240,12 +240,12 @@ pub fn decyzja(w: &Werdykt, receipt_level: u8, progi: &Progi) -> Decyzja {
     if w.ok {
         return Decyzja::Pass;
     }
-    let ułamek = w.poza_topk as f64 / w.krokow as f64;
-    if ułamek >= progi.twardy_poza {
-        Decyzja::HardFail
-    } else {
-        Decyzja::SoftFail
-    }
+    // NAPRAWA (krytyk fable, 2026-10-06): M3 **NIE autoryzuje slasha**. Dopóki nie ma
+    // pomiaru false-positive pod uczciwą zmiennością operatora (build/offload/batch/KV-quant/
+    // ROCm), najsilniejszy werdykt to `SoftFail` (eskalacja). `HardFail` zostaje w enumie dla
+    // decidable naruszeń kryptograficznych (zły podpis / replay nonce / reuse grant) — nigdy
+    // dla dystansu. `Progi::twardy_poza` zostaje do rekalibracji PO pomiarze FP.
+    Decyzja::SoftFail
 }
 
 #[cfg(test)]
@@ -355,8 +355,9 @@ mod testy {
     }
 
     #[test]
-    fn decyzja_hard_przy_wielu_odstepstwach() {
-        // 10/50 = 20% ≥ 5% → HardFail.
+    fn m3_nie_autoryzuje_slasha_wielu_odstepstw() {
+        // 10/50 = 20% podejrzanych: mimo wszystko SoftFail, NIE HardFail (fable 2026-10-06).
+        // Slash wyłącznie na decidable naruszeniach, nigdy na dystansie M3.
         let kroki: Vec<Krok> = (0..50)
             .map(|i| Krok {
                 indeks: i,
@@ -365,7 +366,8 @@ mod testy {
             })
             .collect();
         let w = ocena(&kroki, &Polityka::default());
-        assert_eq!(decyzja(&w, 1, &Progi::default()), Decyzja::HardFail);
+        assert!(!w.ok, "{w:?}");
+        assert_eq!(decyzja(&w, 1, &Progi::default()), Decyzja::SoftFail);
     }
 
     #[test]
