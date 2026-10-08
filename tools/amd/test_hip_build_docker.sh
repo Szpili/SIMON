@@ -6,7 +6,9 @@
 #   bash tools/amd/test_hip_build_docker.sh
 # Overrides: ROCM_IMAGE (default rocm/dev-ubuntu-22.04:6.2-complete), LLAMA_CPP, AMDGPU_TARGETS.
 set -euo pipefail
-IMG="${ROCM_IMAGE:-rocm/dev-ubuntu-22.04:6.2-complete}"
+# Default = AMD Quick Start (recent ROCm + hipBLAS + vLLM). The base dev image 6.2 is too
+# old for gfx942 fp8 (__hip_fp8_e4m3) and lacks hipBLAS — see README "Pre-test findings".
+IMG="${ROCM_IMAGE:-rocm/vllm:latest}"
 LLAMA="${LLAMA_CPP:-$HOME/llama.cpp}"
 TARGET="${AMDGPU_TARGETS:-gfx942}"
 

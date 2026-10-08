@@ -40,6 +40,24 @@ bash tools/amd/session.sh destroy                       # when done (spends no m
 
 Phases can be run individually: `env | build | fp | node | video | destroy`.
 
+## Pre-test findings (free, no GPU) — 2026-10-06
+
+The Docker smoke test caught two real blockers before any paid hour:
+
+1. **`hipBLAS` missing.** `rocm/dev-ubuntu-22.04:6.2` has no `hipblasConfig.cmake`, but
+   `ggml-hip` requires hipBLAS. Fix applied: install `hipblas-dev rocblas-dev` when absent
+   (or use the Quick Start image, which ships them).
+2. **ROCm 6.2 too old for gfx942 fp8.** The build fails with
+   `unknown type name '__hip_fp8_e4m3'` when compiling for `gfx942`. The local llama.cpp
+   commit needs a newer ROCm / the Quick Start image.
+
+**Therefore the default pre-test image is `rocm/vllm:latest` (AMD Quick Start: recent ROCm +
+hipBLAS + vLLM preinstalled).** Detect, do not install. Re-run before the 12th:
+
+```sh
+ROCM_IMAGE=rocm/vllm:latest bash tools/amd/test_hip_build_docker.sh
+```
+
 ## Use what the image has
 
 The runner **detects** an existing ROCm (`/opt/rocm`) and vLLM instead of installing its own;

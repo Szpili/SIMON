@@ -25,9 +25,15 @@ shipped metric), unit = one prompt text, `max_poza = 0.02`, `k = 2`, `max_margin
 **reference configuration flags 5/32 of its own prompts**, and a legitimate operator choice
 (KV cache `q4_0`) flags 26/32.
 
-Therefore, per the pre-registration: **M3 stays telemetry only; it does not trigger
-escalation. Slashing is already off** (`m3::decyzja` cannot emit `HardFail`). The receipt
-layer is unaffected and remains the product.
+Therefore, per the pre-registration: **M3 in its current form (20-step window, threshold
+0.02) is not a detector.** In this configuration it stays telemetry only and does not trigger
+escalation. Slashing is already off (`m3::decyzja` cannot emit `HardFail`). The receipt layer
+is unaffected and remains the product.
+
+This is a statement about this configuration, not about the approach: the 20-step window
+cannot resolve anything finer than one token, so the honest next research question (after the
+hackathon) is the noise floor as a function of window length, and verifying in the same mode
+the node generated in.
 
 ## Why `ref` flags itself
 
@@ -51,5 +57,6 @@ inference-regime noise floor** — the "one token in twenty" problem the reviewe
 ## Publishable (honest)
 
 > "On 32 prompts, our own reference configuration flagged 5/32 under our shipped threshold,
-> and a legitimate KV-cache quantization flagged 26/32. M3 is therefore not a detector; it
-> remains telemetry. Our receipts prove authorship and binding, not execution."
+> and a legitimate KV-cache quantization flagged 26/32. **M3 in its current form (20-step
+> window, threshold 0.02) is not a detector**; in this configuration it remains telemetry. Our
+> receipts prove authorship and binding, not execution."
