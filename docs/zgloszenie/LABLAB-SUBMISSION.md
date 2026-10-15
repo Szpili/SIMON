@@ -31,7 +31,7 @@ OpenAI-compatible API.
    no instruction to stop or bypass equipment, marked for human review.
 4. The GPU node signs the exact ticket. The /industry page re-checks every receipt in the browser.
 
-Result on a predeclared, stratified sample: 15 of 15 tickets passed every check, median 1.5 s per ticket, all
+Result on a predeclared, stratified sample: 15 of 15 tickets passed every check, median 1.7 s per ticket, all
 receipts valid. Labelled failures the rules miss are shown as misses, not hidden.
 
 **AMD.** Gemma 4 runs on an AMD Instinct MI300X (vLLM 0.27.1, ROCm, AMD Developer Cloud) as a SIMON node next to
