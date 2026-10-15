@@ -602,6 +602,7 @@ fn wyodrebnij_output(reply: PromptReply, oczekiwany_model: &str) -> Result<Strin
 }
 
 /// Wypisuje wynik, weryfikuje receipt i podaje rozbicie pomiaru (format Hermesa).
+#[allow(clippy::too_many_arguments)]
 fn obsluz_odpowiedz(
     reply: PromptReply,
     siec_ms: u64,
