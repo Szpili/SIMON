@@ -218,7 +218,20 @@ fn zaloz(sciezka: &Path) -> Result<Keypair, BladTozsamosci> {
         powod: e.to_string(),
     };
     {
+        #[cfg(unix)]
+        let mut f = {
+            use std::os::unix::fs::OpenOptionsExt;
+            fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tymczasowy)
+                .map_err(blad)?
+        };
+        #[cfg(not(unix))]
         let mut f = fs::File::create(&tymczasowy).map_err(blad)?;
+
         f.write_all(tresc.as_bytes()).map_err(blad)?;
         f.sync_all().map_err(blad)?;
     }

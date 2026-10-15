@@ -94,16 +94,20 @@ pub fn waliduj(sufit: &Sufit, akcja: &str, parametry: &Value) -> Result<(), Odmo
         .get(akcja)
         .ok_or_else(|| Odmowa::NieznanaAkcja { akcja: akcja.to_string() })?;
 
-    let obj = parametry.as_object();
+    let Some(o) = parametry.as_object() else {
+        return Err(Odmowa::ZlyTyp {
+            akcja: akcja.to_string(),
+            parametr: "parametry".to_string(),
+        });
+    };
+    let obj = Some(o);
     // Nadmiarowe parametry: cokolwiek spoza kontraktu.
-    if let Some(o) = obj {
-        for k in o.keys() {
-            if !def.parametry.iter().any(|p| &p.nazwa == k) {
-                return Err(Odmowa::NadmiarowyParametr {
-                    akcja: akcja.to_string(),
-                    parametr: k.clone(),
-                });
-            }
+    for k in o.keys() {
+        if !def.parametry.iter().any(|p| &p.nazwa == k) {
+            return Err(Odmowa::NadmiarowyParametr {
+                akcja: akcja.to_string(),
+                parametr: k.clone(),
+            });
         }
     }
 
@@ -295,6 +299,11 @@ pub fn sprawdz(
     if k.teraz_us > z.wazne_do_us {
         return Err(OdmowaZ::Wygaslo);
     }
+    if let Some(b) = z.budzet {
+        if b <= 0 {
+            return Err(OdmowaZ::Wygaslo);
+        }
+    }
     // 4) odwołane / użyte
     if k.odwolane.iter().any(|x| x == &z.id) {
         return Err(OdmowaZ::Odwolane);
@@ -481,5 +490,51 @@ mod testy {
         ));
         // opcjonalny `limit` pominięty — OK
         assert!(waliduj_json(&s, r#"{"tool":"ustaw_tryb","args":{"tryb":"fast"}}"#).is_ok());
+    }
+
+    #[test]
+    fn nieobiektowe_parametry_odrzucone() {
+        let s = sufit();
+        let nie_obj = serde_json::json!("ciag_znakow_nie_obiekt");
+        assert!(matches!(
+            waliduj(&s, "log_message", &nie_obj),
+            Err(Odmowa::ZlyTyp { .. })
+        ));
+        let tablica = serde_json::json!([1, 2, 3]);
+        assert!(matches!(
+            waliduj(&s, "log_message", &tablica),
+            Err(Odmowa::ZlyTyp { .. })
+        ));
+    }
+
+    #[test]
+    fn budzet_zerowy_lub_ujemny_odrzucony() {
+        let s = sufit();
+        let op = Keypair::from_seed(&[5u8; 32]);
+        let pk_hex = op.public().to_hex();
+        let par = serde_json::json!({"msg": "hello"});
+        let z = Zezwolenie {
+            id: "g-zero".into(),
+            akcja: "log_message".into(),
+            parametry_digest: odcisk_parametrow_akcji("log_message", &par).unwrap(),
+            wystawca: String::new(),
+            wazne_do_us: 1_000_000,
+            budzet: Some(0),
+            podpis: None,
+        }
+        .podpisz(&op)
+        .unwrap();
+        let k = Kontekst {
+            teraz_us: 500_000,
+            oczekiwany_wystawca: &pk_hex,
+            odwolane: &[],
+            uzyte: &[],
+        };
+        assert_eq!(sprawdz(&s, &z, "log_message", &par, &k), Err(OdmowaZ::Wygaslo));
+
+        let mut z_ujemny = z.clone();
+        z_ujemny.budzet = Some(-1);
+        let z_ujemny = z_ujemny.podpisz(&op).unwrap();
+        assert_eq!(sprawdz(&s, &z_ujemny, "log_message", &par, &k), Err(OdmowaZ::Wygaslo));
     }
 }
