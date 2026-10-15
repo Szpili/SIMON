@@ -23,8 +23,8 @@ prove which system produced which advice.
    milling-machine dataset, `tools/simon-industry/rules.py`). The language model never decides it.
 2. **Gemma 4 26B-A4B** drafts the technician ticket as JSON from the rule findings only (title, summary, and
    inspection steps picked by ID from a fixed per-mode catalog; it never writes a step), as a SIMON job on
-   the plant's RTX 3090 (QAT q4_0, llama.cpp, 61.8 tok/s) or on an **AMD Instinct MI300X** in AMD Developer Cloud
-   (BF16, vLLM 0.27.1 on ROCm, 199.1 tok/s, 8/8 CANARY-7 pass).
+   the plant's RTX 3090 (QAT q4_0, llama.cpp) or on an **AMD Instinct MI300X** in AMD Developer Cloud
+   (BF16, vLLM 0.27.1 on ROCm).
 3. Every ticket is checked: exact fields, failure modes and urgency equal to the rules, steps only from the
    catalog, short free text with no number the input lacks, no link, role marker, urgency word or instruction
    to stop or bypass equipment, marked for human review. A ticket with any problem is held for a person,
@@ -91,7 +91,7 @@ also names what is not done.
 | Concurrent jobs on one node (`--max-jobs`, a queue, an explicit busy error) | working, measured on MI300X |
 | Model-identity verifier: agent behaviour (LIDAR-style) + single-token output distributions (`tools/simon-lidar`) | pilot, small N: family and size separate, quantization only in the single-token layer, no false alarm on another GPU (`docs/VERIFIER-PILOT.md`) |
 | AMD ROCm node (MI300X) | working and measured (see below) |
-| Gemma 4 26B-A4B nodes: RTX 3090 (QAT q4_0, llama.cpp, 61.8 tok/s) and AMD Instinct MI300X (BF16, vLLM 0.27.1, ROCm, 199.1 tok/s, 8/8 CANARY-7 pass) | live in the demo; MI300X telemetry from rocm-smi on `/network` |
+| Gemma 4 26B-A4B nodes: RTX 3090 (QAT q4_0, llama.cpp) and AMD Instinct MI300X (BF16, vLLM 0.27.1, ROCm) | live in the demo; MI300X telemetry from rocm-smi on `/network` |
 | Maintenance tickets with an audit trail (`tools/simon-industry`, `/industry`) | working: 14/15 published, 1 held for review, on a predeclared sample |
 | Slashing rules for dishonest nodes | unresolved (see below) |
 

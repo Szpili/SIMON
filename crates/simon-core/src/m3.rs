@@ -195,7 +195,14 @@ pub fn odcisk_audytu(kroki: &[Krok]) -> Result<String, SimonError> {
 
 /// Parsuje JSON audytu i od razu ocenia.
 pub fn ocena_json(json: &str, p: &Polityka) -> Result<Werdykt, SimonError> {
-    let a: Audyt = serde_json::from_str(json)?;
+    let v: serde_json::Value = serde_json::from_str(json)?;
+    // `verifier_loop.py --dry-run` produkuje syntetyczne logprob: to nie jest dowód.
+    if v.get("simulated").and_then(|s| s.as_bool()) == Some(true) {
+        return Err(SimonError::ReceiptMismatch(
+            "simulated audit (verifier_loop --dry-run) is not evidence".into(),
+        ));
+    }
+    let a: Audyt = serde_json::from_value(v)?;
     Ok(ocena(&a.kroki, p))
 }
 
@@ -264,6 +271,15 @@ pub fn decyzja(w: &Werdykt, receipt_level: u8, progi: &Progi) -> Decyzja {
 
 #[cfg(test)]
 mod testy {
+    #[test]
+    fn symulowany_audyt_odrzucony() {
+        let p = super::Polityka::default();
+        let prawdziwy = r#"{"kroki":[{"indeks":0,"node_token":5,"topk":[[5,-0.01],[6,-2.0]]}]}"#;
+        assert!(super::ocena_json(prawdziwy, &p).is_ok());
+        let symulowany = r#"{"simulated":true,"kroki":[{"indeks":0,"node_token":5,"topk":[[5,-0.01],[6,-2.0]]}]}"#;
+        assert!(super::ocena_json(symulowany, &p).is_err());
+    }
+
     use super::*;
 
     fn topk(pary: &[(u32, f64)]) -> Vec<(u32, f64)> {
