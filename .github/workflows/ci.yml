@@ -41,10 +41,45 @@ jobs:
       - name: Testy
         run: cargo test --release --locked
 
-      # Clippy nie blokuje builda, ale ma byc widoczny.
+      # Clippy blokuje (od 2026-10-15): wczesniej `continue-on-error` chowal
+      # bledy, a README twierdzilo "0 ostrzezen". Wylapal to Joe w PR #3.
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
-        continue-on-error: true
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  python:
+    # Narzedzia w Pythonie (gateway, industry, kanarek, monitor): samotesty bez sieci.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Gateway failover
+        run: python3 tools/simon-api/check_failover.py
+      - name: Samotesty narzedzi
+        run: |
+          for m in "simon-industry rules" "simon-industry tickets" "simon-canary simon_canary" "simon-monitor simon_monitor"; do
+            set -- $m
+            python3 -c "import sys; sys.path.insert(0, 'tools/$1'); import $2; $2.selfcheck(); print('$2 ok')"
+          done
+
+  ui:
+    # Strona jest tym, co widza sedziowie: typy, swieze fixtures z przyklady/, build.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - name: Fixtures zgodne z przyklady/
+        run: npm run fixtures && git diff --exit-code src/lib/fixture.ts
+      - run: npm run build
+        env:
+          BASE_PATH: /SIMON
 
   wartownik-stalych:
     # Osobne zadanie, zeby bylo widac W NAZWIE, co pilnuje.
