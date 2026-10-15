@@ -13,8 +13,37 @@ The hard question is not "can we distribute inference". The hard question is
 repository is about that question. Most of the work here is measurement, not
 architecture.
 
+## Hackathon entry: maintenance tickets with an audit trail (Intelligent Industry, Gemma 4)
+
+**[Live: /simon/industry](https://pop-os.tailaf1556.ts.net/simon/industry)**. The user is the maintenance
+planner of a machining plant. Machine alarms become technician tickets by hand, late, and nobody can later
+prove which system produced which advice.
+
+1. Deterministic rules decide the risk and the failure mode (the published physics of the AI4I 2020
+   milling-machine dataset, `tools/simon-industry/rules.py`). The language model never decides it.
+2. **Gemma 4 26B-A4B** drafts the technician ticket as JSON from the rule findings only, as a SIMON job on
+   the plant's RTX 3090 (QAT q4_0, llama.cpp) or on an **AMD Instinct MI300X** in AMD Developer Cloud
+   (BF16, vLLM 0.27.1 on ROCm).
+3. Every ticket is checked: valid JSON, failure modes equal to the rules, no number the input lacks, no
+   instruction to stop or bypass equipment, marked for human review.
+4. The node signs the exact ticket text. The page re-checks every receipt in the browser.
+
+Result on a predeclared, stratified sample (`docs/industry/run-3090-mi300x-2026-10-15.jsonl`): all 15
+tickets cleared every check, median 1.7 s, all receipts valid; 8 written on the RTX 3090, 7 on the MI300X.
+Labelled failures the rules miss are shown as misses. AI4I is synthetic, and its labels follow the same
+physics as the rules, so the rule recall describes the dataset, not a real plant.
+
+```bash
+python3 tools/simon-industry/rules.py tools/simon-industry/data/ai4i2020.csv      # rule recall per failure mode
+python3 tools/simon-industry/tickets.py --csv tools/simon-industry/data/ai4i2020.csv \
+    --model gemma-4-26b-a4b-it-qat-q4_0 --model gemma-4-26b-a4b-it-bf16 --out run.jsonl   # through the gateway
+bash tools/amd/demo_node.sh up <droplet-ip> <name>    # a fresh MI300X droplet -> Gemma 4 SIMON node in the demo
+```
+
 Try it:
 
+- [Industry](https://pop-os.tailaf1556.ts.net/simon/industry): the tickets above, each receipt verified
+  in your browser.
 - [Tamper, then verify](https://pop-os.tailaf1556.ts.net/simon/demo): change the
   answer of a node and watch the receipt fail. The verifier runs in your browser.
   It is the same Rust verifier as the CLI, compiled to WebAssembly.
@@ -57,6 +86,8 @@ also names what is not done.
 | Concurrent jobs on one node (`--max-jobs`, a queue, an explicit busy error) | working, measured on MI300X |
 | Model-identity verifier: agent behaviour (LIDAR-style) + single-token output distributions (`tools/simon-lidar`) | pilot, small N: family and size separate, quantization only in the single-token layer, no false alarm on another GPU (`docs/VERIFIER-PILOT.md`) |
 | AMD ROCm node (MI300X) | working and measured (see below) |
+| Gemma 4 26B-A4B nodes: RTX 3090 (QAT q4_0, llama.cpp) and AMD Instinct MI300X (BF16, vLLM 0.27.1, ROCm) | live in the demo; MI300X telemetry from rocm-smi on `/network` |
+| Maintenance tickets with an audit trail (`tools/simon-industry`, `/industry`) | working: 15/15 tickets cleared every check on a predeclared sample |
 | Slashing rules for dishonest nodes | unresolved (see below) |
 
 Platforms proven end to end: Linux (CUDA), Linux (ROCm, AMD Instinct MI300X),
