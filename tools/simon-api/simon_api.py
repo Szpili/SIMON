@@ -14,7 +14,7 @@ node hands the job to the next one. The file is re-read when it changes (add a n
 What a receipt proves here: the node's key signed this exact output for this job
 (proof level 0). It does NOT prove which model ran — see docs/THREAT-MODEL.md.
 """
-import hmac, itertools, json, os, subprocess, threading, time, uuid
+import hashlib, hmac, itertools, json, os, subprocess, threading, time, uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 BIN = os.environ.get("SIMON_BIN", "simon")
@@ -166,7 +166,9 @@ class Handler(BaseHTTPRequestHandler):
         if not expected_key:
             return True
         auth_header = self.headers.get("Authorization", "")
-        if hmac.compare_digest(auth_header.encode(), f"Bearer {expected_key}".encode()):
+        # skróty o stałej długości: porównanie bez wycieku długości tokenu
+        if hmac.compare_digest(hashlib.sha256(auth_header.encode()).digest(),
+                               hashlib.sha256(f"Bearer {expected_key}".encode()).digest()):
             return True
         self._err(401, "unauthorized: invalid or missing Bearer token")
         return False

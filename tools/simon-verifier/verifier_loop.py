@@ -122,7 +122,7 @@ def main() -> int:
             prompt_ids = [1, 2, 3]
             output_ids = [4, 5, 6]
         kroki = dry_run(prompt_ids, output_ids, a.topk)
-        # "simulated" = syntetyczne logprob — `simon audyt`/WASM odrzucają taki plik jako dowód.
+        # "simulated" = syntetyczne logprob. m3::ocena_json (CLI `simon audyt`/--audyt i WASM) odrzuca taki plik.
         audyt = json.dumps({"simulated": True, "kroki": kroki}, ensure_ascii=False)
         if a.out == "-":
             print(audyt)

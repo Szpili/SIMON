@@ -40,7 +40,7 @@ urgency the rules had set), median 1.6 s per ticket (1.5 s on local RTX 3090, 2.
 **AMD & Architecture.** Gemma 4 runs on an AMD Instinct MI300X (vLLM 0.27.1, ROCm, AMD Developer Cloud) as a SIMON node next to
 the plant's RTX 3090. Measured on the MI300X: one card sustained 64 concurrent streams of a 27B model; SIMON
 added no measurable throughput cost (510/510 receipts verified); an honest AMD node flagged exactly the same
-prompts as the NVIDIA reference in our pre-registered cross-vendor test. The codebase spans 5 modular Rust crates (`simon-core`, `simon-verify-wasm`, `simon-harness`, `simon-node`, `simon-cli`) with 192 automated unit/integration tests and Python self-checks.
+prompts as the NVIDIA reference in our pre-registered cross-vendor test. The codebase spans 5 modular Rust crates (`simon-core`, `simon-verify-wasm`, `simon-harness`, `simon-node`, `simon-cli`) with automated unit/integration tests (run by CI on every push) and Python self-checks.
 
 **Honest limits.** A receipt proves who signed an output, not which model ran (execution audit is research, not
 shipped). AI4I is synthetic; its labels follow the same physics as the rules, so rule recall describes the

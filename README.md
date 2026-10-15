@@ -211,7 +211,7 @@ We measured it on ROCm instead of speculation (AMD Developer Cloud, 1× MI300X,
 
 ```bash
 cargo build --release
-cargo test --workspace      # 192 tests across 5 workspace crates, 0 compiler warnings (CI runs on every push)
+cargo test --workspace      # unit + integration tests across 5 workspace crates, 0 compiler warnings (CI runs on every push)
 ```
 
 SIMON is a Rust workspace composed of 5 crates (`crates/simon-core`, `crates/simon-verify-wasm`, `crates/simon-harness`, `crates/simon-node`, `crates/simon-cli`) alongside Python test and self-check suites (`tools/simon-industry/rules.py`, `tools/simon-canary/simon_canary.py`, `tools/simon-verifier/verifier_loop.py`). The build needs no external services. A node also

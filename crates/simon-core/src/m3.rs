@@ -196,8 +196,10 @@ pub fn odcisk_audytu(kroki: &[Krok]) -> Result<String, SimonError> {
 /// Parsuje JSON audytu i od razu ocenia.
 pub fn ocena_json(json: &str, p: &Polityka) -> Result<Werdykt, SimonError> {
     let v: serde_json::Value = serde_json::from_str(json)?;
-    // `verifier_loop.py --dry-run` produkuje syntetyczne logprob: to nie jest dowód.
-    if v.get("simulated").and_then(|s| s.as_bool()) == Some(true) {
+    // `verifier_loop.py --dry-run` oznacza syntetyczne logprob polem `simulated`: to nie dowód.
+    // Każda wartość poza `false` odrzuca plik. To etykieta przeciw POMYŁCE (dry-run wzięty za audyt),
+    // nie ochrona przed fałszerzem — kto usunie pole, ten i tak sam pisze `kroki`.
+    if v.get("simulated").is_some_and(|s| s != &serde_json::Value::Bool(false)) {
         return Err(SimonError::ReceiptMismatch(
             "simulated audit (verifier_loop --dry-run) is not evidence".into(),
         ));
@@ -278,6 +280,12 @@ mod testy {
         assert!(super::ocena_json(prawdziwy, &p).is_ok());
         let symulowany = r#"{"simulated":true,"kroki":[{"indeks":0,"node_token":5,"topk":[[5,-0.01],[6,-2.0]]}]}"#;
         assert!(super::ocena_json(symulowany, &p).is_err());
+        for zle in [r#""true""#, "1", "null"] {
+            let j = format!(r#"{{"simulated":{zle},"kroki":[{{"indeks":0,"node_token":5,"topk":[[5,-0.01]]}}]}}"#);
+            assert!(super::ocena_json(&j, &p).is_err(), "simulated={zle} musi odrzucić");
+        }
+        let jawnie_nie = r#"{"simulated":false,"kroki":[{"indeks":0,"node_token":5,"topk":[[5,-0.01],[6,-2.0]]}]}"#;
+        assert!(super::ocena_json(jawnie_nie, &p).is_ok());
     }
 
     use super::*;
