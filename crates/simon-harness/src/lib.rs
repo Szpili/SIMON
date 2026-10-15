@@ -5,7 +5,7 @@
 //!
 //! Decyzje, które realizuje:
 //!   - D83  klient PŁACI, a opłata jest SPALONA → kopanie z własnych promptów
-//!          nie opłaca się (spalasz tyle, ile zarabiasz)
+//!     nie opłaca się (spalasz tyle, ile zarabiasz)
 //!   - D84  zadanie przydziela LOSOWANIE (VRF) — klient nie wybiera node'a
 //!   - D11  użytkownik wybiera MODEL, nie maszyny
 

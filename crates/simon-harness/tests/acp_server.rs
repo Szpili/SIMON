@@ -58,7 +58,7 @@ fn zlecenie_podpisane(session: &str, fee: u64) -> (ZlecenieUzytkownika, String) 
     let mut z = zlecenie(session, fee);
     z.user_pubkey = k.public().to_hex();
     let odcisk = z.digest().expect("odcisk");
-    let podpis = hex::encode(k.sign_digest(&odcisk).0.to_vec());
+    let podpis = hex::encode(k.sign_digest(&odcisk).0);
     (z, podpis)
 }
 

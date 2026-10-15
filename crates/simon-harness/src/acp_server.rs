@@ -2,21 +2,21 @@
 //!
 //! Decyzje realizowane:
 //!   - D105  SIMON jest AGENTEM ACP (nie klientem). Harness widzi jednego agenta;
-//!           swarm jest niewidoczny.
+//!     swarm jest niewidoczny.
 //!   - D106  ACP nie ma weryfikacji → receipt jedzie w `Meta`, ale WERYFIKACJA
-//!           zostaje w rdzeniu. Klient nie ufa, tylko sprawdza podpis Ed25519.
+//!     zostaje w rdzeniu. Klient nie ufa, tylko sprawdza podpis Ed25519.
 //!   - D107  Swarm niewidoczny: VRF, wyścig gossipsub, `winner()` nie wychodzą
-//!           na zewnątrz. Klient widzi tylko wynik i (opcjonalnie) receipt.
+//!     na zewnątrz. Klient widzi tylko wynik i (opcjonalnie) receipt.
 //!   - D108  Klient może zażądać receiptu — przez capability, nie obowiązkowo.
 //!   - D110  Agent tylko PROPONUJE zlecenie. Nie autoryzuje. Podpis użytkownika
-//!           jest sprawdzany PRZED dopuszczeniem do swarmu.
+//!     jest sprawdzany PRZED dopuszczeniem do swarmu.
 //!   - D116  `acp_server` to ZWYKŁY KLIENT protokołu SIMON. Wysyła `JobOrder`
-//!           na gossipsub i czeka na `OrderAccepted` / `OrderCompleted`.
-//!           NIE wie, czy koordynator jest w tym samym procesie, czy na Franku.
+//!     na gossipsub i czeka na `OrderAccepted` / `OrderCompleted`.
+//!     NIE wie, czy koordynator jest w tym samym procesie, czy na Franku.
 //!   - Strumień: `AgentThoughtChunk` (postęp) na żywo, `AgentMessageChunk` (wynik)
-//!           DOPIERO po weryfikacji receiptu (konsylium 2026-09-16).
+//!     DOPIERO po weryfikacji receiptu (konsylium 2026-09-16).
 //!   - Sesje: jedna trwała sesja ACP (dla harnessu), każde zlecenie = osobny
-//!           `job_id` i osobny receipt (mapowanie SessionId : order_id = 1 : N).
+//!     `job_id` i osobny receipt (mapowanie SessionId : order_id = 1 : N).
 
 use std::collections::HashMap;
 use std::time::Duration;

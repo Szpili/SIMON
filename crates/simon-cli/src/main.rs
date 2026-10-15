@@ -3,7 +3,7 @@
 //! Trzy role:
 //! - `node`  — subskrybuje kanał promptu, liczy modelem i zwraca wynik + receipt
 //! - `agent` — rozgłasza zlecenie, wybiera przyjęcie, wysyła prompt kanałem
-//!             punkt-punkt, weryfikuje receipt lokalnie
+//!   punkt-punkt, weryfikuje receipt lokalnie
 //! - `coord` — przyjmuje zlecenia (podpisane, M0.1) i rozgłasza `OrderAccepted`
 
 use std::process::ExitCode;

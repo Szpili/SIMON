@@ -4,9 +4,9 @@
 //! same bramki co `simon --verify-receipt` w CLI i co rdzeń:
 //!
 //!   1. `Receipt::verify_self()`      — Ed25519 po odcisku CAŁEGO receiptu
-//!                                      (nie po `sha256(output)`),
+//!      (nie po `sha256(output)`),
 //!   2. `Receipt::zgodny_z_wyjsciem()` — domenowo rozdzielony, związany z
-//!                                      `job_id` odcisk treści (`SIMON/OUTPUT/v1`),
+//!      `job_id` odcisk treści (`SIMON/OUTPUT/v1`),
 //!   3. opcjonalnie zgodność `job_id` / `model_hash`.
 //!
 //! Dzięki temu UI (przeglądarka, bez serwera) pokazuje tylko werdykt, a nie
@@ -199,7 +199,7 @@ mod testy {
     const RECEIPT: &str = include_str!("../../../przyklady/receipt.json");
     const OUTPUT: &str = include_str!("../../../przyklady/odpowiedz.txt");
 
-    fn pole<'a>(json: &'a str, klucz: &str) -> serde_json::Value {
+    fn pole(json: &str, klucz: &str) -> serde_json::Value {
         serde_json::from_str::<serde_json::Value>(json)
             .expect("JSON")
             .get(klucz)

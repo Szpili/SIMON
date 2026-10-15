@@ -268,6 +268,7 @@ impl Receipt {
     }
 
     /// Ustawia pola M1 (budowniczy dla node'a i testów).
+    #[allow(clippy::too_many_arguments)] // ponytail: budowniczy M1 dla testów i node, struct wejściowy gdy pól przybędzie
     pub fn z_wiazaniem_m1(
         mut self,
         tokenizer_hash: String,

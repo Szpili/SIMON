@@ -76,7 +76,7 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
         .listen
         .clone()
         .map(|l| vec![l])
-        .unwrap_or_else(Vec::new);
+        .unwrap_or_default();
 
     // Losowy peer_id per proces — patrz komentarz w node.rs.
     let mut swarm = zbuduj_swarm(&listen, &opcje.bootstrap, None)?;

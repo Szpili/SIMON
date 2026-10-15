@@ -62,7 +62,7 @@ impl Scena {
         // Podpis klienta nad odciskiem treści.
         let digest = o.digest().expect("odcisk");
         o.signature = Some(hex::encode(
-            self.client_key.sign_digest(&digest).0.to_vec(),
+            self.client_key.sign_digest(&digest).0,
         ));
         o
     }

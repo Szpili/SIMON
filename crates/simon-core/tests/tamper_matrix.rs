@@ -54,7 +54,8 @@ fn kazde_pole_v2_jest_pod_podpisem() {
     assert_eq!(bazowy.poziom(), 1);
 
     // (nazwa, mutator)
-    let mutatory: Vec<(&str, Box<dyn Fn(&mut Receipt)>)> = vec![
+    type Mutator = Box<dyn Fn(&mut Receipt)>;
+    let mutatory: Vec<(&str, Mutator)> = vec![
         ("job_id", Box::new(|r| r.job_id.push('x'))),
         ("node_id", Box::new(|r| r.node_id.push('x'))),
         ("model_hash", Box::new(|r| r.model_hash.push('x'))),

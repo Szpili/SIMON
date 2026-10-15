@@ -41,7 +41,7 @@ fn m03_prawdziwy_podpis_przechodzi() {
     let k = Keypair::generate();
     let z = zlecenie(&k.public().to_hex());
     let odcisk = z.digest().expect("odcisk");
-    let podpis = hex::encode(k.sign_digest(&odcisk).0.to_vec());
+    let podpis = hex::encode(k.sign_digest(&odcisk).0);
     let bramka = BramkaPodpisu;
     assert!(bramka.autoryzuj(&z, &podpis).is_ok(), "poprawny podpis ma przejść");
 }
@@ -53,7 +53,7 @@ fn m03_podpis_obcym_kluczem_odrzucony() {
     let obcy = Keypair::generate();
     let z = zlecenie(&k.public().to_hex());
     let odcisk = z.digest().expect("odcisk");
-    let podpis = hex::encode(obcy.sign_digest(&odcisk).0.to_vec());
+    let podpis = hex::encode(obcy.sign_digest(&odcisk).0);
     let bramka = BramkaPodpisu;
     assert!(
         bramka.autoryzuj(&z, &podpis).is_err(),
@@ -67,7 +67,7 @@ fn m03_podpis_nad_inna_trescia_odrzucony() {
     let k = Keypair::generate();
     let z = zlecenie(&k.public().to_hex());
     let odcisk = z.digest().expect("odcisk");
-    let podpis = hex::encode(k.sign_digest(&odcisk).0.to_vec());
+    let podpis = hex::encode(k.sign_digest(&odcisk).0);
 
     // Podmiana treści PO podpisaniu.
     let mut podmienione = z.clone();

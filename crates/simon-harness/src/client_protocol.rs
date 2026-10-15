@@ -161,7 +161,7 @@ impl Autoryzacja {
     /// Podpisuje autoryzację kluczem użytkownika.
     pub fn sign(mut self, keypair: &Keypair) -> Self {
         if let Ok(d) = self.digest() {
-            self.signature = Some(hex::encode(keypair.sign_digest(&d).0.to_vec()));
+            self.signature = Some(hex::encode(keypair.sign_digest(&d).0));
         }
         self
     }
@@ -413,7 +413,7 @@ impl OrderAccepted {
     /// Podpisuje przyjęcie kluczem koordynatora (M0.1).
     pub fn sign(mut self, keypair: &Keypair) -> Self {
         if let Ok(d) = self.digest() {
-            self.signature = Some(hex::encode(keypair.sign_digest(&d).0.to_vec()));
+            self.signature = Some(hex::encode(keypair.sign_digest(&d).0));
         }
         self
     }
@@ -576,7 +576,7 @@ impl RejestrKoordynatorow {
 mod tests {
     use super::*;
 
-    fn order(id: &str, fee: u64) -> JobOrder {
+    fn order(_id: &str, fee: u64) -> JobOrder {
         JobOrder::new("sha256:model", b"prompt", fee, 300, "aa".repeat(32)).unwrap()
     }
 

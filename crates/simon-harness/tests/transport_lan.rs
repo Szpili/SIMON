@@ -11,7 +11,6 @@
 
 use std::time::Duration;
 
-use futures::StreamExt;
 use libp2p::{Multiaddr, PeerId};
 use simon_core::crypto::Keypair;
 use simon_harness::client_protocol::{JobOrder, TOPIC_JOB_ORDER};
