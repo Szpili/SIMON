@@ -7,7 +7,7 @@
 use crate::wspolne::{wypisz_adresy, zbuduj_swarm, ZachowanieEvent};
 use crate::Opcje;
 use futures::StreamExt;
-use libp2p::gossipsub::{Event as GsEvent, IdentTopic, MessageAuthenticity};
+use libp2p::gossipsub::{Event as GsEvent, IdentTopic};
 use libp2p::swarm::SwarmEvent;
 use simon_core::crypto::Keypair;
 use simon_harness::client_protocol::{
@@ -127,6 +127,18 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
 }
 
 pub fn obsluz_wynik(rejestr: &mut Registry, res: JobResult) {
+    // JobResult przychodzi z gossipsub od DOWOLNEGO peera, a node_id są publiczne (topic rejestracji).
+    // Bez tej bramki każdy mógł jednym komunikatem zdegradować cudzy węzeł (porażka albo sfałszowany
+    // „sukces” na nieprzydzielony job). Wynik liczy się tylko dla joba przydzielonego TEMU węzłowi.
+    // ponytail: porażka nie jest podpisana, więc ktoś, kto zna świeżą parę (job_id, node_id), nadal może
+    // zgłosić jej porażkę; pełna naprawa = JobResult podpisany kluczem node'a także przy porażce.
+    if rejestr.assigned.get(&res.job_id) != Some(&res.node_id) {
+        println!(
+            "[coord] WYNIK ZIGNOROWANY: job={} nie jest przydzielony node={}",
+            res.job_id, res.node_id
+        );
+        return;
+    }
     let output_digest_pusty = res
         .receipt
         .as_ref()
@@ -245,11 +257,6 @@ fn obsluz_zlecenie(
     }
 }
 
-/// Trzyma typ w zasięgu (podpisany publikator wymaga klucza).
-#[allow(dead_code)]
-fn _podpisany() -> MessageAuthenticity {
-    MessageAuthenticity::RandomAuthor
-}
 
 #[cfg(test)]
 mod tests {
@@ -386,6 +393,26 @@ mod tests {
         obsluz_wynik(&mut reg, fail_res);
 
         assert_eq!(reg.states.get("node-bad"), Some(&NodeState::Degraded));
+    }
+
+    #[test]
+    fn obcy_wynik_nie_degraduje_wezla() {
+        let mut reg = Registry::new();
+        zarejestruj_node(&mut reg, "ofiara", "sha256:model2", 2048);
+        // porażka dla joba, którego nikt nie przydzielił
+        obsluz_wynik(&mut reg, JobResult::failure("job-nieistniejacy", "ofiara", "fake"));
+        assert_ne!(reg.states.get("ofiara"), Some(&NodeState::Degraded));
+        // „sukces” bez receiptu (output_digest pusty) — też ignorowany
+        let mut fałszywy = JobResult::failure("job-inny", "ofiara", "x");
+        fałszywy.ok = true;
+        obsluz_wynik(&mut reg, fałszywy);
+        assert_ne!(reg.states.get("ofiara"), Some(&NodeState::Degraded));
+        // job przydzielony INNEMU węzłowi nie degraduje ofiary
+        zarejestruj_node(&mut reg, "inny", "sha256:model2", 2048);
+        assert!(reg.assign("job-x", "inny"));
+        obsluz_wynik(&mut reg, JobResult::failure("job-x", "ofiara", "fake"));
+        assert_ne!(reg.states.get("ofiara"), Some(&NodeState::Degraded));
+        assert_eq!(reg.assigned.get("job-x").map(String::as_str), Some("inny"));
     }
 
     #[test]

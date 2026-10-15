@@ -121,7 +121,7 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
         if let PromptReply::Ok(r) = &reply {
             sprawdz_wiadomosc_czatu(&r.output)?;
         }
-        return obsluz_odpowiedz(reply, siec_ms, &order.model_hash, opcje.json, t0, &klucz, opcje.rejestr.as_deref(), Some(&order.nonce));
+        return obsluz_odpowiedz(reply, siec_ms, &order.model_hash, opcje.json, t0, &klucz, opcje.rejestr.as_deref(), &order.nonce);
     }
 
     // --- Etap A (dziś jedyny etap, gdy --then-bootstrap nie podany) ---
@@ -136,7 +136,7 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
     let (reply, siec_ms) = wyslij_i_czekaj(&mut swarm, peer, request).await?;
 
     if opcje.then_bootstrap.is_empty() {
-        return obsluz_odpowiedz(reply, siec_ms, &order.model_hash, opcje.json, t0, &klucz, opcje.rejestr.as_deref(), Some(&order.nonce));
+        return obsluz_odpowiedz(reply, siec_ms, &order.model_hash, opcje.json, t0, &klucz, opcje.rejestr.as_deref(), &order.nonce);
     }
 
     // --- B2: łańcuch — etap A zweryfikowany, przekazujemy wynik do etapu B ---
@@ -158,7 +158,7 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
     let (reply_b, siec_ms_b) = wyslij_i_czekaj(&mut swarm, then_peer, request_b).await?;
 
     println!("\n=== ETAP B ===");
-    obsluz_odpowiedz(reply_b, siec_ms_b, &order_b.model_hash, opcje.json, t0b, &klucz, opcje.rejestr.as_deref(), Some(&order_b.nonce))
+    obsluz_odpowiedz(reply_b, siec_ms_b, &order_b.model_hash, opcje.json, t0b, &klucz, opcje.rejestr.as_deref(), &order_b.nonce)
 }
 
 /// Pola żądania OpenAI, które idą do node'a (ta sama biała lista co w node.rs).
@@ -604,7 +604,7 @@ fn obsluz_odpowiedz(
     t0: std::time::Instant,
     klucz_klienta: &Keypair,
     rejestr: Option<&str>,
-    oczekiwany_nonce: Option<&str>,
+    oczekiwany_nonce: &str,
 ) -> Result<(), String> {
     match reply {
         PromptReply::Blad(e) => {
@@ -621,10 +621,8 @@ fn obsluz_odpowiedz(
             let poziom_deklarowany = rec.as_ref().map(|x| x.poziom()).unwrap_or(0);
             let m1_info = match (&r.tokenizer_hash, &r.prompt_token_ids, &r.output_token_ids) {
                 (Some(th), Some(pt), Some(ot)) => {
-                    let nonce = oczekiwany_nonce
-                        .or_else(|| rec.as_ref().and_then(|rc| rc.wiazania.as_ref()).map(|w| w.client_nonce.as_str()))
-                        .unwrap_or("");
-                    Some((th.as_str(), nonce, pt.as_slice(), ot.as_slice()))
+                    // nonce ZAWSZE z naszego zlecenia; nonce z receiptu sprawdzałby receipt sam ze sobą
+                    Some((th.as_str(), oczekiwany_nonce, pt.as_slice(), ot.as_slice()))
                 }
                 _ => None,
             };
