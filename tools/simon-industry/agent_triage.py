@@ -28,6 +28,7 @@ import os
 import re
 import sys
 import time
+import unicodedata
 import urllib.request
 from pathlib import Path
 
@@ -39,9 +40,8 @@ except ImportError:
 
 DOMENA_GRANT_PARAMS = "SIMON/GRANT-PARAMS/v1"
 
+# Tylko pilności, które emituje rules.findings() — model nie wymyśla własnych.
 ALLOWED_URGENCY = {
-    "medium",
-    "high",
     "inspect before next shift",
     "plan tool change",
 }
@@ -95,9 +95,15 @@ PARTS_INVENTORY = {
 }
 
 FORBIDDEN = re.compile(
-    r"\b(shut ?down|stop the machine|switch off|turn off|bypass|override|disable)\b",
+    r"\b(shut\s*down|stop\s+the\s+machine|switch\s+off|turn\s+off|power\s+(?:down|off)|cut\s+(?:the\s+)?power"
+    r"|de-?energi[sz]e|disconnect|bypass|override|disable)\b",
     re.I,
 )
+
+
+def _znormalizuj(t: str) -> str:
+    """NFKC (pełna szerokość, ligatury) + zwinięte białe znaki, żeby 'shut  down' czy 'ｓｈｕｔ down' nie przeszły."""
+    return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", t))
 
 TOOLS = [
     {
@@ -330,8 +336,14 @@ def execute_inspect_sensor_telemetry(csv_path: Path, udi: int) -> dict:
     return {"error": f"UDI {udi} not found"}
 
 
-def execute_propose_work_order(args: dict) -> dict:
-    """Enforces M7 capability ceiling and computes SIMON/GRANT-PARAMS/v1 parameter commitment."""
+def execute_propose_work_order(args: dict, findings: list | None) -> dict:
+    """Enforces M7 capability ceiling and computes SIMON/GRANT-PARAMS/v1 parameter commitment.
+
+    `findings` = rules.findings() for THIS machine. The rules decide the failure modes, the urgency and
+    the action/part per mode; the model may only restate them (plus a short checked summary).
+    """
+    if not findings:
+        raise ValueError("M7 Capability Ceiling Violation: the rules found no risk for this machine; no work order")
     # 1. Enforce strict parameter bounds
     actual_keys = set(args.keys())
     if actual_keys != REQUIRED_WORK_ORDER_FIELDS:
@@ -365,8 +377,8 @@ def execute_propose_work_order(args: dict) -> dict:
         raise ValueError("M7 Capability Ceiling Violation: summary must be non-empty text")
     if len(summary) > 300:
         raise ValueError(f"M7 Capability Ceiling Violation: summary exceeds 300 characters ({len(summary)})")
-    if FORBIDDEN.search(summary):
-        matched = FORBIDDEN.search(summary).group(0)
+    if FORBIDDEN.search(_znormalizuj(summary)):
+        matched = FORBIDDEN.search(_znormalizuj(summary)).group(0)
         raise PermissionError(
             f"M7 Capability Ceiling Violation: forbidden shutdown/override command detected: '{matched}'"
         )
@@ -375,6 +387,18 @@ def execute_propose_work_order(args: dict) -> dict:
     known_parts = {v["part_id"] for v in PARTS_INVENTORY.values()}
     if part_id not in known_parts:
         raise ValueError(f"M7 Capability Ceiling Violation: part_id '{part_id}' not found in inventory catalog")
+
+    # Reguły decydują, model tylko powtarza (kontrola krzyżowa z rules.findings dla tej maszyny).
+    tryby_reguly = {f["mode"] for f in findings}
+    if set(failure_modes) != tryby_reguly:
+        raise ValueError(
+            f"M7 Capability Ceiling Violation: failure_modes {sorted(set(failure_modes))} != rules {sorted(tryby_reguly)}"
+        )
+    if urgency != findings[0]["urgency"]:  # findings są posortowane: najpilniejsze pierwsze
+        raise ValueError(f"M7 Capability Ceiling Violation: urgency '{urgency}' != rules '{findings[0]['urgency']}'")
+    pary = {(PARTS_INVENTORY[m]["action_code"], PARTS_INVENTORY[m]["part_id"]) for m in tryby_reguly}
+    if (action_code, part_id) not in pary:
+        raise ValueError(f"M7 Capability Ceiling Violation: ({action_code}, {part_id}) is not the catalog action for {sorted(tryby_reguly)}")
 
     # 2. Compute exact SIMON/GRANT-PARAMS/v1 parameter commitment digest
     parametry_digest = compute_grant_params_digest("propose_work_order", args)
@@ -393,7 +417,7 @@ def execute_propose_work_order(args: dict) -> dict:
     }
 
 
-def execute_tool(name: str, args: dict, csv_path: Path) -> dict:
+def execute_tool(name: str, args: dict, csv_path: Path, findings: list | None = None) -> dict:
     if name == "lookup_machine_history":
         return execute_lookup_machine_history(csv_path, args.get("product_type", "M"), int(args.get("udi", 0)))
     elif name == "check_spare_parts_inventory":
@@ -401,7 +425,7 @@ def execute_tool(name: str, args: dict, csv_path: Path) -> dict:
     elif name == "inspect_sensor_telemetry":
         return execute_inspect_sensor_telemetry(csv_path, int(args.get("udi", 0)))
     elif name == "propose_work_order":
-        return execute_propose_work_order(args)
+        return execute_propose_work_order(args, findings)
     else:
         return {"error": f"Unknown tool '{name}'"}
 
@@ -424,7 +448,9 @@ def run_triage_agent(
         {
             "role": "user",
             "content": (
-                f"Machine record UDI={udi} (Product {telemetry.get('product_id')}, Type {telemetry.get('type')}) "
+                # pola z CSV do promptu tylko po oczyszczeniu: dane nie mogą nieść instrukcji
+                f"Machine record UDI={udi} (Product {re.sub(r'[^A-Za-z0-9-]', '', str(telemetry.get('product_id')))[:16]}, "
+                f"Type {re.sub(r'[^A-Za-z]', '', str(telemetry.get('type')))[:2]}) "
                 f"triggered the following deterministic rule findings:\n"
                 f"{json.dumps(telemetry.get('findings'), indent=2)}\n\n"
                 f"Sensor features:\n"
@@ -482,7 +508,7 @@ def run_triage_agent(
                 fn_args = json.loads(tc["function"]["arguments"])
             except Exception:
                 fn_args = {}
-            tool_output = execute_tool(fn, fn_args, csv_path)
+            tool_output = execute_tool(fn, fn_args, csv_path, telemetry.get("findings"))
             if fn == "propose_work_order" and tool_output.get("status") == "GATED_BY_OPERATOR_CAPABILITY_CEILING":
                 gated_proposals.append(tool_output)
             messages.append({
@@ -533,7 +559,8 @@ def selfcheck():
         "part_id": "FAN-CLR-8020",
         "summary": "Inspect spindle air cooling fans, ducts, and filters before next shift.",
     }
-    res = execute_propose_work_order(valid_args)
+    reg = tel["findings"]
+    res = execute_propose_work_order(valid_args, reg)
     assert res["status"] == "GATED_BY_OPERATOR_CAPABILITY_CEILING"
     assert res["domena"] == DOMENA_GRANT_PARAMS
     assert res["requires_grant"] == "Zezwolenie"
@@ -550,30 +577,49 @@ def selfcheck():
     rejected = 0
     # 5a. Bad urgency
     try:
-        execute_propose_work_order({**valid_args, "urgency": "immediate emergency"})
+        execute_propose_work_order({**valid_args, "urgency": "immediate emergency"}, reg)
     except ValueError:
         rejected += 1
 
     # 5b. Bad action code
     try:
-        execute_propose_work_order({**valid_args, "action_code": "OVERRIDE_THERMAL_CUTOFF"})
+        execute_propose_work_order({**valid_args, "action_code": "OVERRIDE_THERMAL_CUTOFF"}, reg)
     except ValueError:
         rejected += 1
 
     # 5c. Forbidden shutdown command in free text
     try:
-        execute_propose_work_order({**valid_args, "summary": "Immediately shut down the machine and disable safety."})
+        execute_propose_work_order({**valid_args, "summary": "Immediately shut down the machine and disable safety."}, reg)
     except PermissionError:
         rejected += 1
 
     # 5d. Schema pollution (unlisted parameter / ambient authority)
     try:
-        execute_propose_work_order({**valid_args, "ambient_authority": True})
+        execute_propose_work_order({**valid_args, "ambient_authority": True}, reg)
     except ValueError:
         rejected += 1
 
-    assert rejected == 4, f"Expected 4 ceiling rejections, got {rejected}"
-    print("  [Pass 5/5] M7 ceiling boundary rejections OK (4/4 violations blocked)")
+    # 5e-5j. Reguły decydują: model nie może zmienić trybu, pilności ani akcji; brak ustaleń = brak zlecenia;
+    #        filtr wolnego tekstu odporny na spacje, pełną szerokość i synonimy wyłączenia.
+    for zle, wyjatek in [
+        ({**valid_args, "failure_modes": ["HDF", "PWF"]}, ValueError),
+        ({**valid_args, "urgency": "plan tool change"}, ValueError),
+        ({**valid_args, "action_code": "REPLACE_TOOL_INSERT", "part_id": "INS-CRB-100"}, ValueError),
+        ({**valid_args, "summary": "Shut  down the spindle first."}, PermissionError),
+        ({**valid_args, "summary": "Then ｐｏｗｅｒ off the drive."}, PermissionError),
+        ({**valid_args, "summary": "De-energize the cabinet."}, PermissionError),
+    ]:
+        try:
+            execute_propose_work_order(zle, reg)
+        except wyjatek:
+            rejected += 1
+    try:
+        execute_propose_work_order(valid_args, [])
+    except ValueError:
+        rejected += 1
+
+    assert rejected == 11, f"Expected 11 ceiling rejections, got {rejected}"
+    print("  [Pass 5/5] M7 ceiling boundary rejections OK ({rejected}/11 violations blocked)")
 
     # 6. Simulate deterministic multi-turn tool calling loop
     sim_msgs = [
@@ -619,7 +665,7 @@ def selfcheck():
         }],
     }
     sim_msgs.append(sim_tc3)
-    res_3 = execute_tool("propose_work_order", valid_args, csv_path)
+    res_3 = execute_tool("propose_work_order", valid_args, csv_path, tel["findings"])
     assert res_3["status"] == "GATED_BY_OPERATOR_CAPABILITY_CEILING"
     sim_msgs.append({"role": "tool", "tool_call_id": "call_3", "content": json.dumps(res_3)})
 
