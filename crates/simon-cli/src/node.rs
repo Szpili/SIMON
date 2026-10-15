@@ -186,6 +186,10 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
                         request.prompt.len(),
                         request.max_ctx
                     );
+                    if let Some(reply) = sprawdz_wersje(&request) {
+                        let _ = swarm.behaviour_mut().prompt_rr.send_response(channel, reply);
+                        continue;
+                    }
                     // Pozwolenie na przyjęcie żyje do końca zadania (także przy
                     // panice), więc licznik nie przecieka.
                     let Ok(przyjete) = przyjecia.clone().try_acquire_owned() else {
@@ -228,6 +232,8 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
 /// odpowie `node_zajety`.
 const KOLEJKA_NA_SLOT: usize = 4;
 
+const WERSJA_PROMPTU: u16 = 1;
+
 /// Co zadanie musi wiedzieć o backendzie — współdzielone między zadaniami.
 struct Backend {
     model_url: String,
@@ -237,9 +243,25 @@ struct Backend {
     max_ctx: u32,
 }
 
+fn sprawdz_wersje(request: &PromptRequest) -> Option<PromptReply> {
+    (request.v > WERSJA_PROMPTU).then(|| {
+        blad(
+            request,
+            "wersja",
+            &format!(
+                "nieobsługiwana wersja formatu {} (node obsługuje do {})",
+                request.v, WERSJA_PROMPTU
+            ),
+        )
+    })
+}
+
 /// Jedno zlecenie: bramka kontekstu, potem liczenie. Biegnie w osobnym
 /// zadaniu tokio, nigdy w pętli swarmu.
 async fn obsluz(b: &Backend, request: &PromptRequest) -> PromptReply {
+    if let Some(reply) = sprawdz_wersje(request) {
+        return reply;
+    }
     // C+1: agent deklaruje max_ctx przybliżeniem znakowym (~3,5 B/tok
     // dla polskiej prozy) — przy JSON/base64 błąd sięga ~2,5× w obie
     // strony (docs/KV-CACHE-spill-i-rozproszony-VRAM.md). Node MA
@@ -859,6 +881,75 @@ mod testy_wspolbieznosci {
             }
         });
         port
+    }
+
+    fn backend_i_zlecenie(port: u16, v: u16, chat: bool) -> (super::Backend, PromptRequest) {
+        (
+            super::Backend {
+                model_url: format!("http://127.0.0.1:{port}"),
+                model: "m".into(),
+                runtime: "test".into(),
+                klucz: simon_core::crypto::Keypair::from_seed(&[7; 32]),
+                max_ctx: 1,
+            },
+            PromptRequest {
+                v,
+                order_id: "wersja-test".into(),
+                job_id: "j".into(),
+                model_hash: "m".into(),
+                prompt: if chat {
+                    r#"{"messages":[{"role":"user","content":"hej"}]}"#.into()
+                } else {
+                    "hej".into()
+                },
+                max_tokens: 1,
+                max_ctx: 1,
+                nonce: "n".into(),
+                chat,
+            },
+        )
+    }
+
+    #[tokio::test]
+    async fn nowsza_wersja_jest_odrzucana_przed_kontaktem_z_backendem() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        for chat in [false, true] {
+            for v in [super::WERSJA_PROMPTU + 1, u16::MAX] {
+                let (mut backend, mut req) = backend_i_zlecenie(port, v, chat);
+                // Błąd wersji ma pierwszeństwo przed bramką kontekstu i parsowaniem czatu.
+                backend.max_ctx = 1;
+                req.max_ctx = 2;
+                req.prompt = "nie json".into();
+                let reply = tokio::time::timeout(Duration::from_secs(1), super::obsluz(&backend, &req))
+                    .await
+                    .expect("odrzucenie wersji nie czeka na backend");
+                let PromptReply::Blad(err) = reply else {
+                    panic!("oczekiwano błędu wersji");
+                };
+                assert_eq!(err.kod, "wersja");
+                assert_eq!(err.order_id, req.order_id);
+                assert_eq!(err.v, 1);
+                assert_eq!(err.realny_ctx, None);
+                assert_eq!(err.limit_ctx, None);
+                assert!(err.opis.contains(&v.to_string()));
+            }
+        }
+        assert!(tokio::time::timeout(Duration::from_millis(50), listener.accept())
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn obslugiwana_i_starsza_wersja_dochodza_do_backendu() {
+        let port = falszywy_backend().await;
+        for chat in [false, true] {
+            for v in [0, super::WERSJA_PROMPTU] {
+                let (backend, req) = backend_i_zlecenie(port, v, chat);
+                let reply = super::obsluz(&backend, &req).await;
+                assert!(matches!(reply, PromptReply::Ok(_)), "{reply:?}");
+            }
+        }
     }
 
     /// Regresja 2026-10-11: node liczył prompt W pętli swarmu, więc N
