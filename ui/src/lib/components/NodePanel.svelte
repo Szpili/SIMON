@@ -4,6 +4,10 @@
   let { receipt, output, tampered, ontamper, onrestore, tamperNote = 'One trailing space was appended.' }: {
     receipt: Receipt; output: string; tampered: boolean; ontamper: () => void; onrestore: () => void; tamperNote?: string;
   } = $props();
+  // Nodes sign a JSON envelope ({"content": ..., "finish_reason": ...}); show its text, verify the exact bytes.
+  const shown = $derived.by(() => {
+    try { const c = JSON.parse(output).content; return typeof c === 'string' ? c : output; } catch { return output; }
+  });
 </script>
 
 <section class="scanlines flex flex-col border border-line bg-panel p-5" aria-labelledby="node-h">
@@ -13,8 +17,8 @@
   </div>
 
   <div class="mt-5">
-    <p class="mono text-xs text-neutral-500">output (the answer it returned)</p>
-    <p class="mono mt-1 whitespace-pre-wrap break-words border p-3 text-sm {tampered ? 'border-bad/60' : 'border-line'} bg-ink text-neutral-100">{output}<span class="{tampered && output.endsWith(' ') ? 'bg-bad' : ''}">{tampered && output.endsWith(' ') ? '\u00a0' : ''}</span></p>
+    <p class="mono text-xs text-neutral-500">output (the answer it returned){shown !== output ? ' · content field of the signed JSON' : ''}</p>
+    <p class="mono mt-1 whitespace-pre-wrap break-words border p-3 text-sm {tampered ? 'border-bad/60' : 'border-line'} bg-ink text-neutral-100">{shown}<span class="{tampered && output.endsWith(' ') ? 'bg-bad' : ''}">{tampered && output.endsWith(' ') ? '\u00a0' : ''}</span></p>
     {#if tampered}<p class="mono mt-1 text-xs text-bad">{tamperNote} The signed receipt was not re-issued.</p>{/if}
   </div>
 

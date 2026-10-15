@@ -1,15 +1,15 @@
 {
   "activation_hash": "toploc:NIE_POLICZONY",
-  "completion_tokens": 60,
-  "finished_at_us": 1789760547717093,
-  "job_id": "job-e267671122556bec",
-  "model_hash": "qwen3.8-27b",
-  "node_id": "de1cbe4d9a2abed30e2f27d2b9159aceedaef1a04ca260704e1ccda891416032",
-  "output_digest": "5f4af804357c8df0dc2c45c92d03d6af2a896cf2319c58dc65c388cd5c20ed7d",
+  "completion_tokens": 167,
+  "finished_at_us": 1792069810991917,
+  "job_id": "job-6480cfa483d5a05d",
+  "model_hash": "gemma-4-26b-a4b-it-bf16",
+  "node_id": "10391fe96d8e2f51f050611da633cbdc9fc589aaa580f8a973d4b355dcd192e1",
+  "output_digest": "7a04ba014e2682948fc4d68f947260e3f9933c561252e226d0c8c9dda60cff9d",
   "precision": "fp16",
-  "prompt_tokens": 66,
+  "prompt_tokens": 421,
   "runtime": "vllm/0.27.1",
-  "signature": "93de9d76c0ae9a70844b9f245e6964d0961d6ba27efa9a1a16c7cd3e7b98e50e9628195b3edbae2351e3e20c9ed3fa804df954732bfb4bd56394571fd338910f",
-  "signer": "de1cbe4d9a2abed30e2f27d2b9159aceedaef1a04ca260704e1ccda891416032",
-  "started_at_us": 1789760547717093
+  "signature": "924c9d20282809019e453f13049f51971786447b9c90bf0ebefa84fabc3eb7c8eddd9f2c0abf4d597e12dd11d0f3232f17338747fd43520ef85b65c7c6d70e0b",
+  "signer": "10391fe96d8e2f51f050611da633cbdc9fc589aaa580f8a973d4b355dcd192e1",
+  "started_at_us": 1792069810991917
 }
