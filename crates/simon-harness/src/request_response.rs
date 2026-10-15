@@ -66,6 +66,12 @@ pub struct PromptResponse {
     pub ttft_ms: u64,
     /// Czas generowania w ms (do pomiaru, M2.7).
     pub gen_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokenizer_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_token_ids: Option<Vec<u32>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_token_ids: Option<Vec<u32>>,
 }
 
 /// Błąd po stronie node'a (np. model zajęty, model uśpiony).
@@ -173,8 +179,36 @@ mod tests {
             tokens_out: 5,
             ttft_ms: 1740,
             gen_ms: 230,
+            tokenizer_hash: None,
+            prompt_token_ids: None,
+            output_token_ids: None,
         });
         let back: PromptReply = serde_json::from_slice(&serde_json::to_vec(&r).unwrap()).unwrap();
         assert_eq!(r, back);
+    }
+
+    #[tokio::test]
+    async fn m11_cbor_roundtrip_z_tokenami_m1() {
+        use libp2p::request_response::Codec;
+        let mut codec = libp2p::request_response::cbor::codec::Codec::<PromptRequest, PromptReply>::default();
+        let protocol = libp2p::StreamProtocol::new(ProtokolPromptu.as_ref());
+        let reply = PromptReply::Ok(PromptResponse {
+            v: 1,
+            order_id: "order-123".into(),
+            job_id: "job-123".into(),
+            output: "test output".into(),
+            receipt: "{}".into(),
+            tokens_out: 42,
+            ttft_ms: 120,
+            gen_ms: 450,
+            tokenizer_hash: Some("sha256:tok_hash".into()),
+            prompt_token_ids: Some(vec![101, 102, 103]),
+            output_token_ids: Some(vec![201, 202, 203, 204]),
+        });
+        let mut buf = Vec::new();
+        codec.write_response(&protocol, &mut buf, reply.clone()).await.unwrap();
+        let mut slice = &buf[..];
+        let decoded: PromptReply = codec.read_response(&protocol, &mut slice).await.unwrap();
+        assert_eq!(reply, decoded);
     }
 }
