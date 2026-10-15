@@ -769,30 +769,68 @@ async fn odczytaj_realny_ctx(model_url: &str, prompt: &str) -> Option<u32> {
 }
 
 /// Precyzja z nazwy modelu (`model_hash` deklaruje operator, więc to i tak jego deklaracja).
-/// Dopasowujemy CAŁE tokeny nazwy (`gemma-4-bf16-q4_0` -> `gemma`,`4`,`bf16`,`q4`,`0`), nie
-/// podciągi — inaczej `f16` w hashu hex dałoby fałszywe trafienie. Kwantyzacja wygrywa z formatem
-/// bazowym (`bf16-q4_0` to wagi int4). Kwantyzacje całkowitoliczbowe NIE są fp8/fp4, a nazwa bez
-/// znacznika daje `Unknown` — podpisany receipt nie może zgadywać.
+/// Podpisany receipt nie może zgadywać, więc reguła jest zachowawcza:
+/// - całe tokeny nazwy (`gemma-bf16-iq4_xs` -> `gemma`,`bf16`,`iq4`,`xs`), nigdy podciągi z hashy;
+/// - rodziny kwantyzacji po prefiksie: `q4…`/`iq4…` (GGUF), `w4a…`/`w8a…`, `fp8…`, `fp4`/`nvfp4`/`mxfp4`;
+/// - JAKIKOLWIEK znacznik kwantyzacji blokuje spadek do formatu bazowego (`bf16-iq4_xs` to nie bf16);
+/// - sprzeczne znaczniki albo szerokość spoza enuma (Q5, Q6…) -> `Unknown`;
+/// - AWQ/GPTQ to słaby znacznik (domyślnie int4), ustępuje jawnemu `8bit`/`int8`.
 pub(crate) fn wykryj_precyzje(model_hash: &str) -> Precision {
     let n = model_hash.to_ascii_lowercase();
     let tokeny: Vec<&str> = n.split(|c: char| !c.is_ascii_alphanumeric()).filter(|t| !t.is_empty()).collect();
-    let ma = |znaczniki: &[&str]| tokeny.iter().any(|t| znaczniki.contains(t));
-    if ma(&["fp4", "nvfp4", "mxfp4"]) {
-        Precision::Fp4
-    } else if ma(&["fp8"]) {
-        Precision::Fp8
-    } else if ma(&["q8", "int8", "w8a8", "8bit"]) {
-        Precision::Int8
-    } else if ma(&["q4", "int4", "awq", "gptq", "4bit"]) {
-        Precision::Int4
-    } else if ma(&["bf16"]) {
-        Precision::Bf16
-    } else if ma(&["fp16", "f16"]) {
-        Precision::Fp16
-    } else if ma(&["fp32", "f32"]) {
-        Precision::Fp32
-    } else {
-        Precision::Unknown
+    // Bity z tokenu GGUF `q<N>…` / `iq<N>…` (q4_k_m -> q4, q4km, iq4_xs -> iq4).
+    let bity_gguf = |t: &str| -> Option<u32> {
+        let r = t.strip_prefix('i').unwrap_or(t).strip_prefix('q')?;
+        r.chars().next()?.to_digit(10)
+    };
+    let mut jawne: Vec<Precision> = Vec::new();
+    let mut nieobslugiwana = false;
+    let mut slaby_int4 = false;
+    for t in &tokeny {
+        let p = if matches!(*t, "fp4" | "nvfp4" | "mxfp4") {
+            Some(Precision::Fp4)
+        } else if t.starts_with("fp8") {
+            Some(Precision::Fp8)
+        } else if matches!(*t, "int8" | "8bit") || t.starts_with("w8a") {
+            Some(Precision::Int8)
+        } else if matches!(*t, "int4" | "4bit") || t.starts_with("w4a") {
+            Some(Precision::Int4)
+        } else if let Some(b) = bity_gguf(t) {
+            match b {
+                8 => Some(Precision::Int8),
+                4 => Some(Precision::Int4),
+                _ => {
+                    nieobslugiwana = true;
+                    None
+                }
+            }
+        } else {
+            if matches!(*t, "awq" | "gptq") {
+                slaby_int4 = true;
+            }
+            None
+        };
+        if let Some(p) = p {
+            if !jawne.contains(&p) {
+                jawne.push(p);
+            }
+        }
+    }
+    if nieobslugiwana || jawne.len() > 1 {
+        return Precision::Unknown;
+    }
+    if let Some(p) = jawne.first() {
+        return *p;
+    }
+    if slaby_int4 {
+        return Precision::Int4;
+    }
+    let baza = |z: &[&str]| tokeny.iter().any(|t| z.contains(t));
+    match (baza(&["bf16"]), baza(&["fp16", "f16"]), baza(&["fp32", "f32"])) {
+        (true, false, false) => Precision::Bf16,
+        (false, true, false) => Precision::Fp16,
+        (false, false, true) => Precision::Fp32,
+        _ => Precision::Unknown,
     }
 }
 
@@ -1205,6 +1243,18 @@ mod testy_receiptu {
         assert_eq!(wykryj_precyzje("gemma-4-26b-bf16-q4_0"), Precision::Int4);
         assert_eq!(wykryj_precyzje("llama-fp16-awq"), Precision::Int4);
         assert_eq!(wykryj_precyzje("model-gptq-8bit"), Precision::Int8);
+        // rodziny GGUF i zapisy zwarte; kwantyzacja blokuje spadek do formatu bazowego
+        assert_eq!(wykryj_precyzje("model-bf16-iq4_xs"), Precision::Int4);
+        assert_eq!(wykryj_precyzje("llama-q4km"), Precision::Int4);
+        assert_eq!(wykryj_precyzje("qwen-q8_k"), Precision::Int8);
+        assert_eq!(wykryj_precyzje("model-w4a16"), Precision::Int4);
+        assert_eq!(wykryj_precyzje("model-w8a8"), Precision::Int8);
+        assert_eq!(wykryj_precyzje("model-fp8e4m3"), Precision::Fp8);
+        assert_eq!(wykryj_precyzje("model-bf16-q6_k"), Precision::Unknown);
+        // sprzeczne znaczniki (wagi int4 + fp8 KV) — nie zgadujemy
+        assert_eq!(wykryj_precyzje("llama-int4-fp8"), Precision::Unknown);
+        // dwa formaty bazowe naraz — też nie zgadujemy
+        assert_eq!(wykryj_precyzje("merge-bf16-fp16"), Precision::Unknown);
         // całe tokeny, nie podciągi: hex z „f16”/„bf16”/„f32” w środku to nie precyzja
         assert_eq!(wykryj_precyzje("model@0a8f16c3bf16e9f32d"), Precision::Unknown);
         assert_eq!(wykryj_precyzje("qwen2.5-32b-instruct"), Precision::Unknown);
