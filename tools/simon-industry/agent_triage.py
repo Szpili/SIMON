@@ -619,7 +619,7 @@ def selfcheck():
         rejected += 1
 
     assert rejected == 11, f"Expected 11 ceiling rejections, got {rejected}"
-    print("  [Pass 5/5] M7 ceiling boundary rejections OK ({rejected}/11 violations blocked)")
+    print(f"  [Pass 5/5] M7 ceiling boundary rejections OK ({rejected}/11 violations blocked)")
 
     # 6. Simulate deterministic multi-turn tool calling loop
     sim_msgs = [
