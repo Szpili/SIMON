@@ -820,6 +820,7 @@ mod tests {
             expect_model: None,
             tokens: None,
             audyt: None,
+            expect_signer: None,
         }
     }
 
