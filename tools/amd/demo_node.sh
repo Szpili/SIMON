@@ -190,6 +190,7 @@ EOF
     "$NAME" "$PEER" "$MODEL" "$LPORT" "$NODE_ID" "$LABEL")"
   systemctl --user restart simon-monitor 2>/dev/null || true
   sleep 3
+  for _ in $(seq 1 18); do ss -ltn | grep -q ":$LPORT " && break; sleep 10; done   # tunnel up (ufw may delay it)
   echo "-- smoke test through the public gateway --"
   curl -s -m 300 127.0.0.1:${SIMON_API_PORT:-18600}/v1/chat/completions -H 'Content-Type: application/json' \
     -d "{\"model\":\"$MODEL\",\"max_tokens\":64,\"messages\":[{\"role\":\"user\",\"content\":\"In one sentence: what does a signed inference receipt prove?\"}]}" \
