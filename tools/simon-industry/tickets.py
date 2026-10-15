@@ -120,10 +120,13 @@ def main():
     ap.add_argument("--csv", required=True); ap.add_argument("--gateway", default="http://127.0.0.1:18600")
     ap.add_argument("--model", required=True, action="append", help="repeat to spread the batch over node groups")
     ap.add_argument("--n", type=int, default=0, help="only the first N records of the sample (0 = all)")
+    ap.add_argument("--pick", type=int, action="append", default=[],
+                    help="only these sample indexes (mod sample size), e.g. a demo heartbeat")
     ap.add_argument("--max-tokens", type=int, default=600); ap.add_argument("--out", required=True)
     a = ap.parse_args()
     rows = list(csv.DictReader(open(a.csv, encoding="utf-8-sig")))
-    todo = sample(rows)[: a.n or None]
+    smp = sample(rows)
+    todo = [smp[k % len(smp)] for k in a.pick] if a.pick else smp[: a.n or None]
     for i, r in enumerate(todo):
         f = rules.features(r); finds = rules.findings(f); rid = r[next(k for k in r if k.endswith("UDI"))]
         rec = {"record": rid, "product": r["Product ID"], "label": {k: int(r[k]) for k in ("TWF", "HDF", "PWF", "OSF", "RNF")},
