@@ -538,6 +538,12 @@ mod testy {
             waliduj_json(&s, r#"{"tool":"status","args":"x"}"#),
             Err(Odmowa::ZlyTyp { .. })
         ));
+        assert!(matches!(
+            waliduj_json(&s, r#"{"tool":"status","args":[]}"#),
+            Err(Odmowa::ZlyTyp { .. })
+        ));
+        // jawne `null` = pominięte `args`
+        assert!(waliduj_json(&s, r#"{"tool":"status","args":null}"#).is_ok());
     }
 
     #[test]
