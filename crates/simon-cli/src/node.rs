@@ -769,25 +769,28 @@ async fn odczytaj_realny_ctx(model_url: &str, prompt: &str) -> Option<u32> {
 }
 
 /// Precyzja z nazwy modelu (`model_hash` deklaruje operator, więc to i tak jego deklaracja).
-/// Kwantyzacje całkowitoliczbowe NIE są fp8/fp4; nazwa bez znacznika daje `Unknown` —
-/// podpisany receipt nie może zgadywać.
+/// Dopasowujemy CAŁE tokeny nazwy (`gemma-4-bf16-q4_0` -> `gemma`,`4`,`bf16`,`q4`,`0`), nie
+/// podciągi — inaczej `f16` w hashu hex dałoby fałszywe trafienie. Kwantyzacja wygrywa z formatem
+/// bazowym (`bf16-q4_0` to wagi int4). Kwantyzacje całkowitoliczbowe NIE są fp8/fp4, a nazwa bez
+/// znacznika daje `Unknown` — podpisany receipt nie może zgadywać.
 pub(crate) fn wykryj_precyzje(model_hash: &str) -> Precision {
     let n = model_hash.to_ascii_lowercase();
-    let ma = |znaczniki: &[&str]| znaczniki.iter().any(|z| n.contains(z));
-    if ma(&["bf16"]) {
-        Precision::Bf16
-    } else if ma(&["fp32", "f32"]) {
-        Precision::Fp32
-    } else if ma(&["fp16", "f16"]) {
-        Precision::Fp16
+    let tokeny: Vec<&str> = n.split(|c: char| !c.is_ascii_alphanumeric()).filter(|t| !t.is_empty()).collect();
+    let ma = |znaczniki: &[&str]| tokeny.iter().any(|t| znaczniki.contains(t));
+    if ma(&["fp4", "nvfp4", "mxfp4"]) {
+        Precision::Fp4
     } else if ma(&["fp8"]) {
         Precision::Fp8
-    } else if ma(&["fp4"]) {
-        Precision::Fp4
-    } else if ma(&["q8", "int8", "w8a8"]) {
+    } else if ma(&["q8", "int8", "w8a8", "8bit"]) {
         Precision::Int8
-    } else if ma(&["q4", "int4", "awq", "gptq"]) {
+    } else if ma(&["q4", "int4", "awq", "gptq", "4bit"]) {
         Precision::Int4
+    } else if ma(&["bf16"]) {
+        Precision::Bf16
+    } else if ma(&["fp16", "f16"]) {
+        Precision::Fp16
+    } else if ma(&["fp32", "f32"]) {
+        Precision::Fp32
     } else {
         Precision::Unknown
     }
@@ -1198,6 +1201,13 @@ mod testy_receiptu {
         assert_eq!(wykryj_precyzje("standard-model"), Precision::Unknown);
         assert_eq!(wykryj_precyzje("deepseek-v4-flash-amd"), Precision::Unknown);
         assert_eq!(wykryj_precyzje("llama-q5_k_m"), Precision::Unknown);
+        // kwantyzacja wygrywa z formatem bazowym w nazwie
+        assert_eq!(wykryj_precyzje("gemma-4-26b-bf16-q4_0"), Precision::Int4);
+        assert_eq!(wykryj_precyzje("llama-fp16-awq"), Precision::Int4);
+        assert_eq!(wykryj_precyzje("model-gptq-8bit"), Precision::Int8);
+        // całe tokeny, nie podciągi: hex z „f16”/„bf16”/„f32” w środku to nie precyzja
+        assert_eq!(wykryj_precyzje("model@0a8f16c3bf16e9f32d"), Precision::Unknown);
+        assert_eq!(wykryj_precyzje("qwen2.5-32b-instruct"), Precision::Unknown);
         // serializacja: nazwy w receipcie
         assert_eq!(serde_json::to_string(&Precision::Int4).unwrap(), "\"int4\"");
         assert_eq!(serde_json::to_string(&Precision::Unknown).unwrap(), "\"unknown\"");
