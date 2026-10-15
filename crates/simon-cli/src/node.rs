@@ -460,15 +460,16 @@ fn cialo_zapytania(model: &str, req: &PromptRequest) -> Result<serde_json::Value
 /// `tool_calls` jest tu też sygnalizowana jako pusta (patrz wyżej).
 fn wyjscie(v: &serde_json::Value, chat: bool) -> (String, bool) {
     let msg = &v["choices"][0]["message"];
-    let surowy = msg["content"].as_str().unwrap_or("").trim();
+    let surowy = msg["content"].as_str().unwrap_or("");
     let narzedzia = msg
         .get("tool_calls")
         .filter(|t| t.as_array().is_some_and(|a| !a.is_empty()));
     if !chat {
-        let tekst = surowy.to_string();
+        let tekst = surowy.trim().to_string();
         return (tekst.clone(), tekst.is_empty());
     }
-    let tekst = surowy.to_string();
+    // Czat: treść bajt w bajt jak od modelu (bez trim) — tylko ocena pustki po trim.
+    let tekst = if surowy.trim().is_empty() { String::new() } else { surowy.to_string() };
     let mut m = serde_json::Map::new();
     m.insert(
         "content".into(),
