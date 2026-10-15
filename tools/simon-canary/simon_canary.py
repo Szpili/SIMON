@@ -26,11 +26,17 @@ Exit: 0 ok/warn, 2 fail, 3 backend unreachable (no verdict — not counted as co
 import argparse, concurrent.futures as cf, hashlib, json, os, subprocess, sys, time, urllib.request
 
 ANCHORS = [
-    ("The capital of France is", "Paris"), ("1, 2, 3, 4, 5, 6,", "7"),
+    ("The capital of France is", "Paris"), ("1, 2, 3, 4, 5, 6,", "7|Seven"),
     ("Monday, Tuesday, Wednesday,", "Thursday"), ("The chemical symbol for water is", "H2O"),
     ("A, B, C, D, E,", "F"), ("The largest planet in the solar system is", "Jupiter"),
     ("January, February, March,", "April"), ("The opposite of hot is", "cold"),
 ]
+# Chat models (Gemma 4 and other instruction-tuned models) go through /v1/chat/completions with the same
+# facts asked as questions: raw completions without the chat template degenerate on them (measured).
+QUESTIONS = ["What is the capital of France?", "What number comes after 6?", "Which day comes after Wednesday?",
+             "What is the chemical formula of water?", "Which letter comes after E?",
+             "What is the largest planet in the solar system?", "Which month comes after March?",
+             "What is the opposite of hot?"]
 FAIL_AT = 3  # misses; honest runs measured 0 misses in 16/16
 PROMPTS_SHA = hashlib.sha256(json.dumps(ANCHORS).encode()).hexdigest()[:16]  # which probe set produced a verdict
 
@@ -39,11 +45,24 @@ def verdict(misses):
     return "ok" if misses == 0 else ("warn" if misses < FAIL_AT else "fail")
 
 
+SUBSCRIPT = str.maketrans("₀₁₂₃₄₅₆₇₈₉", "0123456789")
+
+
 def hit(text, anchor):
-    return text.strip().strip('"\'').startswith(anchor)
+    t = text.translate(SUBSCRIPT).replace("*", "").replace("_", "").strip().strip('"\'').lstrip("#> ").strip()
+    return any(t.lower().startswith(a.lower()) for a in anchor.split("|"))  # "7|Seven": either spelling
 
 
-def ask(backend, model, prompt):
+def ask(backend, model, prompt, chat=False):
+    if chat:
+        body = {"messages": [{"role": "user", "content": prompt + " Answer with one word only."}],
+                "max_tokens": 8, "temperature": 0, "cache_prompt": False}
+        if model:
+            body["model"] = model
+        req = urllib.request.Request(backend.rstrip("/") + "/v1/chat/completions", data=json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=120) as r:
+            return json.loads(r.read())["choices"][0]["message"].get("content") or ""
     body = {"prompt": prompt, "max_tokens": 8, "temperature": 0,
             "cache_prompt": False}  # llama.cpp: no KV reuse from before a flip; other servers ignore it
     if model:
@@ -62,13 +81,14 @@ def served_model(backend):
         return None
 
 
-def run(backend, model):
+def run(backend, model, chat=False):
+    prompts = QUESTIONS if chat else [p for p, _ in ANCHORS]
     with cf.ThreadPoolExecutor(len(ANCHORS)) as ex:
-        texts = list(ex.map(lambda pa: ask(backend, model, pa[0]), ANCHORS))
+        texts = list(ex.map(lambda p: ask(backend, model, p, chat), prompts))
     misses = [{"anchor": a, "got": t[:80]} for (_, a), t in zip(ANCHORS, texts) if not hit(t, a)]
     return {"verdict": verdict(len(misses)), "hits": len(ANCHORS) - len(misses), "of": len(ANCHORS),
             "misses": misses, "ts": time.time(), "backend": backend, "served_model": served_model(backend),
-            "prompts_sha": PROMPTS_SHA, "self_reported": True}
+            "prompts_sha": PROMPTS_SHA, "mode": "chat" if chat else "completion", "self_reported": True}
 
 
 def write_status(path, st):
@@ -82,6 +102,8 @@ def selfcheck():
     assert [verdict(m) for m in (0, 1, 2, 3, 8)] == ["ok", "warn", "warn", "fail", "fail"]
     assert hit(" Paris. The capital", "Paris") and hit(' "Jupiter"', "Jupiter")
     assert not hit(" in性质 oft", "Paris") and not hit(" and April are", "April")
+    assert hit(" **H₂O**.", "H2O") and hit("jupiter", "Jupiter") and len(QUESTIONS) == len(ANCHORS)
+    assert hit("Seven.", "7|Seven") and hit(" 7, 8", "7|Seven") and not hit(" 6 7", "7|Seven")
 
 
 def main():
@@ -91,11 +113,12 @@ def main():
     ap.add_argument("--model", default="", help="model name, if the server needs one (vLLM)")
     ap.add_argument("--status", default="", help="write the result here (JSON) for tools/simon-monitor")
     ap.add_argument("--on-fail", default="", help="shell command to run on a fail verdict, e.g. stop the node")
+    ap.add_argument("--chat", action="store_true", help="instruction-tuned model: ask the anchors as chat questions")
     a = ap.parse_args()
     try:
-        st = run(a.backend, a.model)
+        st = run(a.backend, a.model, a.chat)
         if st["verdict"] == "fail":
-            st = run(a.backend, a.model)  # confirm before acting: two fails in a row
+            st = run(a.backend, a.model, a.chat)  # confirm before acting: two fails in a row
             st["confirmed"] = st["verdict"] == "fail"
     except OSError as e:  # unreachable backend: no verdict, never reported as corruption
         st = {"verdict": "unreachable", "error": str(e)[:200], "ts": time.time()}

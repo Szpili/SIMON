@@ -172,7 +172,8 @@ REMOTE
 Description=SSH tunnel to the SIMON MI300X node '$NAME' ($IP)
 [Service]
 ExecStart=/usr/bin/ssh -i $SSH_KEY -N -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 \
-  -o ServerAliveCountMax=3 -o StrictHostKeyChecking=accept-new -L 127.0.0.1:$LPORT:127.0.0.1:9001 -L 127.0.0.1:$((LPORT + 1000)):127.0.0.1:9101 root@$IP
+  -o ServerAliveCountMax=3 -o StrictHostKeyChecking=accept-new -L 127.0.0.1:$LPORT:127.0.0.1:9001 -L 127.0.0.1:$((LPORT + 1000)):127.0.0.1:9101 \
+  -L 127.0.0.1:$((LPORT + 2000)):127.0.0.1:8000 root@$IP
 Restart=always
 # the image rate-limits ssh (ufw limit): fast retries keep re-arming the block
 RestartSec=30
