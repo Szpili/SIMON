@@ -68,13 +68,14 @@ def selfcheck():
 if __name__ == "__main__":
     selfcheck()
     import csv, sys
-    rows = list(csv.DictReader(open(sys.argv[1], encoding="utf-8-sig")))
-    for mode in ("TWF", "HDF", "PWF", "OSF", "RNF"):
-        lab = [r for r in rows if r[mode] == "1"]
-        hit = [r for r in lab if mode in [x["mode"] for x in findings(features(r))]]
-        flagged = [r for r in rows if mode in [x["mode"] for x in findings(features(r))]]
-        print(f"{mode}: labelled {len(lab)}, rule recall {len(hit)}/{len(lab)}, rule fires on {len(flagged)} records")
-    anyflag = [r for r in rows if findings(features(r))]
-    fail = [r for r in rows if r["Machine failure"] == "1"]
-    print(f"any rule fires: {len(anyflag)} records; machine failures caught: "
-          f"{sum(1 for r in fail if findings(features(r)))}/{len(fail)}")
+    if len(sys.argv) > 1:
+        rows = list(csv.DictReader(open(sys.argv[1], encoding="utf-8-sig")))
+        for mode in ("TWF", "HDF", "PWF", "OSF", "RNF"):
+            lab = [r for r in rows if r[mode] == "1"]
+            hit = [r for r in lab if mode in [x["mode"] for x in findings(features(r))]]
+            flagged = [r for r in rows if mode in [x["mode"] for x in findings(features(r))]]
+            print(f"{mode}: labelled {len(lab)}, rule recall {len(hit)}/{len(lab)}, rule fires on {len(flagged)} records")
+        anyflag = [r for r in rows if findings(features(r))]
+        fail = [r for r in rows if r["Machine failure"] == "1"]
+        print(f"any rule fires: {len(anyflag)} records; machine failures caught: "
+              f"{sum(1 for r in fail if findings(features(r)))}/{len(fail)}")
