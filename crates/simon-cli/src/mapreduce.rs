@@ -49,6 +49,44 @@ pub fn podziel_na_kawalki(tekst: &str, budzet_znakow: usize) -> Vec<String> {
         .collect()
 }
 
+/// Szacuje liczbę tokenów dla danego tekstu bez konieczności uruchamiania pełnego tokenizera.
+///
+/// Uwzględnia wielobajtowe znaki UTF-8 oraz granice słów:
+/// `tekst.chars().count().div_ceil(4).max(tekst.split_whitespace().count())`.
+#[allow(dead_code)]
+pub fn oszacuj_tokeny(tekst: &str) -> usize {
+    if tekst.is_empty() {
+        return 0;
+    }
+    tekst
+        .chars()
+        .count()
+        .div_ceil(4)
+        .max(tekst.split_whitespace().count())
+}
+
+/// Pakuje `elementy` w kolejne grupy wg budżetu tokenów (oszacowanego przez `oszacuj_tokeny`).
+#[allow(dead_code)]
+pub fn grupuj_do_budzetu_tokenow(elementy: &[String], budzet_tokenow: usize) -> Vec<Vec<String>> {
+    let mut grupy: Vec<Vec<String>> = Vec::new();
+    let mut biezaca: Vec<String> = Vec::new();
+    let mut biezace_tokeny = 0usize;
+
+    for el in elementy {
+        let tok = oszacuj_tokeny(el);
+        if !biezaca.is_empty() && biezace_tokeny + tok > budzet_tokenow {
+            grupy.push(std::mem::take(&mut biezaca));
+            biezace_tokeny = 0;
+        }
+        biezace_tokeny += tok;
+        biezaca.push(el.clone());
+    }
+    if !biezaca.is_empty() {
+        grupy.push(biezaca);
+    }
+    grupy
+}
+
 /// Pakuje `elementy` w kolejne grupy, których SUMA długości (znaków) mieści
 /// się w `budzet_znakow`, metodą first-fit sekwencyjnie (bez przestawiania
 /// kolejności — kolejność wyników cząstkowych ma znaczenie dla spójności
@@ -157,5 +195,64 @@ mod tests {
         let grupy = grupuj_do_budzetu(&elementy, 4000); // budżet jak jeden node
         assert!(grupy.len() > 1, "72 elementy po 300 znaków MUSZĄ się podzielić na >1 grupę przy budżecie 4000");
         assert!(grupy.len() < elementy.len(), "grupowanie musi redukować liczbę jednostek, inaczej drzewo nie kończy się");
+    }
+
+    #[test]
+    fn test_oszacuj_tokeny_pusty_i_prosty_tekst() {
+        assert_eq!(oszacuj_tokeny(""), 0);
+        // "test" (4 znaki, 1 słowo) -> 4.div_ceil(4) = 1, words = 1 -> 1
+        assert_eq!(oszacuj_tokeny("test"), 1);
+        // "a b c d e" (9 znaków, 5 słów) -> 9.div_ceil(4) = 3, max(5) = 5
+        assert_eq!(oszacuj_tokeny("a b c d e"), 5);
+        // Długie słowo bez spacji: 19 znaków, 1 słowo -> 19.div_ceil(4) = 5, max(1) = 5
+        assert_eq!(oszacuj_tokeny("superkalifragilisti"), 5);
+    }
+
+    #[test]
+    fn test_oszacuj_tokeny_wielobajtowe_utf8_i_slowa() {
+        // Polskie znaki wielobajtowe: "Zażółć gęślą jaźń"
+        // 17 znaków char (mimo 31 bajtów w UTF-8!), 3 słowa.
+        // 17.div_ceil(4) = 5, words = 3 -> 5.
+        let tekst = "Zażółć gęślą jaźń";
+        assert_eq!(oszacuj_tokeny(tekst), 5);
+    }
+
+    #[test]
+    fn test_podziel_na_kawalki_wielobajtowe_utf8_i_emojis() {
+        let tekst = "🚀zażółć🌟gęślą✨jaźń";
+        let kawalki = podziel_na_kawalki(tekst, 3);
+        assert_eq!(
+            kawalki.concat(),
+            tekst,
+            "roundtrip z emoji i polskimi znakami musi być bezstratny"
+        );
+        for k in &kawalki {
+            assert!(
+                k.chars().count() <= 3,
+                "każdy kawałek musi mieć co najwyżej 3 znaki"
+            );
+        }
+    }
+
+    #[test]
+    fn test_grupuj_do_budzetu_wielobatchowe_zachowanie_kolejnosci() {
+        // 25 elementów po 10 znaków = 250 znaków. Budżet 35 -> powstaje wiele grup,
+        // a ich spłaszczenie musi w 100% zachować sekwencję 0..25.
+        let elementy: Vec<String> = (0..25).map(|i| format!("batch_{i:04}")).collect();
+        let grupy = grupuj_do_budzetu(&elementy, 35);
+        assert!(grupy.len() > 1);
+        let splaszczone: Vec<String> = grupy.into_iter().flatten().collect();
+        assert_eq!(splaszczone, elementy);
+    }
+
+    #[test]
+    fn test_grupuj_do_budzetu_tokenow_zachowuje_kolejnosc() {
+        let elementy: Vec<String> = (0..20)
+            .map(|i| format!("kawałek numer {i} z tekstem"))
+            .collect();
+        let grupy = grupuj_do_budzetu_tokenow(&elementy, 10);
+        assert!(grupy.len() > 1);
+        let splaszczone: Vec<String> = grupy.into_iter().flatten().collect();
+        assert_eq!(splaszczone, elementy);
     }
 }
