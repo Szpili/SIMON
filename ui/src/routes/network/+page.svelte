@@ -64,7 +64,10 @@
 
 <section class="mx-auto max-w-6xl px-4 py-8">
   <div class="flex flex-wrap items-baseline justify-between gap-3">
-    <h1 class="mono text-xl font-bold tracking-wider">Network</h1>
+    <div class="flex flex-wrap items-center gap-3">
+      <h1 class="mono text-xl font-bold tracking-wider">Network</h1>
+      <span class="mono border border-line bg-panel px-2 py-0.5 text-xs text-neutral-400">SIMULATED P2P TOPOLOGY (8-NODE REFERENCE MESH)</span>
+    </div>
     {#if snap}
       <p class="mono text-xs text-neutral-500">{snap.totals.jobs} jobs · {snap.totals.completion_tokens} tokens · updated {ago(snap.generated_at)}</p>
     {/if}
