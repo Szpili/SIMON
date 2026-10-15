@@ -347,9 +347,16 @@ async fn policz(
         Err(e) => return blad(req, "json", &format!("zła odpowiedź modelu: {e}")),
     };
 
-    let (output, byl_reasoning) = wyjscie(&v, req.chat);
-    if byl_reasoning {
-        println!("[node] UWAGA: content pusty, użyłem pola reasoning (limit tokenów?)");
+    let (output, tresc_pusta) = wyjscie(&v, req.chat);
+    if tresc_pusta {
+        // NAPRAWA (audyt red-team Filipa, CWE-200): tu był fallback na
+        // `reasoning`/`reasoning_content`, czyli wewnętrzne rozumowanie modelu
+        // podpisywane jako ODPOWIEDŹ klienta. Rozumowanie nie jest odpowiedzią —
+        // pusta treść wraca jako błąd, NIE jako podpisany receipt z czymś innym.
+        let finish = v["choices"][0]["finish_reason"].as_str().unwrap_or("nieznany");
+        return blad(req, "pusta_tresc", &format!(
+            "model nie zwrócił treści odpowiedzi (finish_reason={finish}); limit tokenów mógł zostać \
+             zużyty na wewnętrzne rozumowanie (reasoning), które nie jest odpowiedzią"));
     }
 
     let tokens_out = v["usage"]["completion_tokens"].as_u64().unwrap_or(0) as u32;
@@ -376,9 +383,8 @@ async fn policz(
         tokens_out,
         output.len()
     );
-    if output.is_empty() {
-        eprintln!("[node] UWAGA: puste wyjście mimo {tokens_out} tokenów — sprawdź limit `max_tokens`");
-    }
+    // Pusta treść już wraca błędem powyżej (`pusta_tresc`) — tu `output` zawsze
+    // ma coś do podpisania (tekst w trybie tekstowym, JSON wiadomości w czacie).
 
     // Receipt PRZED przeniesieniem `output` — podpisujemy dokladnie ten tekst,
     // ktory zaraz odeslemy.
@@ -437,52 +443,48 @@ fn cialo_zapytania(model: &str, req: &PromptRequest) -> Result<serde_json::Value
     Ok(body)
 }
 
-/// Co node podpisuje (`output`) + czy treść przyszła z pola reasoning.
+/// Co node podpisuje (`output`) + czy treść wynikowa jest PUSTA (sygnał dla
+/// wołającego: odpowiedz błędem, nie podpisanym receiptem).
 ///
-/// Tryb tekstowy: `content`, a gdy pusty — `reasoning` (qwen3.8 i inne modele
-/// rozumujące potrafią zużyć wszystkie tokeny na rozumowanie), żeby odpowiedź
-/// nigdy nie była pusta bez powodu.
+/// NAPRAWA (audyt red-team Filipa, CWE-200): tu był fallback `content` pusty
+/// -> `reasoning`/`reasoning_content` w trybie tekstowym, czyli WEWNĘTRZNE
+/// rozumowanie modelu (qwen3.8 i inne modele rozumujące potrafią zużyć cały
+/// budżet tokenów na rozumowanie) podpisywane jako ODPOWIEDŹ klienta. Receipt
+/// wiąże podpis z treścią — podpisanie reasoning jako `output` fałszywie
+/// przedstawia je jako sprawdzony wynik. Pusta treść wraca teraz jako błąd
+/// (`pusta_tresc` w `policz`), nigdy jako podstawiony tekst.
 ///
 /// Tryb czatu: JSON wiadomości `{content, tool_calls?, finish_reason}`. Receipt
 /// wiąże więc nazwy i argumenty narzędzi, a `finish_reason` nie da udawać, że
-/// ucięte w połowie argumenty to kompletne wywołanie.
+/// ucięte w połowie argumenty to kompletne wywołanie. Treść pusta + brak
+/// `tool_calls` jest tu też sygnalizowana jako pusta (patrz wyżej).
 fn wyjscie(v: &serde_json::Value, chat: bool) -> (String, bool) {
     let msg = &v["choices"][0]["message"];
-    let surowy = msg["content"].as_str().unwrap_or("");
-    let reasoning = msg["reasoning"]
-        .as_str()
-        .or(msg["reasoning_content"].as_str())
-        .unwrap_or("")
-        .trim();
+    let surowy = msg["content"].as_str().unwrap_or("").trim();
     let narzedzia = msg
         .get("tool_calls")
         .filter(|t| t.as_array().is_some_and(|a| !a.is_empty()));
-    let (tekst, byl_reasoning) = if !surowy.trim().is_empty() {
-        (if chat { surowy.to_string() } else { surowy.trim().to_string() }, false)
-    } else if !chat && !reasoning.is_empty() {
-        // Tylko tryb tekstowy. W czacie rozumowanie nie jest odpowiedzią:
-        // agent dostałby je jako treść asystenta, podpisaną przez node.
-        (reasoning.to_string(), true)
-    } else {
-        (String::new(), false)
-    };
     if !chat {
-        return (tekst, byl_reasoning);
+        let tekst = surowy.to_string();
+        return (tekst.clone(), tekst.is_empty());
     }
+    let tekst = surowy.to_string();
     let mut m = serde_json::Map::new();
     m.insert(
         "content".into(),
         if tekst.is_empty() && narzedzia.is_some() {
             serde_json::Value::Null
         } else {
-            serde_json::Value::String(tekst)
+            serde_json::Value::String(tekst.clone())
         },
     );
+    // Pusta treść + brak tool_calls = nic, co klient mógłby uznać za odpowiedź.
+    let pusta = tekst.is_empty() && narzedzia.is_none();
     if let Some(t) = narzedzia {
         m.insert("tool_calls".into(), t.clone());
     }
     m.insert("finish_reason".into(), v["choices"][0]["finish_reason"].clone());
-    (serde_json::Value::Object(m).to_string(), byl_reasoning)
+    (serde_json::Value::Object(m).to_string(), pusta)
 }
 
 /// C: odczytuje od backendu DWA fakty o node: `id` modelu i `max_model_len`.
@@ -969,9 +971,27 @@ mod testy_czatu {
         assert_eq!(serde_json::from_str::<serde_json::Value>(&wyjscie(&v2, true).0).unwrap()["finish_reason"], "length");
         // tryb tekstowy: sam tekst, jak dotąd
         assert_eq!(wyjscie(&v2, false).0, "abc");
-        // rozumowanie: w trybie tekstowym zastępuje pustą treść, w czacie nigdy
+        // NAPRAWA (audyt red-team Filipa, CWE-200): rozumowanie NIGDY nie
+        // zastępuje pustej treści — ani w trybie tekstowym, ani w czacie.
+        // Pusta treść musi wrócić jako "pusta" (błąd u wołającego w `policz`),
+        // nie jako reasoning podstawiony za odpowiedź.
         let v3 = json!({"choices": [{"finish_reason": "length", "message": {"content": "", "reasoning": "myślę"}}]});
-        assert_eq!(wyjscie(&v3, false).0, "myślę");
-        assert_eq!(serde_json::from_str::<serde_json::Value>(&wyjscie(&v3, true).0).unwrap()["content"], "");
+        let (tekst3, pusta3) = wyjscie(&v3, false);
+        assert_eq!(tekst3, "", "reasoning nie może stać się podpisaną odpowiedzią");
+        assert!(pusta3, "pusta treść musi być zgłoszona jako pusta");
+        let (out3_chat, pusta3_chat) = wyjscie(&v3, true);
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&out3_chat).unwrap()["content"], "");
+        assert!(pusta3_chat, "pusta treść w czacie bez tool_calls jest też pusta");
+    }
+
+    #[test]
+    fn czat_z_narzedziami_nie_jest_pusty_mimo_content_null() {
+        // tool_calls to prawdziwa odpowiedź nawet bez `content` — nie wolno
+        // tego traktować jak "brak odpowiedzi" (patrz `pusta` w `wyjscie`).
+        let v = json!({"choices": [{"finish_reason": "tool_calls", "message": {"content": null,
+            "tool_calls": [{"id": "c1", "type": "function",
+                            "function": {"name": "ls", "arguments": "{}"}}]}}]});
+        let (_, pusta) = wyjscie(&v, true);
+        assert!(!pusta, "tool_calls bez content to nie 'pusta odpowiedź'");
     }
 }
