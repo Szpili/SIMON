@@ -68,7 +68,8 @@ def log_job(model, r):
                        # same three claims as the API response: the gateway only logs jobs whose
                        # receipt it verified (signature + output binding); execution is not verified
                        "execution_status": "completed", "receipt_status": "signature_valid_output_bound",
-                       "verification_status": "not_performed", "proof_level": 0}) + "\n"
+                       "verification_status": "not_performed",
+                       "proof_level": (rc.get("wiazania") or {}).get("receipt_level", 0) if isinstance(rc, dict) else 0}) + "\n"
     with _joblog_lock, open(JOBLOG, "a") as f:  # one write per line under a lock: no torn lines
         f.write(line)
 
@@ -125,7 +126,7 @@ def completion(req, r, t0):
         "execution_status": "completed",
         "receipt_status": "signature_valid_output_bound",
         "verification_status": "not_performed",
-        "proof_level": 0,
+        "proof_level": (rc.get("wiazania") or {}).get("receipt_level", 0) if isinstance(rc, dict) else 0,
         "proof_note": "the node's key signed this exact output (text and tool calls) for this job; "
                       "this does NOT prove which model or precision ran",
         "receipt": rc,
@@ -160,7 +161,20 @@ class Handler(BaseHTTPRequestHandler):
     def _err(self, code, msg):
         self._send(code, {"error": {"message": msg, "type": "simon_error"}})
 
+    def _check_auth(self):
+        expected_key = os.environ.get("SIMON_API_KEY")
+        if not expected_key:
+            return True
+        auth_header = self.headers.get("Authorization", "")
+        if auth_header == f"Bearer {expected_key}":
+            return True
+        self._err(401, "unauthorized: invalid or missing Bearer token")
+        return False
+
     def do_GET(self):
+        if self.path.startswith("/v1/") or self.path.rstrip("/") in ("/v1/models", "/models"):
+            if not self._check_auth():
+                return
         if self.path.rstrip("/") in ("/v1/models", "/models"):
             return self._send(200, {"object": "list", "data": [
                 {"id": m, "object": "model", "owned_by": "simon", "model_hash": n[0]["model_hash"], "nodes": len(n)}
@@ -170,6 +184,9 @@ class Handler(BaseHTTPRequestHandler):
         self._err(404, "not found")
 
     def do_POST(self):
+        if self.path.startswith("/v1/") or self.path.rstrip("/") in ("/v1/chat/completions", "/chat/completions"):
+            if not self._check_auth():
+                return
         if self.path.rstrip("/") not in ("/v1/chat/completions", "/chat/completions"):
             return self._err(404, "not found")
         try:
