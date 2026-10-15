@@ -53,7 +53,7 @@ impl OknoNonce {
         }
         if let Some(m) = self.max {
             let granica = m.saturating_sub(self.okno);
-            self.widziane.retain(|n| *n >= granica);
+            self.widziane.retain(|n| *n > granica);
         }
         Ok(())
     }
@@ -90,7 +90,7 @@ impl Kubelek {
     /// Zezwala na jedną wiadomość albo zwraca `RateLimit`.
     pub fn zezwol(&mut self, teraz_us: u64) -> Result<(), BladProtokolu> {
         let dt = teraz_us.saturating_sub(self.ostatni_us) as f64 / 1_000_000.0;
-        self.ostatni_us = teraz_us;
+        self.ostatni_us = self.ostatni_us.max(teraz_us);
         self.dostepne = (self.dostepne + dt * self.tempo).min(self.pojemnosc);
         if self.dostepne >= 1.0 {
             self.dostepne -= 1.0;
@@ -138,6 +138,16 @@ mod testy {
         assert_eq!(k.zezwol(0), Err(BladProtokolu::RateLimit));
         // po 1 s wraca 1 token
         assert!(k.zezwol(1_000_000).is_ok());
+        assert_eq!(k.zezwol(1_000_000), Err(BladProtokolu::RateLimit));
+    }
+
+    #[test]
+    fn kubelek_odporny_na_skoki_czasu_wstecz() {
+        let mut k = Kubelek::nowy(1.0, 1.0, 1_000_000);
+        assert!(k.zezwol(1_000_000).is_ok());
+        // skok czasu wstecz
+        assert_eq!(k.zezwol(500_000), Err(BladProtokolu::RateLimit));
+        // czas wraca do 1_000_000 — nie zresetowało się do 500_000
         assert_eq!(k.zezwol(1_000_000), Err(BladProtokolu::RateLimit));
     }
 }
