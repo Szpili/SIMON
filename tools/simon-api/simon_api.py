@@ -69,7 +69,7 @@ def log_job(model, r):
                        # receipt it verified (signature + output binding); execution is not verified
                        "execution_status": "completed", "receipt_status": "signature_valid_output_bound",
                        "verification_status": "not_performed",
-                       "proof_level": 0}) + "\n"  # gateway checks signature + output binding, not M1
+                       "proof_level": int(r.get("poziom_dowodu") or 0)}) + "\n"  # level the agent VERIFIED (M1 only if checked on tokens)
     with _joblog_lock, open(JOBLOG, "a") as f:  # one write per line under a lock: no torn lines
         f.write(line)
 
@@ -126,7 +126,7 @@ def completion(req, r, t0):
         "execution_status": "completed",
         "receipt_status": "signature_valid_output_bound",
         "verification_status": "not_performed",
-        "proof_level": 0,  # the gateway does not check M1 bindings (no client tokens here)
+        "proof_level": int(r.get("poziom_dowodu") or 0),  # verified by the agent, not the node's declared receipt_level
         "proof_note": "the node's key signed this exact output (text and tool calls) for this job; "
                       "this does NOT prove which model or precision ran",
         "receipt": rc,

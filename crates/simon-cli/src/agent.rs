@@ -144,7 +144,7 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
     // `wyodrebnij_output` zwraca Err i CAŁY łańcuch przerywa się TUTAJ — etap B
     // nigdy nie zostanie wywołany z niezweryfikowanym wynikiem. To jest wprost
     // gwarancja kontroli przepływu Rust (`?`), nie dodatkowa logika do przetestowania.
-    let wynik_a = wyodrebnij_output(reply, &order.model_hash)?;
+    let wynik_a = wyodrebnij_output(reply, &order.model_hash, &order.nonce)?;
     println!("\n=== ETAP A (zweryfikowany) ===\n{wynik_a}");
 
     let then_model = opcje.then_model_hash.clone().unwrap_or_else(|| model_zadany.clone());
@@ -371,10 +371,10 @@ async fn uruchom_map_reduce(
                 continue;
             }
             let tekst_reduce = zbuduj_prompt_reduce(pytanie, &grupa);
-            let (_order, request) =
+            let (order, request) =
                 zbuduj_zlecenie(model, &tekst_reduce, opcje.fee, opcje.max_tokens, klucz, false)?;
             let (reply, _ms) = wyslij_i_czekaj(swarm, peer, request).await?;
-            nowy_poziom.push(wyodrebnij_output(reply, model)?);
+            nowy_poziom.push(wyodrebnij_output(reply, model, &order.nonce)?);
         }
         poziom = nowy_poziom;
     }
@@ -412,7 +412,7 @@ async fn wyslij_kawalek_z_retry(
 
     while let Some((fragment, glebokosc_zostala)) = kolejka.pop_front() {
         let tekst = zbuduj_prompt_map(pytanie, &fragment, i, n);
-        let (_order, request) = zbuduj_zlecenie(model, &tekst, fee, max_tokens, klucz, false)?;
+        let (order, request) = zbuduj_zlecenie(model, &tekst, fee, max_tokens, klucz, false)?;
         let (reply, _ms) = wyslij_i_czekaj(swarm, peer, request).await?;
         match reply {
             PromptReply::Blad(e) if e.kod == "ctx_ponad_limit" && glebokosc_zostala > 0 => {
@@ -443,7 +443,7 @@ async fn wyslij_kawalek_z_retry(
                 kolejka.push_front((b.iter().collect(), glebokosc_zostala - 1));
                 kolejka.push_front((a.iter().collect(), glebokosc_zostala - 1));
             }
-            _ => czesciowe.push(wyodrebnij_output(reply, model)?),
+            _ => czesciowe.push(wyodrebnij_output(reply, model, &order.nonce)?),
         }
     }
     Ok(czesciowe.join("\n"))
@@ -577,20 +577,13 @@ pub(crate) async fn wyslij_i_czekaj(
 /// Wyciąga `output` z odpowiedzi, weryfikując receipt (RULES #6: klient nie
 /// ufa node'owi). Używane przez map/reduce, gdzie nie potrzeba pełnego
 /// wydruku pomiaru M2.7 na KAŻDY kawałek — tylko wynik albo błąd.
-fn wyodrebnij_output(reply: PromptReply, oczekiwany_model: &str) -> Result<String, String> {
+fn wyodrebnij_output(reply: PromptReply, oczekiwany_model: &str, oczekiwany_nonce: &str) -> Result<String, String> {
     match reply {
         PromptReply::Blad(e) => Err(format!("node zwrócił błąd {}: {}", e.kod, e.opis)),
         PromptReply::Ok(r) => {
-            let rec = serde_json::from_str::<Receipt>(&r.receipt).ok();
             let m1_info = match (&r.tokenizer_hash, &r.prompt_token_ids, &r.output_token_ids) {
-                (Some(th), Some(pt), Some(ot)) => {
-                    let nonce = rec
-                        .as_ref()
-                        .and_then(|rc| rc.wiazania.as_ref())
-                        .map(|w| w.client_nonce.as_str())
-                        .unwrap_or("");
-                    Some((th.as_str(), nonce, pt.as_slice(), ot.as_slice()))
-                }
+                // nonce z NASZEGO zlecenia, nie z receiptu — inaczej wiązanie nonce niczego nie sprawdza
+                (Some(th), Some(pt), Some(ot)) => Some((th.as_str(), oczekiwany_nonce, pt.as_slice(), ot.as_slice())),
                 _ => None,
             };
             if !zweryfikuj_receipt(&r.receipt, &r.job_id, oczekiwany_model, Some(&r.output), m1_info) {
@@ -623,7 +616,9 @@ fn obsluz_odpowiedz(
         }
         PromptReply::Ok(r) => {
             let rec = serde_json::from_str::<Receipt>(&r.receipt).ok();
-            let poziom_dowodu = rec.as_ref().map(|x| x.poziom()).unwrap_or(0);
+            // Deklaracja node'a (receipt_level) to nie dowód: poziom 1 liczy się dopiero, gdy
+            // sami sprawdziliśmy wiązanie M1 na tokenach z odpowiedzi (niżej, zweryfikuj_receipt).
+            let poziom_deklarowany = rec.as_ref().map(|x| x.poziom()).unwrap_or(0);
             let m1_info = match (&r.tokenizer_hash, &r.prompt_token_ids, &r.output_token_ids) {
                 (Some(th), Some(pt), Some(ot)) => {
                     let nonce = oczekiwany_nonce
@@ -637,6 +632,7 @@ fn obsluz_odpowiedz(
             // M2.5.1: weryfikujemy wobec TEGO zlecenia (job_id + model), nie „jakiegokolwiek".
             let weryfikacja =
                 zweryfikuj_receipt(&r.receipt, &r.job_id, oczekiwany_model, Some(&r.output), m1_info);
+            let poziom_dowodu = poziom_sprawdzony(weryfikacja, m1_info.is_some(), poziom_deklarowany);
             if !weryfikacja {
                 eprintln!("[agent][diagnoza] oczekiwano job_id={} model={}", r.job_id, oczekiwany_model);
                 eprintln!("[agent][diagnoza] odebrany receipt: {}", r.receipt);
@@ -720,6 +716,7 @@ fn obsluz_odpowiedz(
                     "output": r.output,
                     "job_id": r.job_id,
                     "poziom_dowodu": poziom_dowodu,
+                    "poziom_deklarowany_przez_node": poziom_deklarowany,
                     "ttft_ms": r.ttft_ms,
                     "gen_ms": r.gen_ms,
                     "siec_ms": siec_ms,
@@ -773,6 +770,12 @@ fn obsluz_odpowiedz(
 ///   3. `job_id` i `model_hash` zgadzają się z tym, o co prosiliśmy,
 ///   4. czy receipt opisuje TEN tekst (`zgodny_z_wyjsciem`),
 ///   5. Wiązanie M1 (jeśli przekazano wiązania M1 i receipt ma poziom >= 1): `zweryfikuj_m1`.
+/// Poziom dowodu, który KLIENT sprawdził: 1 tylko gdy receipt przeszedł weryfikację, deklaruje M1
+/// i dostaliśmy tokeny, na których M1 faktycznie sprawdziliśmy. Deklaracja bez tokenów = 0.
+fn poziom_sprawdzony(weryfikacja: bool, m1_sprawdzone: bool, deklarowany: u8) -> u8 {
+    u8::from(weryfikacja && m1_sprawdzone && deklarowany >= 1)
+}
+
 fn zweryfikuj_receipt(
     receipt_json: &str,
     oczekiwany_job_id: &str,
@@ -817,6 +820,18 @@ fn _rejestr() -> RejestrKoordynatorow {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn poziom_dowodu_to_sprawdzony_nie_deklarowany() {
+        // node deklaruje M1, ale nie odesłał tokenów -> niczego nie sprawdziliśmy -> 0
+        assert_eq!(super::poziom_sprawdzony(true, false, 1), 0);
+        // tokeny są, M1 sprawdzone, receipt OK -> 1
+        assert_eq!(super::poziom_sprawdzony(true, true, 1), 1);
+        // weryfikacja padła -> 0 niezależnie od deklaracji
+        assert_eq!(super::poziom_sprawdzony(false, true, 1), 0);
+        // receipt poziomu 0 -> 0
+        assert_eq!(super::poziom_sprawdzony(true, true, 0), 0);
+    }
+
     use super::*;
 
     #[test]
