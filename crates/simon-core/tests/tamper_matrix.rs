@@ -134,6 +134,19 @@ fn stary_receipt_to_authorship_bez_bindingu() {
 }
 
 #[test]
+fn zweryfikuj_m1_odrzuca_niepodpisany_receipt() {
+    let (bazowy, _) = bazowy_podpisany();
+    let mut unsigned = bazowy.clone();
+    unsigned.signature = None;
+    assert!(
+        unsigned
+            .zweryfikuj_m1("tokhash", "nonce-abc", &[1, 2, 3, 4], &[5, 6, 7])
+            .is_err(),
+        "niepodpisany receipt nie może przejść zweryfikuj_m1"
+    );
+}
+
+#[test]
 fn grant_double_use_expired_zly_parametr() {
     let op = Keypair::from_seed(&[7u8; 32]);
     let pk = op.public().to_hex();
