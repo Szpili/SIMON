@@ -27,19 +27,20 @@ OpenAI-compatible API.
 1. Deterministic rules (the published physics of the AI4I 2020 milling-machine dataset) flag the risk and the
    failure mode. The language model never decides it.
 2. Gemma 4 26B-A4B drafts the technician ticket as JSON from the rule findings only: title, summary, and
-   inspection steps picked by ID from the plant's fixed catalog. It never writes a step itself.
+   inspection steps picked by ID from the plant's fixed catalog. It never writes a step itself. Hosted on the plant's local
+   RTX 3090 (QAT q4_0, llama.cpp, 61.8 tok/s) or on an AMD Instinct MI300X (BF16, vLLM 0.27.1 on ROCm, 199.1 tok/s, 8/8 CANARY-7 pass).
 3. Each ticket is checked: exact fields, failure modes and urgency equal to the rules, steps from the catalog,
    short free text with no new number, link, role marker or urgency word, marked for human review. A ticket
    with any problem is held for a person, not published. A stress corpus of these attacks runs in CI.
 4. The GPU node signs the exact ticket. The /industry page re-checks every receipt in the browser.
 
-Result on a predeclared, stratified sample: 14 of 15 tickets published and 1 held (its summary escalated the
-urgency the rules had set), median 1.6 s per ticket, all receipts valid. Labelled failures the rules miss are shown as misses, not hidden.
+Result on a predeclared, stratified sample (`docs/industry/run-catalog-3090-mi300x-2026-10-15.jsonl`): 14 of 15 tickets published and 1 held (its summary escalated the
+urgency the rules had set), median 1.6 s per ticket (1.5 s on local RTX 3090, 2.5 s over WAN on AMD MI300X), all receipts valid (8 written on RTX 3090, 7 on MI300X). Labelled failures the rules miss are shown as misses, not hidden.
 
-**AMD.** Gemma 4 runs on an AMD Instinct MI300X (vLLM 0.27.1, ROCm, AMD Developer Cloud) as a SIMON node next to
-the plant's RTX 3090. Measured on the MI300X: one card sustained 64 concurrent streams of a 27B model; SIMON
+**AMD & Architecture.** Gemma 4 runs on an AMD Instinct MI300X (vLLM 0.27.1, ROCm, AMD Developer Cloud, 199.1 tok/s, 8/8 CANARY-7 integrity pass) as a SIMON node next to
+the plant's RTX 3090 (61.8 tok/s). Measured on the MI300X: one card sustained 64 concurrent streams of a 27B model; SIMON
 added no measurable throughput cost (510/510 receipts verified); an honest AMD node flagged exactly the same
-prompts as the NVIDIA reference in our pre-registered cross-vendor test.
+prompts as the NVIDIA reference in our pre-registered cross-vendor test. The codebase spans 5 modular Rust crates (`simon-core`, `simon-verify-wasm`, `simon-harness`, `simon-node`, `simon-cli`) with 192 automated unit/integration tests and Python self-checks.
 
 **Honest limits.** A receipt proves who signed an output, not which model ran (execution audit is research, not
 shipped). AI4I is synthetic; its labels follow the same physics as the rules, so rule recall describes the
