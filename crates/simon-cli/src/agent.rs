@@ -54,6 +54,14 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
         Some(zrodlo) => Some(wczytaj_zlecenie_czatu(zrodlo)?),
         None => None,
     };
+    // `--prompt -`: tekst z stdin, nie z argv — bez tego treść siedzi w `ps`/
+    // `/proc/<pid>/cmdline` dla każdego użytkownika maszyny, przez cały czas
+    // joba (CWE-214, audyt red-team Filipa). Czytamy PRZED siecią, z tego
+    // samego powodu co --request-file powyżej.
+    let prompt = match opcje.prompt.as_deref() {
+        Some("-") => Some(wczytaj_prompt_stdin()?),
+        inny => inny.map(str::to_string),
+    };
     if opcje.bootstrap.is_empty() {
         return Err("agent wymaga --bootstrap <multiaddr nody>".into());
     }
@@ -99,8 +107,7 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
     let peer = znajdz_peera(&opcje.bootstrap, "--bootstrap")?;
 
     if let Some(sciezka) = &opcje.file {
-        let pytanie = opcje
-            .prompt
+        let pytanie = prompt
             .clone()
             .unwrap_or_else(|| "streść kluczowe informacje z tego dokumentu".to_string());
         return uruchom_map_reduce(opcje, sciezka, &pytanie, &mut swarm, peer, &model_zadany, &klucz).await;
@@ -118,7 +125,7 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
     }
 
     // --- Etap A (dziś jedyny etap, gdy --then-bootstrap nie podany) ---
-    let prompt = opcje.prompt.clone().expect("sprawdzone na górze funkcji");
+    let prompt = prompt.expect("sprawdzone na górze funkcji");
     let (order, request) = zbuduj_zlecenie(&model_zadany, &prompt, opcje.fee, opcje.max_tokens, &klucz, false)?;
     eprintln!("[agent] order_id={}", order.order_id);
     eprintln!("[agent] model={} fee={}", order.model_hash, order.fee_think);
@@ -171,6 +178,18 @@ fn wczytaj_zlecenie_czatu(zrodlo: &str) -> Result<String, String> {
         tekst = std::fs::read_to_string(zrodlo).map_err(|e| format!("--request-file {zrodlo}: {e}"))?;
     }
     zlecenie_czatu_z_json(&tekst)
+}
+
+/// `--prompt -`: tekst promptu z stdin, nie z argv (patrz --request-file dla
+/// tego samego wzorca). `echo`/`printf` dopisuje końcowy `\n`, który nie jest
+/// częścią promptu — ucinamy go, resztę białych znaków zostawiamy klientowi.
+fn wczytaj_prompt_stdin() -> Result<String, String> {
+    use std::io::Read;
+    let mut tekst = String::new();
+    std::io::stdin()
+        .read_to_string(&mut tekst)
+        .map_err(|e| format!("--prompt -: nie mogę czytać stdin: {e}"))?;
+    Ok(tekst.trim_end_matches('\n').to_string())
 }
 
 fn zlecenie_czatu_z_json(tekst: &str) -> Result<String, String> {

@@ -37,8 +37,10 @@ OPCJE:
                              (4 na slot), ponad nią node odpowiada
                              błędem `node_zajety`
     --model-hash <hash>      [node] deklarowany model / [agent] model, o który prosisz
-    --prompt <tekst>         [agent] prompt do policzenia; w trybie --file
-                             to PYTANIE/instrukcja stosowana do każdego kawałka
+    --prompt <tekst|->       [agent] prompt do policzenia; w trybie --file
+                             to PYTANIE/instrukcja stosowana do każdego kawałka.
+                             `-` = stdin, więc treść nie trafia do `ps`/
+                             `/proc/<pid>/cmdline` (CWE-214, audyt Filipa)
     --request-file <plik|->  [agent] tryb czatu: żądanie OpenAI z `messages`
                              (i opcjonalnie `tools`, `tool_choice`,
                              `temperature`, `top_p`, `stop`); `-` = stdin,
@@ -743,5 +745,28 @@ fn main() -> ExitCode {
             eprintln!("BŁĄD: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod testy_opcji {
+    use super::*;
+
+    #[test]
+    fn prompt_myslnik_parsuje_sie_jak_kazda_inna_wartosc() {
+        // `--prompt -` to dla parsera zwykła wartość — stdin odczytuje agent.rs
+        // PRZED siecią (patrz agent::wczytaj_prompt_stdin), nie parser. Tu
+        // sprawdzamy tylko, że flaga przechodzi i `-` ląduje w opcje.prompt,
+        // a stary `--prompt <tekst>` (kompatybilność wstecz) działa jak wcześniej.
+        let args: Vec<String> = ["--role", "agent", "--bootstrap", "/ip4/1.2.3.4/tcp/9001", "--prompt", "-"]
+            .iter().map(|s| s.to_string()).collect();
+        let opcje = Opcje::parse(&args).expect("parsowanie nie powinno paść");
+        assert_eq!(opcje.prompt, Some("-".to_string()));
+
+        let args_tekst: Vec<String> = ["--role", "agent", "--bootstrap", "/ip4/1.2.3.4/tcp/9001",
+                                       "--prompt", "policz 2+2"]
+            .iter().map(|s| s.to_string()).collect();
+        let opcje_tekst = Opcje::parse(&args_tekst).expect("parsowanie nie powinno paść");
+        assert_eq!(opcje_tekst.prompt, Some("policz 2+2".to_string()));
     }
 }

@@ -125,10 +125,14 @@ if st.button("Zleć zadanie", type="primary", disabled=not node):
         st.warning(stop)
     else:
         with st.spinner("zlecenie leci do węzła..."):
+            # --prompt - : treść idzie stdinem, nie argv — inaczej każdy user
+            # tej maszyny widzi prompt w `ps`/`/proc/<pid>/cmdline` do 300 s
+            # (CWE-214, audyt red-team Filipa).
             st.session_state.wynik = wywolaj([
-                "--role", "agent", "--bootstrap", node, "--prompt", prompt[:2000],
+                "--role", "agent", "--bootstrap", node, "--prompt", "-",
                 "--model-hash", model, "--max-tokens", str(max_tokens), "--json"]
-                + (["--rejestr", REJESTR] if REJESTR else []))
+                + (["--rejestr", REJESTR] if REJESTR else []),
+                wejscie=prompt[:2000])
         st.session_state.pop("werdykt", None)
 
 if not node:

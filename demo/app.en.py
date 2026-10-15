@@ -126,10 +126,14 @@ if st.button("Submit job", type="primary", disabled=not node):
         st.warning(stop)
     else:
         with st.spinner("submitting job to the node..."):
+            # --prompt - : the text goes over stdin, not argv — otherwise any
+            # user on this machine sees the prompt in `ps`/`/proc/<pid>/cmdline`
+            # for up to 300 s (CWE-214, Filip's red-team audit).
             st.session_state.wynik = wywolaj([
-                "--role", "agent", "--bootstrap", node, "--prompt", prompt[:2000],
+                "--role", "agent", "--bootstrap", node, "--prompt", "-",
                 "--model-hash", model, "--max-tokens", str(max_tokens), "--json"]
-                + (["--rejestr", REJESTR] if REJESTR else []))
+                + (["--rejestr", REJESTR] if REJESTR else []),
+                wejscie=prompt[:2000])
         st.session_state.pop("werdykt", None)
 
 if not node:
