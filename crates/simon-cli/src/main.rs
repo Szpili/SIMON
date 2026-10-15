@@ -1,3 +1,4 @@
+#![allow(clippy::doc_overindented_list_items, clippy::unwrap_or_default)]
 //! SIMON — binarka: `simon --role agent|coord|node` (M1.2).
 //!
 //! Trzy role:
@@ -83,13 +84,16 @@ OPCJE:
     --audyt <plik>           [z --verify-receipt] M3: plik JSON
                              {kroki:[{indeks,node_token,topk:[[id,lp],..]}]} —
                              ocena containment top-k (polityka domyślna k=2).
+    --expect-signer <hex>    [z --verify-receipt] sprawdź, czy receipt podpisał TEN
+                             węzeł (oczekiwany klucz publiczny Ed25519 w hex).
     --verify-receipt <plik>  sprawdź receipt, który ktoś Ci podał (`-` = stdin).
                              Offline, bez sieci. Z --expect-job-id/--expect-model
                              sprawdza też, czy to receipt do TEGO zlecenia.
 
 PODKOMENDA (alias na --verify-receipt):
-    simon verify <receipt> [--output <plik>] [--job-id <id>] [--model <m>] [--json]
-                             to samo, czytelniej. `--output` = `--expect-output`.
+    simon verify <receipt> [--output <plik>] [--job-id <id>] [--model <m>] [--signer <hex>] [--json]
+                             to samo, czytelniej. `--output` = `--expect-output`,
+                             `--signer` = `--expect-signer`.
     --key-file <plik>        [node] jak --key, ale ziarno czytane z pliku.
                              UŻYWAJ TEGO we wdrożeniu: --key <hex> jest widoczny
                              w `ps` dla każdego użytkownika maszyny.
@@ -191,6 +195,8 @@ pub struct Opcje {
     /// M3: plik JSON z audytem wykonania: `{"kroki":[{indeks,node_token,topk:[[id,lp]..]}]}`.
     /// Oceniany polityką containment (top-k + margines).
     pub audyt: Option<String>,
+    /// Oczekiwany klucz publiczny (hex) signera receiptu do weryfikacji offline.
+    pub expect_signer: Option<String>,
 }
 
 impl Opcje {
@@ -222,6 +228,7 @@ impl Opcje {
         let mut identity_file = None;
         let mut tokens = None;
         let mut audyt = None;
+        let mut expect_signer = None;
 
         let mut i = 0;
         while i < args.len() {
@@ -290,6 +297,7 @@ impl Opcje {
                 "--identity-file" => identity_file = Some(wartosc(&mut i, "--identity-file")?),
                 "--tokens" => tokens = Some(wartosc(&mut i, "--tokens")?),
                 "--audyt" => audyt = Some(wartosc(&mut i, "--audyt")?),
+                "--expect-signer" | "--signer" => expect_signer = Some(wartosc(&mut i, arg)?),
                 inny => return Err(format!("nieznany argument: {inny}")),
             }
             i += 1;
@@ -329,6 +337,7 @@ impl Opcje {
             identity_file,
             tokens,
             audyt,
+            expect_signer,
         })
     }
 }
@@ -393,6 +402,20 @@ fn weryfikuj_offline(opcje: &Opcje, zrodlo: &str) -> ExitCode {
     };
     let job_ok = opcje.expect_job_id.as_ref().map(|j| *j == r.job_id);
     let model_ok = opcje.expect_model.as_ref().map(|m| *m == r.model_hash);
+    let signer_ok = match opcje.expect_signer.as_deref() {
+        Some(hex_pk) => {
+            let zgadza_sie = r.signer.to_hex().eq_ignore_ascii_case(hex_pk.trim());
+            if !zgadza_sie && !opcje.json {
+                eprintln!(
+                    "BŁĄD: signer receiptu ({}) nie zgadza się z oczekiwanym ({})",
+                    r.signer.to_hex(),
+                    hex_pk.trim()
+                );
+            }
+            Some(zgadza_sie)
+        }
+        None => None,
+    };
 
     // M1: opcjonalne wiązanie wejścia/stanu (tokeny po stronie klienta).
     let m1_wynik = match opcje.tokens.as_deref() {
@@ -446,6 +469,7 @@ fn weryfikuj_offline(opcje: &Opcje, zrodlo: &str) -> ExitCode {
     let ok = podpis_ok
         && job_ok != Some(false)
         && model_ok != Some(false)
+        && signer_ok != Some(false)
         && tresc_ok != Some(false)
         && m1_ok != Some(false)
         && m3_ok != Some(false);
@@ -457,6 +481,7 @@ fn weryfikuj_offline(opcje: &Opcje, zrodlo: &str) -> ExitCode {
             "podpis_ok": podpis_ok,
             "job_id_ok": job_ok,
             "model_ok": model_ok,
+            "signer_ok": signer_ok,
             "tresc_ok": tresc_ok,
             "poziom": r.poziom(),
             "m1_ok": m1_ok,
@@ -473,6 +498,7 @@ fn weryfikuj_offline(opcje: &Opcje, zrodlo: &str) -> ExitCode {
         println!("podpis Ed25519 : {}", if podpis_ok { "OK" } else { "ZŁY" });
         if let Some(v) = job_ok { println!("job_id         : {}", if v { "zgodny" } else { "NIEZGODNY" }); }
         if let Some(v) = model_ok { println!("model_hash     : {}", if v { "zgodny" } else { "NIEZGODNY" }); }
+        if let Some(v) = signer_ok { println!("signer         : {}", if v { "zgodny" } else { "NIEZGODNY — inny klucz node'a niż oczekiwany" }); }
         if let Some(v) = tresc_ok { println!("treść wyniku   : {}", if v { "zgodna z odciskiem" } else { "NIEZGODNA — to nie jest ten wynik" }); }
         if let Some(w) = m1_wynik.as_ref() {
             match w {
@@ -529,6 +555,7 @@ fn rozwin_podkomende(args: Vec<String>) -> Vec<String> {
             "--output" | "-o" => z_wartoscia(&mut out, "--expect-output", &mut i),
             "--job-id" => z_wartoscia(&mut out, "--expect-job-id", &mut i),
             "--model" => z_wartoscia(&mut out, "--expect-model", &mut i),
+            "--signer" | "--expect-signer" => z_wartoscia(&mut out, "--expect-signer", &mut i),
             "--json" => out.push("--json".into()),
             "-h" | "--help" => out.push("--help".into()),
             _ if a == "-" || !a.starts_with('-') => {
@@ -768,5 +795,98 @@ mod testy_opcji {
             .iter().map(|s| s.to_string()).collect();
         let opcje_tekst = Opcje::parse(&args_tekst).expect("parsowanie nie powinno paść");
         assert_eq!(opcje_tekst.prompt, Some("policz 2+2".to_string()));
+    }
+}
+
+#[cfg(test)]
+mod testy_cli {
+    use super::*;
+    use simon_core::crypto::Keypair;
+    use simon_core::receipt::{Precision, Receipt};
+
+    #[test]
+    fn test_opcje_parse_expect_signer() {
+        let args = vec![
+            "--verify-receipt".to_string(),
+            "receipt.json".to_string(),
+            "--expect-signer".to_string(),
+            "0cb2fad76b7a53caf66892d2e7f56cb4c2d70c04929fadc50a802ba86325d17d".to_string(),
+        ];
+        let opcje = Opcje::parse(&args).expect("parsuje --expect-signer");
+        assert_eq!(
+            opcje.expect_signer.as_deref(),
+            Some("0cb2fad76b7a53caf66892d2e7f56cb4c2d70c04929fadc50a802ba86325d17d")
+        );
+    }
+
+    #[test]
+    fn test_rozwin_podkomende_verify_signer() {
+        let args = vec![
+            "verify".to_string(),
+            "receipt.json".to_string(),
+            "--signer".to_string(),
+            "0cb2fad76b7a53caf66892d2e7f56cb4c2d70c04929fadc50a802ba86325d17d".to_string(),
+        ];
+        let expanded = rozwin_podkomende(args);
+        assert!(expanded.contains(&"--expect-signer".to_string()));
+        let opcje = Opcje::parse(&expanded).expect("parsuje rozszerzone opcje verify");
+        assert_eq!(
+            opcje.expect_signer.as_deref(),
+            Some("0cb2fad76b7a53caf66892d2e7f56cb4c2d70c04929fadc50a802ba86325d17d")
+        );
+    }
+
+    #[test]
+    fn test_weryfikuj_offline_odrzuca_zly_signer() {
+        let klucz1 = Keypair::from_seed(&[1u8; 32]);
+        let klucz2 = Keypair::from_seed(&[2u8; 32]);
+        let r = Receipt {
+            job_id: "j1".into(),
+            node_id: klucz1.public().to_hex(),
+            model_hash: "m1".into(),
+            runtime: "vllm/1".into(),
+            precision: Precision::Fp16,
+            activation_hash: "act".into(),
+            prompt_tokens: 1,
+            completion_tokens: 1,
+            output_digest: simon_core::receipt::odcisk_wyjscia("j1", "tekst").unwrap(),
+            started_at_us: 100,
+            finished_at_us: 200,
+            signer: klucz1.public(),
+            signature: None,
+            wiazania: None,
+        };
+        let signed = r.sign(&klucz1).unwrap();
+        let sciezka = std::env::temp_dir().join(format!(
+            "simon_test_receipt_{}_{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&sciezka, serde_json::to_string(&signed).unwrap()).unwrap();
+
+        // Zgodny signer: ExitCode::SUCCESS
+        let mut opcje = Opcje::parse(&[
+            "--verify-receipt".into(),
+            sciezka.to_str().unwrap().into(),
+            "--expect-signer".into(),
+            klucz1.public().to_hex(),
+        ])
+        .unwrap();
+        assert_eq!(
+            weryfikuj_offline(&opcje, sciezka.to_str().unwrap()),
+            ExitCode::SUCCESS
+        );
+
+        // Niezgodny signer: ExitCode::FAILURE
+        opcje.expect_signer = Some(klucz2.public().to_hex());
+        assert_eq!(
+            weryfikuj_offline(&opcje, sciezka.to_str().unwrap()),
+            ExitCode::FAILURE
+        );
+
+        let _ = std::fs::remove_file(&sciezka);
     }
 }
