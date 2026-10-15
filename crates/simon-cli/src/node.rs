@@ -426,6 +426,9 @@ async fn policz(
         tokens_out,
         ttft_ms,
         gen_ms,
+        tokenizer_hash: None,
+        prompt_token_ids: None,
+        output_token_ids: None,
     })
 }
 
