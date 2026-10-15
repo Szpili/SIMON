@@ -12,7 +12,7 @@ use simon_core::crypto::Keypair;
 use simon_core::receipt::{Precision, Receipt};
 use simon_harness::request_response::{PromptError, PromptReply, PromptRequest, PromptResponse};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::Semaphore;
 
 /// Domniemany endpoint modelu (vLLM/Ollama, API OpenAI).
@@ -338,6 +338,11 @@ async fn policz(
         Err(e) => return blad(req, "client", &format!("nie mogę zbudować klienta HTTP: {e}")),
     };
 
+    let started_at_us = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_micros() as u64)
+        .unwrap_or(0);
+
     let odp = match klient.post(&url).json(&body).send().await {
         Ok(o) => o,
         Err(e) => {
@@ -355,6 +360,12 @@ async fn policz(
         Ok(t) => t,
         Err(e) => return blad(req, "odczyt", &format!("nie mogę odczytać odpowiedzi: {e}")),
     };
+
+    let finished_at_us = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_micros() as u64)
+        .unwrap_or(0)
+        .max(started_at_us);
 
     if !status.is_success() {
         return blad(
@@ -411,7 +422,15 @@ async fn policz(
     // Receipt PRZED przeniesieniem `output` — podpisujemy dokladnie ten tekst,
     // ktory zaraz odeslemy.
     let receipt = zbuduj_podpisany_receipt(
-        klucz, model_hash, runtime, req, &output, prompt_tokens, tokens_out,
+        klucz,
+        model_hash,
+        runtime,
+        req,
+        &output,
+        prompt_tokens,
+        tokens_out,
+        started_at_us,
+        finished_at_us,
     );
 
     PromptReply::Ok(PromptResponse {
@@ -740,14 +759,9 @@ fn zbuduj_podpisany_receipt(
     output: &str,
     prompt_tokens: u32,
     tokens_out: u32,
+    started_at_us: u64,
+    finished_at_us: u64,
 ) -> String {
-    // Mikrosekundy jako u64 — NIE float. Podpisywana treść nie może zawierać
-    // f64, bo JSON i CBOR serializują go inaczej (naprawa 2026-09-17).
-    let teraz = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_micros() as u64)
-        .unwrap_or(0);
-
     let receipt = Receipt {
         job_id: req.job_id.clone(),
         node_id: klucz.public().to_hex(),
@@ -761,9 +775,9 @@ fn zbuduj_podpisany_receipt(
         prompt_tokens,
         completion_tokens: tokens_out,
         output_digest: simon_core::receipt::odcisk_wyjscia(&req.job_id, output)
-        .unwrap_or_else(|_| "digest-blad".to_string()),
-        started_at_us: teraz,
-        finished_at_us: teraz,
+            .unwrap_or_else(|_| "digest-blad".to_string()),
+        started_at_us,
+        finished_at_us,
         signer: klucz.public(),
         signature: None,
         wiazania: None,
@@ -1087,3 +1101,36 @@ mod testy_czatu {
         assert!(!pusta, "tool_calls bez content to nie 'pusta odpowiedź'");
     }
 }
+
+#[cfg(test)]
+mod testy_receiptu {
+    use super::*;
+    use simon_harness::request_response::PromptRequest;
+
+    #[test]
+    fn test_receipt_timestamps_prawdziwe_i_uporzadkowane() {
+        let klucz = Keypair::generate();
+        let req = PromptRequest {
+            v: 1,
+            order_id: "ord-1".into(),
+            job_id: "job-1".into(),
+            model_hash: "gemma-4".into(),
+            prompt: "test".into(),
+            max_tokens: 16,
+            max_ctx: 128,
+            nonce: "nonce-1".into(),
+            chat: false,
+        };
+        let started = 1_700_000_000_000_000;
+        let finished = 1_700_000_000_500_000;
+        let json_receipt = zbuduj_podpisany_receipt(
+            &klucz, "gemma-4", "llama.cpp/1", &req, "odpowiedz", 10, 5, started, finished,
+        );
+        let r: Receipt = serde_json::from_str(&json_receipt).unwrap();
+        assert_eq!(r.started_at_us, started);
+        assert_eq!(r.finished_at_us, finished);
+        assert!(r.started_at_us <= r.finished_at_us);
+        assert!(r.verify_self().is_ok());
+    }
+}
+
