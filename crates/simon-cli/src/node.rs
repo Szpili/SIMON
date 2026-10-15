@@ -778,10 +778,13 @@ async fn odczytaj_realny_ctx(model_url: &str, prompt: &str) -> Option<u32> {
 pub(crate) fn wykryj_precyzje(model_hash: &str) -> Precision {
     let n = model_hash.to_ascii_lowercase();
     let tokeny: Vec<&str> = n.split(|c: char| !c.is_ascii_alphanumeric()).filter(|t| !t.is_empty()).collect();
-    // Bity z tokenu GGUF `q<N>…` / `iq<N>…` (q4_k_m -> q4, q4km, iq4_xs -> iq4).
+    // Bity z CAŁEGO tokenu GGUF: `q4`, `iq4`, zwarte `q4k`/`q4km` (q4_k_m dzieli się na q4,k,m).
+    // `q80`, `q4foo`, `q8deadbeef` to nie GGUF — nie wolno ich czytać po pierwszej cyfrze.
     let bity_gguf = |t: &str| -> Option<u32> {
         let r = t.strip_prefix('i').unwrap_or(t).strip_prefix('q')?;
-        r.chars().next()?.to_digit(10)
+        let mut z = r.chars();
+        let b = z.next()?.to_digit(10)?;
+        matches!(z.as_str(), "" | "k" | "ks" | "km" | "kl").then_some(b)
     };
     let mut jawne: Vec<Precision> = Vec::new();
     let mut nieobslugiwana = false;
@@ -808,6 +811,10 @@ pub(crate) fn wykryj_precyzje(model_hash: &str) -> Precision {
             if matches!(*t, "awq" | "gptq") {
                 slaby_int4 = true;
             }
+            // ogólny znacznik kwantyzacji bez szerokości: blokuje format bazowy
+            if matches!(*t, "quant" | "quantized") {
+                nieobslugiwana = true;
+            }
             None
         };
         if let Some(p) = p {
@@ -816,7 +823,9 @@ pub(crate) fn wykryj_precyzje(model_hash: &str) -> Precision {
             }
         }
     }
-    if nieobslugiwana || jawne.len() > 1 {
+    // AWQ/GPTQ (wagi całkowitoliczbowe) obok fp8/fp4 to sprzeczność; jawna szerokość int8/int4 ją rozstrzyga.
+    let sprzeczny_slaby = slaby_int4 && jawne.iter().any(|p| matches!(p, Precision::Fp8 | Precision::Fp4));
+    if nieobslugiwana || jawne.len() > 1 || sprzeczny_slaby {
         return Precision::Unknown;
     }
     if let Some(p) = jawne.first() {
@@ -1253,6 +1262,12 @@ mod testy_receiptu {
         assert_eq!(wykryj_precyzje("model-bf16-q6_k"), Precision::Unknown);
         // sprzeczne znaczniki (wagi int4 + fp8 KV) — nie zgadujemy
         assert_eq!(wykryj_precyzje("llama-int4-fp8"), Precision::Unknown);
+        assert_eq!(wykryj_precyzje("llama-awq-fp8"), Precision::Unknown);
+        assert_eq!(wykryj_precyzje("llama-gptq-fp4"), Precision::Unknown);
+        assert_eq!(wykryj_precyzje("model-bf16-quantized"), Precision::Unknown);
+        // tylko pełne tokeny GGUF: „q80”/„q8deadbeef” nie są kwantyzacją
+        assert_eq!(wykryj_precyzje("model-q80"), Precision::Unknown);
+        assert_eq!(wykryj_precyzje("bf16-q8deadbeef"), Precision::Bf16);
         // dwa formaty bazowe naraz — też nie zgadujemy
         assert_eq!(wykryj_precyzje("merge-bf16-fp16"), Precision::Unknown);
         // całe tokeny, nie podciągi: hex z „f16”/„bf16”/„f32” w środku to nie precyzja
