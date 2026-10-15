@@ -280,9 +280,10 @@ mod testy {
         assert!(super::ocena_json(prawdziwy, &p).is_ok());
         let symulowany = r#"{"simulated":true,"kroki":[{"indeks":0,"node_token":5,"topk":[[5,-0.01],[6,-2.0]]}]}"#;
         assert!(super::ocena_json(symulowany, &p).is_err());
-        for zle in [r#""true""#, "1", "null"] {
-            let j = format!(r#"{{"simulated":{zle},"kroki":[{{"indeks":0,"node_token":5,"topk":[[5,-0.01]]}}]}}"#);
-            assert!(super::ocena_json(&j, &p).is_err(), "simulated={zle} musi odrzucić");
+        for zle in ["true", r#""true""#, "1", "null"] {
+            let j = format!(r#"{{"simulated":{zle},"kroki":[{{"indeks":0,"node_token":5,"topk":[[5,-0.01],[6,-2.0]]}}]}}"#);
+            let e = super::ocena_json(&j, &p).expect_err("simulated != false musi odrzucić");
+            assert!(e.to_string().contains("simulated"), "simulated={zle}: odrzucone z innego powodu: {e}");
         }
         let jawnie_nie = r#"{"simulated":false,"kroki":[{"indeks":0,"node_token":5,"topk":[[5,-0.01],[6,-2.0]]}]}"#;
         assert!(super::ocena_json(jawnie_nie, &p).is_ok());

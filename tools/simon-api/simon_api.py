@@ -166,7 +166,7 @@ class Handler(BaseHTTPRequestHandler):
         if not expected_key:
             return True
         auth_header = self.headers.get("Authorization", "")
-        # skróty o stałej długości: porównanie bez wycieku długości tokenu
+        # porównanie skrótów SHA-256: bez wczesnego wyjścia na różnej długości tokenu
         if hmac.compare_digest(hashlib.sha256(auth_header.encode()).digest(),
                                hashlib.sha256(f"Bearer {expected_key}".encode()).digest()):
             return True
