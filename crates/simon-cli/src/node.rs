@@ -678,13 +678,31 @@ async fn wykryj_runtime(model_url: &str) -> String {
             }
         }
     }
+    // llama.cpp: GET /props -> {"default_generation_settings": ..., "total_slots": ...}
+    if let Ok(o) = klient.get(format!("{baza}/props")).send().await {
+        if o.status().is_success() {
+            if let Ok(v) = o.json::<serde_json::Value>().await {
+                if v.get("default_generation_settings").is_some() || v.get("total_slots").is_some() {
+                    return "llama.cpp/1".to_string();
+                }
+            }
+        }
+    }
     eprintln!("[node] UWAGA: nie rozpoznaję silnika pod {baza} — receipt powie 'nieznany'");
     "nieznany/1".to_string()
 }
 
-/// C+1: prawdziwa liczba tokenów promptu przez `/tokenize` vLLM (endpoint
-/// zgodny z API OpenAI: `POST {"prompt": ...} -> {"count": N, ...}`).
-/// `None` gdy vLLM nieosiągalny lub odpowiedź nie ma pola `count` — WOŁAJĄCY
+/// Pomocnik do wyciągania liczby tokenów z odpowiedzi endpointu `/tokenize`.
+/// Obsługuje format vLLM (`count: N`) oraz llama-server (`tokens: [...]`).
+pub(crate) fn wyciagnij_liczbe_tokenow(v: &serde_json::Value) -> Option<u64> {
+    v.get("count")
+        .and_then(|c| c.as_u64())
+        .or_else(|| v.get("tokens").and_then(|t| t.as_array()).map(|a| a.len() as u64))
+}
+
+/// C+1: prawdziwa liczba tokenów promptu przez `/tokenize` vLLM / llama-server
+/// (POST `{"prompt": ..., "content": ...}` -> `{"count": N}` lub `{"tokens": [...]}`).
+/// `None` gdy backend nieosiągalny lub odpowiedź nie ma pola tokenów — WOŁAJĄCY
 /// spada wtedy na deklarację agenta. Każda droga do `None` loguje PRZYCZYNĘ:
 /// cichy fallback bez logu maskowałby realny błąd parsowania jako "nieosiągalny".
 async fn odczytaj_realny_ctx(model_url: &str, prompt: &str) -> Option<u32> {
@@ -701,7 +719,7 @@ async fn odczytaj_realny_ctx(model_url: &str, prompt: &str) -> Option<u32> {
     };
     let odp = match klient
         .post(&url)
-        .json(&serde_json::json!({"prompt": prompt}))
+        .json(&serde_json::json!({"prompt": prompt, "content": prompt}))
         .send()
         .await
     {
@@ -727,7 +745,7 @@ async fn odczytaj_realny_ctx(model_url: &str, prompt: &str) -> Option<u32> {
             return None;
         }
     };
-    match v["count"].as_u64() {
+    match wyciagnij_liczbe_tokenow(&v) {
         // Kontrola zakresu: `n as u32` przy n > u32::MAX po cichu obcina liczbę
         // i przepuściłoby za długi prompt przez bramkę. Wolimy głośno spaść na
         // deklarację agenta niż porównywać z obciętą wartością.
@@ -741,7 +759,7 @@ async fn odczytaj_realny_ctx(model_url: &str, prompt: &str) -> Option<u32> {
             }
         },
         None => {
-            eprintln!("[node] /tokenize: odpowiedź bez pola `count`: {v}");
+            eprintln!("[node] /tokenize: odpowiedź bez pola `count` ani `tokens`: {v}");
             None
         }
     }
@@ -1168,6 +1186,19 @@ mod testy_receiptu {
         assert_eq!(wykryj_precyzje("model-f32"), Precision::Fp32);
         assert_eq!(wykryj_precyzje("standard-model"), Precision::Fp16);
     }
+
+    #[test]
+    fn test_tokenize_llama_cpp_format() {
+        let v_vllm = serde_json::json!({"count": 42});
+        assert_eq!(wyciagnij_liczbe_tokenow(&v_vllm), Some(42));
+
+        let v_llama = serde_json::json!({"tokens": [10, 20, 30]});
+        assert_eq!(wyciagnij_liczbe_tokenow(&v_llama), Some(3));
+
+        let v_inny = serde_json::json!({"other": "field"});
+        assert_eq!(wyciagnij_liczbe_tokenow(&v_inny), None);
+    }
 }
+
 
 
