@@ -68,6 +68,9 @@ install -d -m 700 /root/.simon && install -m 600 "/root/$KEYNAME" /root/.simon/n
 install -m 755 /root/simon /usr/local/bin/simon && rm -f /root/simon
 ldd /usr/local/bin/simon | grep -q 'not found' && { echo "simon: missing libraries on this image" >&2; exit 1; }
 docker ps --format '{{.Names}}' | grep -qx rocm || { echo "no running 'rocm' container: wrong image?" >&2; exit 1; }
+# Gemma 4 on the Quick Start image: vLLM 0.27.1 needs transformers 5.5.x; the image ships 5.15, where
+# head_dim became a per-layer attribute and vLLM's Gemma 4 config conversion fails at start.
+case "$HF_MODEL" in *gemma-4*) docker exec rocm pip install -q --root-user-action=ignore "transformers==5.5.3" ;; esac
 cat > /usr/local/sbin/simon-lockdown <<'EOF'
 #!/bin/sh
 # vLLM :8000 is published by docker on 0.0.0.0 and [::]: block it from outside, keep loopback/tunnel.
@@ -100,6 +103,9 @@ ExecStartPre=/bin/sh -c 'until curl -sf http://127.0.0.1:8000/v1/models >/dev/nu
 TimeoutStartSec=3600
 ExecStart=/usr/local/bin/simon --role node --listen /ip4/127.0.0.1/tcp/9001 --model-url http://127.0.0.1:8000 \
   --model-hash $MODEL --key-file /root/.simon/node.key --max-jobs 8
+# the Quick Start image keeps no journal on disk: the node logs to a file the demo host can read
+StandardOutput=append:/var/log/simon-node.log
+StandardError=append:/var/log/simon-node.log
 Restart=always
 RestartSec=10
 [Install]
@@ -116,8 +122,8 @@ REMOTE
       "$("${SSH[@]}" 'journalctl -u simon-vllm -n 1 --no-pager -o cat 2>/dev/null | cut -c1-110' || echo '(ssh busy)')"
   done
   sleep 5
-  PEER=$("${SSH[@]}" "journalctl -u simon-node -o cat --no-pager | grep -oE 'peer_id=12D3Koo[A-Za-z0-9]+' | tail -1 | cut -d= -f2")
-  NODE_ID=$("${SSH[@]}" "journalctl -u simon-node -o cat --no-pager | grep -oE 'node_id=[0-9a-f]+' | tail -1 | cut -d= -f2")
+  PEER=$("${SSH[@]}" "grep -ohE 'peer_id=12D3Koo[A-Za-z0-9]+' /var/log/simon-node.log | tail -1 | cut -d= -f2")
+  NODE_ID=$("${SSH[@]}" "grep -ohE 'node_id=[0-9a-f]+' /var/log/simon-node.log | tail -1 | cut -d= -f2")
   [ -n "$PEER" ] && [ -n "$NODE_ID" ] || { echo "no peer_id/node_id in the node log" >&2; exit 1; }
 
   echo "== 4/5 SSH tunnel 127.0.0.1:$LPORT -> droplet 127.0.0.1:9001 (user unit, restarts on drop) =="
@@ -129,7 +135,8 @@ Description=SSH tunnel to the SIMON MI300X node '$NAME' ($IP)
 ExecStart=/usr/bin/ssh -i $SSH_KEY -N -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 \
   -o ServerAliveCountMax=3 -o StrictHostKeyChecking=accept-new -L 127.0.0.1:$LPORT:127.0.0.1:9001 root@$IP
 Restart=always
-RestartSec=10
+# the image rate-limits ssh (ufw limit): fast retries keep re-arming the block
+RestartSec=30
 [Install]
 WantedBy=default.target
 EOF
@@ -145,8 +152,9 @@ EOF
   echo "-- smoke test through the public gateway --"
   curl -s -m 300 127.0.0.1:${SIMON_API_PORT:-18600}/v1/chat/completions -H 'Content-Type: application/json' \
     -d "{\"model\":\"$MODEL\",\"max_tokens\":64,\"messages\":[{\"role\":\"user\",\"content\":\"In one sentence: what does a signed inference receipt prove?\"}]}" \
-    | python3 -c 'import json,sys; d=json.load(sys.stdin); s=d.get("simon") or {}; print(d.get("error") or
-      f"OK node_id={str(s.get(\"node_id\"))[:16]}… receipt={s.get(\"receipt_status\")} {s.get(\"client_observed_ms\")} ms\n{d[\"choices\"][0][\"message\"][\"content\"]}")'
+    | python3 -c 'import json,sys; d=json.load(sys.stdin); s=d.get("simon") or {}
+print(d.get("error") or "OK node_id=%s receipt=%s %s ms\n%s" % (str(s.get("node_id"))[:16], s.get("receipt_status"),
+      s.get("client_observed_ms"), d["choices"][0]["message"]["content"]))'
   echo "== up in $(( $(date +%s) - t0 ))s: $LABEL  peer=$PEER =="
   ;;
 down)

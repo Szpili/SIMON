@@ -50,7 +50,7 @@
     <div class="border border-line bg-panel p-4"><p class="text-xs text-neutral-500">tickets that passed every check</p><p class="text-2xl">{s.clean}/{s.tickets}</p></div>
     <div class="border border-line bg-panel p-4"><p class="text-xs text-neutral-500">median time per ticket</p><p class="text-2xl">{(s.median_ms / 1000).toFixed(1)} s</p></div>
     <div class="border border-line bg-panel p-4"><p class="text-xs text-neutral-500">records in the predeclared sample</p><p class="text-2xl">{s.records}</p></div>
-    <div class="border border-line bg-panel p-4"><p class="text-xs text-neutral-500">GPU nodes in this run</p><p class="text-sm">{s.nodes.join(' · ')}</p></div>
+    <div class="border border-line bg-panel p-4"><p class="text-xs text-neutral-500">GPU nodes in this run</p>{#each s.nodes as n}<p class="mt-1 text-xs leading-snug text-neutral-200">{n}</p>{/each}</div>
   </div>
 
   <h2 class="mt-10 mono text-sm font-bold tracking-wider text-neutral-300">Tickets</h2>

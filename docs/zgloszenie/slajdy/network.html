@@ -1,18 +1,18 @@
-<section id="network" data-transition="fade" style="background:#F5F4F1; color:#151B2D; font-family:'Fira Sans', Verdana, sans-serif; padding:128px 128px 160px; display:flex; flex-direction:column; gap:40px">
-  <h2 style="font-size:72px; font-weight:700; line-height:1.1">Heterogeneous on purpose, and it shows</h2>
-  <p style="font-size:32px; color:#4A5568; width:1500px">Two GPUs, two serving stacks, two models, one network. The engine and the model on each result come from the signed receipt, not from a label that we wrote beside it.</p>
-  <div style="display:flex; gap:32px">
-    <div style="flex:1; display:flex; flex-direction:column; gap:14px; background:#FFFFFF; padding:44px; border:1px solid #DDDAD2; border-radius:16px">
-      <h3 style="font-size:32px; font-weight:700">RTX 3090 · vLLM 0.27.1</h3>
-      <p style="font-size:28px; color:#4A5568">Qwen3.8-27B · full context admission gate</p>
-      <p style="font-family:'Fira Mono', 'Courier New', monospace; font-size:56px; font-weight:500; color:#151B2D">64.94 tok/s</p>
+<section id="network" data-transition="fade" style="background:#F5F4F1; color:#151B2D; font-family:'Fira Sans', Verdana, sans-serif; padding:128px 128px 72px; display:flex; flex-direction:column; gap:52px">
+  <h2 style="margin:0; font-size:72px; font-weight:700; line-height:1.1">Heterogeneous on purpose, and it shows</h2>
+  <p style="margin:0; font-size:32px; color:#4A5568; width:1500px">Two GPUs, two serving stacks, two models, one network. The engine and the model on each result come from the signed receipt, not from a label that we wrote beside it.</p>
+  <div style="display:flex; gap:32px; margin-top:12px">
+    <div style="flex:1; display:flex; flex-direction:column; gap:22px; background:#FFFFFF; padding:52px 48px; border:1px solid #DDDAD2; border-radius:16px">
+      <h3 style="margin:0; font-size:36px; font-weight:700">RTX 3090 · vLLM 0.27.1</h3>
+      <p style="margin:0; font-size:30px; line-height:1.35; color:#4A5568">Qwen3.8-27B · full context admission gate</p>
+      <p style="margin:0; font-family:'Fira Mono', 'Courier New', monospace; font-size:76px; margin-top:auto; padding-top:18px; font-weight:500; color:#151B2D">64.94 tok/s</p>
     </div>
-    <div style="flex:1; display:flex; flex-direction:column; gap:14px; background:#FFFFFF; padding:44px; border:1px solid #DDDAD2; border-radius:16px">
-      <h3 style="font-size:32px; font-weight:700">RTX 3080 Ti · Ollama 0.34.0</h3>
-      <p style="font-size:28px; color:#4A5568">Bielik 11B · admission gate disabled, and the node says so</p>
-      <p style="font-family:'Fira Mono', 'Courier New', monospace; font-size:56px; font-weight:500; color:#151B2D">6.50 tok/s</p>
+    <div style="flex:1; display:flex; flex-direction:column; gap:22px; background:#FFFFFF; padding:52px 48px; border:1px solid #DDDAD2; border-radius:16px">
+      <h3 style="margin:0; font-size:36px; font-weight:700">RTX 3080 Ti · Ollama 0.34.0</h3>
+      <p style="margin:0; font-size:30px; line-height:1.35; color:#4A5568">Bielik 11B · admission gate disabled, and the node says so</p>
+      <p style="margin:0; font-family:'Fira Mono', 'Courier New', monospace; font-size:76px; margin-top:auto; padding-top:18px; font-weight:500; color:#151B2D">6.50 tok/s</p>
     </div>
   </div>
-  <p style="position:absolute; left:128px; bottom:64px; font-size:24px; color:#6A7179; width:1600px">A node that cannot measure its own context budget declares that. It does not pretend.</p>
+  <p style="margin-top:auto; font-size:24px; color:#6A7179; width:1600px">A node that cannot measure its own context budget declares that. It does not pretend.</p>
   <aside>The second node immediately exposed two false statements in our own receipts. The node announced a model that it was not serving, and every receipt claimed vLLM even when Ollama did the work. We fixed both the same day. Heterogeneity is not a feature list here. It is a test instrument. One node alone never surfaces those two bugs.</aside>
 </section>

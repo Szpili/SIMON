@@ -8,11 +8,11 @@
   aside { display:none }   /* notatki prelegenta nie idą na slajd */
   
 </style></head><body><section id="cover" data-transition="fade" style="background:#151B2D; color:#F5F4F1; font-family:'Fira Sans', Verdana, sans-serif; padding:128px 128px 160px; display:flex; flex-direction:column; justify-content:center; gap:32px">
-  <p style="font-family:'Fira Mono', 'Courier New', monospace; font-size:24px; color:#D9A441; letter-spacing:4px">AMD DEVELOPER HACKATHON · ACT III</p>
+  <p style="font-family:'Fira Mono', 'Courier New', monospace; font-size:24px; color:#D9A441; letter-spacing:4px">AMD DEVELOPER HACKATHON · ACT III &middot; INTELLIGENT INDUSTRY</p>
   <h1 style="font-size:140px; font-weight:700; line-height:1; letter-spacing:4px">SIMON</h1>
   <div style="width:132px; height:0px; border-top:8px solid #D9A441"></div>
   <h2 style="font-size:56px; font-weight:500; line-height:1.25; width:1200px">Verifiable LLM inference on hardware that you do not control</h2>
-  <p style="font-size:32px; color:#B9BEC9; width:1200px">Nodes sign what they computed. Anyone can verify it offline.</p>
+  <p style="font-size:32px; color:#B9BEC9; width:1500px">Nodes sign what they computed. Anyone can verify it offline. Live on Gemma 4.</p>
   <p style="position:absolute; left:128px; bottom:64px; font-family:'Fira Mono', 'Courier New', monospace; font-size:24px; color:#D9A441; width:900px">github.com/Szpili/SIMON · MIT · Rust · libp2p</p>
   <aside>One line: this is a network where you can verify what the GPU of a stranger did. We measured everything in this deck on our own machines. Where we have no proof, the slide says so.</aside>
 </section>
@@ -68,6 +68,35 @@
   <p style="position:absolute; left:128px; bottom:64px; font-size:24px; color:#6A7179; width:1600px">No simulated mode. If no node is reachable, the demo says so instead of a canned result.</p>
   <aside>The demo commissions real work from a node, then offers three attacks: the three that a dishonest node will use. The third attack started to fail only on 18 September. Until then it passed every gate. That story is the next slide but one.</aside>
 </section>
+<section id="industry" data-transition="fade" style="width:1920px; height:1080px; box-sizing:border-box; overflow:hidden; position:relative; margin:0; background:#151B2D; color:#F5F4F1; font-family:'Fira Sans', Verdana, sans-serif; padding:96px 128px 64px; display:flex; flex-direction:column; gap:36px">
+  <p style="font-family:'Fira Mono', 'Courier New', monospace; font-size:24px; color:#D9A441; letter-spacing:4px; margin:0">INTELLIGENT INDUSTRY &middot; LIVE</p>
+  <h2 style="font-size:64px; font-weight:700; line-height:1.1; margin:-12px 0 0">Maintenance tickets with an audit trail</h2>
+  <p style="font-size:30px; line-height:1.4; color:#B9BEC9; width:1660px; margin:0">The maintenance planner of a machining plant turns machine alarms into tickets by hand, late, and cannot later prove which system produced which advice.</p>
+  <div style="display:flex; gap:24px; margin-top:8px">
+    <div style="width:398px; flex:none; box-sizing:border-box; display:flex; flex-direction:column; gap:8px; background:#1D2540; padding:34px 32px; border-radius:16px">
+      <h3 style="font-size:29px; font-weight:700; color:#D9A441; margin:0 0 6px">1 &middot; Rules decide</h3>
+      <p style="font-size:25px; line-height:1.4; color:#B9BEC9; margin:0">Physics thresholds flag the risk and the failure mode. The model never decides it.</p>
+    </div>
+    <div style="width:398px; flex:none; box-sizing:border-box; display:flex; flex-direction:column; gap:8px; background:#1D2540; padding:34px 32px; border-radius:16px">
+      <h3 style="font-size:29px; font-weight:700; color:#D9A441; margin:0 0 6px">2 &middot; Gemma 4 drafts</h3>
+      <p style="font-size:25px; line-height:1.4; color:#B9BEC9; margin:0">Gemma 4 26B-A4B writes the technician ticket from the rule findings only.</p>
+    </div>
+    <div style="width:398px; flex:none; box-sizing:border-box; display:flex; flex-direction:column; gap:8px; background:#1D2540; padding:34px 32px; border-radius:16px">
+      <h3 style="font-size:29px; font-weight:700; color:#D9A441; margin:0 0 6px">3 &middot; Checked</h3>
+      <p style="font-size:25px; line-height:1.4; color:#B9BEC9; margin:0">JSON, modes equal to the rules, no invented numbers, no order to stop or bypass equipment.</p>
+    </div>
+    <div style="width:398px; flex:none; box-sizing:border-box; display:flex; flex-direction:column; gap:8px; background:#1D2540; padding:34px 32px; border-radius:16px">
+      <h3 style="font-size:29px; font-weight:700; color:#D9A441; margin:0 0 6px">4 &middot; Signed</h3>
+      <p style="font-size:25px; line-height:1.4; color:#B9BEC9; margin:0">The GPU node signs the exact ticket. The page re-checks every receipt in the browser.</p>
+    </div>
+  </div>
+  <div style="display:flex; gap:48px; align-items:center; margin-top:12px">
+    <p style="font-size:84px; font-weight:700; color:#D9A441; margin:0; flex:none; line-height:1">15/15</p>
+    <p style="font-size:30px; line-height:1.4; color:#F5F4F1; width:1350px; margin:0">tickets passed every check, median 1.5 s each, all receipts valid. Nodes: Gemma 4 on the plant's RTX 3090 and on an AMD Instinct MI300X in AMD Developer Cloud.</p>
+  </div>
+  <p style="margin-top:auto; font-family:'Fira Mono', 'Courier New', monospace; font-size:20px; color:#8A8F9C; width:1660px">pop-os.tailaf1556.ts.net/simon/industry &middot; AI4I 2020 data (UCI, CC BY 4.0, synthetic) &middot; a technician reviews every ticket</p>
+  <aside>The language model writes, the rules decide, the receipt proves who wrote it. Say plainly that AI4I is synthetic and that its labels follow the same physics as the rules, so the rule recall describes the dataset, not a real plant.</aside>
+</section>
 <section id="cost" data-transition="fade" style="background:#151B2D; color:#F5F4F1; font-family:'Fira Sans', Verdana, sans-serif; padding:128px 128px 160px; display:flex; flex-direction:column; gap:40px">
   <p style="font-size:24px; font-weight:700; letter-spacing:4px; color:#D9A441">MEASURED, NOT PROJECTED</p>
   <h2 style="font-size:72px; font-weight:700; line-height:1.1">An audit is cheap enough to pay for</h2>
@@ -104,22 +133,22 @@
   <p style="position:absolute; left:128px; bottom:64px; font-size:24px; color:#8A8F9C; width:1600px">Lower bound: this is the forward pass alone, without activation extraction and hashing. Raw data is in the repository.</p>
   <aside>This number decides whether the job price can pay for the audit. It can.</aside>
 </section>
-<section id="network" data-transition="fade" style="background:#F5F4F1; color:#151B2D; font-family:'Fira Sans', Verdana, sans-serif; padding:128px 128px 160px; display:flex; flex-direction:column; gap:40px">
-  <h2 style="font-size:72px; font-weight:700; line-height:1.1">Heterogeneous on purpose, and it shows</h2>
-  <p style="font-size:32px; color:#4A5568; width:1500px">Two GPUs, two serving stacks, two models, one network. The engine and the model on each result come from the signed receipt, not from a label that we wrote beside it.</p>
-  <div style="display:flex; gap:32px">
-    <div style="flex:1; display:flex; flex-direction:column; gap:14px; background:#FFFFFF; padding:44px; border:1px solid #DDDAD2; border-radius:16px">
-      <h3 style="font-size:32px; font-weight:700">RTX 3090 · vLLM 0.27.1</h3>
-      <p style="font-size:28px; color:#4A5568">Qwen3.8-27B · full context admission gate</p>
-      <p style="font-family:'Fira Mono', 'Courier New', monospace; font-size:56px; font-weight:500; color:#151B2D">64.94 tok/s</p>
+<section id="network" data-transition="fade" style="background:#F5F4F1; color:#151B2D; font-family:'Fira Sans', Verdana, sans-serif; padding:128px 128px 72px; display:flex; flex-direction:column; gap:52px">
+  <h2 style="margin:0; font-size:72px; font-weight:700; line-height:1.1">Heterogeneous on purpose, and it shows</h2>
+  <p style="margin:0; font-size:32px; color:#4A5568; width:1500px">Two GPUs, two serving stacks, two models, one network. The engine and the model on each result come from the signed receipt, not from a label that we wrote beside it.</p>
+  <div style="display:flex; gap:32px; margin-top:12px">
+    <div style="flex:1; display:flex; flex-direction:column; gap:22px; background:#FFFFFF; padding:52px 48px; border:1px solid #DDDAD2; border-radius:16px">
+      <h3 style="margin:0; font-size:36px; font-weight:700">RTX 3090 · vLLM 0.27.1</h3>
+      <p style="margin:0; font-size:30px; line-height:1.35; color:#4A5568">Qwen3.8-27B · full context admission gate</p>
+      <p style="margin:0; font-family:'Fira Mono', 'Courier New', monospace; font-size:76px; margin-top:auto; padding-top:18px; font-weight:500; color:#151B2D">64.94 tok/s</p>
     </div>
-    <div style="flex:1; display:flex; flex-direction:column; gap:14px; background:#FFFFFF; padding:44px; border:1px solid #DDDAD2; border-radius:16px">
-      <h3 style="font-size:32px; font-weight:700">RTX 3080 Ti · Ollama 0.34.0</h3>
-      <p style="font-size:28px; color:#4A5568">Bielik 11B · admission gate disabled, and the node says so</p>
-      <p style="font-family:'Fira Mono', 'Courier New', monospace; font-size:56px; font-weight:500; color:#151B2D">6.50 tok/s</p>
+    <div style="flex:1; display:flex; flex-direction:column; gap:22px; background:#FFFFFF; padding:52px 48px; border:1px solid #DDDAD2; border-radius:16px">
+      <h3 style="margin:0; font-size:36px; font-weight:700">RTX 3080 Ti · Ollama 0.34.0</h3>
+      <p style="margin:0; font-size:30px; line-height:1.35; color:#4A5568">Bielik 11B · admission gate disabled, and the node says so</p>
+      <p style="margin:0; font-family:'Fira Mono', 'Courier New', monospace; font-size:76px; margin-top:auto; padding-top:18px; font-weight:500; color:#151B2D">6.50 tok/s</p>
     </div>
   </div>
-  <p style="position:absolute; left:128px; bottom:64px; font-size:24px; color:#6A7179; width:1600px">A node that cannot measure its own context budget declares that. It does not pretend.</p>
+  <p style="margin-top:auto; font-size:24px; color:#6A7179; width:1600px">A node that cannot measure its own context budget declares that. It does not pretend.</p>
   <aside>The second node immediately exposed two false statements in our own receipts. The node announced a model that it was not serving, and every receipt claimed vLLM even when Ollama did the work. We fixed both the same day. Heterogeneity is not a feature list here. It is a test instrument. One node alone never surfaces those two bugs.</aside>
 </section>
 <section id="amd" data-transition="fade" style="background:#151B2D; color:#F5F4F1; font-family:'Fira Sans', Verdana, sans-serif; padding:128px; display:flex; flex-direction:column; gap:32px">
@@ -135,7 +164,7 @@
       <p style="font-size:28px; line-height:1.45; color:#B9BEC9">One 3B model, Q8, llama.cpp, a 20-token window. The verdict is still FAIL, because honest configurations flag prompts. The M3 check stays telemetry.</p>
     </div>
   </div>
-  <p style="font-size:30px; line-height:1.4; width:1600px">We publish the result as measured, including the FAIL.</p>
+  <p style="font-size:30px; line-height:1.4; width:1600px">We publish the result as measured, including the FAIL. Live now: Gemma 4 on an MI300X node.</p>
   <aside>Why AMD: the cross-vendor question needs their hardware. Raw data and versions are in docs/amd-data. Full write-up: docs/AMD-MI300X-RESULTS.md.</aside>
 </section>
 <section id="layer" data-transition="fade" style="background:#F5F4F1; color:#151B2D; font-family:'Fira Sans', Verdana, sans-serif; padding:128px 128px 160px; display:flex; flex-direction:column; gap:28px">
