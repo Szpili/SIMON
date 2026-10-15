@@ -42,11 +42,27 @@ pub enum BladWeb {
 }
 
 fn prywatny_ip(s: &str) -> bool {
-    match s.parse::<IpAddr>() {
-        Ok(IpAddr::V4(v4)) => {
-            v4.is_private() || v4.is_loopback() || v4.is_link_local() || v4.is_unspecified()
-        }
-        Ok(IpAddr::V6(v6)) => v6.is_loopback() || v6.is_unspecified(),
+    let czysty = s.trim_start_matches('[').trim_end_matches(']');
+    match czysty.parse::<IpAddr>() {
+        Ok(ip) => match ip.to_canonical() {
+            IpAddr::V4(v4) => {
+                v4.is_private()
+                    || v4.is_loopback()
+                    || v4.is_link_local()
+                    || v4.is_unspecified()
+                    || v4.is_broadcast()
+                    || v4.is_multicast()
+                    || v4.is_documentation()
+                    || (v4.octets()[0] == 100 && (v4.octets()[1] & 0b1100_0000) == 64)
+            }
+            IpAddr::V6(v6) => {
+                v6.is_loopback()
+                    || v6.is_unspecified()
+                    || v6.is_multicast()
+                    || ((v6.segments()[0] & 0xfe00) == 0xfc00)
+                    || ((v6.segments()[0] & 0xffc0) == 0xfe80)
+            }
+        },
         Err(_) => false, // nazwa domenowa, nie literał IP
     }
 }
@@ -54,9 +70,10 @@ fn prywatny_ip(s: &str) -> bool {
 /// Czy host pasuje do allowlisty (dokładnie albo jako subdomena).
 pub fn host_dozwolony(host: &str, lista: &[String]) -> bool {
     let h = host.to_ascii_lowercase();
-    lista.iter().any(|w| {
-        let w = w.to_ascii_lowercase();
-        h == w || h.ends_with(&format!(".{w}"))
+    lista.iter().any(|wzorzec| {
+        let w = wzorzec.to_ascii_lowercase();
+        let bez_kropki = w.trim_start_matches('.');
+        h == bez_kropki || h.ends_with(&format!(".{bez_kropki}"))
     })
 }
 
@@ -147,9 +164,23 @@ mod testy {
         assert_eq!(dozwolony_web(&url("https", "10.0.0.5", 443, "GET"), &pol()), Err(BladWeb::HostPrywatny));
         assert_eq!(dozwolony_web(&url("https", "169.254.169.254", 443, "GET"), &pol()), Err(BladWeb::HostPrywatny));
         assert_eq!(dozwolony_web(&url("https", "127.0.0.1", 443, "GET"), &pol()), Err(BladWeb::HostPrywatny));
+        assert_eq!(dozwolony_web(&url("https", "::ffff:127.0.0.1", 443, "GET"), &pol()), Err(BladWeb::HostPrywatny));
+        assert_eq!(dozwolony_web(&url("https", "fc00::1", 443, "GET"), &pol()), Err(BladWeb::HostPrywatny));
+        assert_eq!(dozwolony_web(&url("https", "fe80::1", 443, "GET"), &pol()), Err(BladWeb::HostPrywatny));
+        assert_eq!(dozwolony_web(&url("https", "[::1]", 443, "GET"), &pol()), Err(BladWeb::HostPrywatny));
         assert_eq!(dozwolony_web(&url("https", "evil.example.net", 443, "GET"), &pol()), Err(BladWeb::Host));
         // próba obfuskacji: "api.example.com.evil.net" NIE jest subdomeną api.example.com
         assert_eq!(dozwolony_web(&url("https", "api.example.com.evil.net", 443, "GET"), &pol()), Err(BladWeb::Host));
+    }
+
+    #[test]
+    fn host_dozwolony_ze_wzorcem_z_kropka() {
+        let p = vec![".example.com".to_string()];
+        assert!(host_dozwolony("example.com", &p));
+        assert!(host_dozwolony("api.example.com", &p));
+        assert!(host_dozwolony("sub.api.example.com", &p));
+        assert!(!host_dozwolony("other.org", &p));
+        assert!(!host_dozwolony("notexample.com", &p));
     }
 
     #[test]
