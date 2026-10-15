@@ -762,6 +762,12 @@ fn obsluz_odpowiedz(
     }
 }
 
+/// Poziom dowodu, który KLIENT sprawdził: 1 tylko gdy receipt przeszedł weryfikację, deklaruje M1
+/// i dostaliśmy tokeny, na których M1 faktycznie sprawdziliśmy. Deklaracja bez tokenów = 0.
+fn poziom_sprawdzony(weryfikacja: bool, m1_sprawdzone: bool, deklarowany: u8) -> u8 {
+    u8::from(weryfikacja && m1_sprawdzone && deklarowany >= 1)
+}
+
 /// M2.5.1 / M1 — weryfikacja receiptu po stronie klienta.
 ///
 /// **Klient NIE ufa node'owi (RULES #6).** Bramki:
@@ -770,12 +776,6 @@ fn obsluz_odpowiedz(
 ///   3. `job_id` i `model_hash` zgadzają się z tym, o co prosiliśmy,
 ///   4. czy receipt opisuje TEN tekst (`zgodny_z_wyjsciem`),
 ///   5. Wiązanie M1 (jeśli przekazano wiązania M1 i receipt ma poziom >= 1): `zweryfikuj_m1`.
-/// Poziom dowodu, który KLIENT sprawdził: 1 tylko gdy receipt przeszedł weryfikację, deklaruje M1
-/// i dostaliśmy tokeny, na których M1 faktycznie sprawdziliśmy. Deklaracja bez tokenów = 0.
-fn poziom_sprawdzony(weryfikacja: bool, m1_sprawdzone: bool, deklarowany: u8) -> u8 {
-    u8::from(weryfikacja && m1_sprawdzone && deklarowany >= 1)
-}
-
 fn zweryfikuj_receipt(
     receipt_json: &str,
     oczekiwany_job_id: &str,
