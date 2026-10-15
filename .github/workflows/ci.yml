@@ -27,6 +27,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Gateway unit tests
+        run: python3 -m unittest discover -s tools/simon-api -p "test_*.py"
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
