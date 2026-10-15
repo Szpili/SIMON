@@ -85,7 +85,7 @@
     }
     if (m3v) {
       steps = [...steps, {
-        label: 'M3: node tokens within verifier top-k (execution audit)',
+        label: 'M3: node tokens within verifier top-k (telemetry, does not gate the verdict)',
         status: m3v.ok ? 'pass' : 'fail',
         detail: m3v.ok
           ? `${m3v.w_topk}/${m3v.krokow} in top-k, worst rank ${m3v.najgorszy_rank}, margin ${m3v.najgorszy_margin.toFixed(3)}`
@@ -94,7 +94,8 @@
     }
 
     for (let i = 1; i <= steps.length; i++) { await sleep(160); shown = i; }
-    pill = v.ok && (m1v?.ok ?? true) && (m3v?.ok ?? true) ? 'valid' : 'rejected';
+    // M3 failed its zero-false-positive gate (docs/FP-RESULT.md): shown, never decides the verdict.
+    pill = v.ok && (m1v?.ok ?? true) ? 'valid' : 'rejected';
     busy = false;
   }
 

@@ -63,7 +63,7 @@
       <NodePanel receipt={receipt0} output={output0} tampered={tampered0} ontamper={tamper0} onrestore={restore0} />
       <VerifierPanel receiptJson={RECEIPT_JSON} receipt={receipt0} output={output0} />
     {:else}
-      <NodePanel receipt={receipt1} output={tokWidok} tampered={tampered1} ontamper={tamper1} onrestore={restore1} />
+      <NodePanel receipt={receipt1} output={tokWidok} tampered={tampered1} ontamper={tamper1} onrestore={restore1} tamperNote="Output token 6 was changed by one." />
       <VerifierPanel receiptJson={RECEIPT_M1_JSON} receipt={receipt1} output={OUTPUT_M1} m1={m1Wejscie} auditJson={AUDYT_M3_JSON} />
     {/if}
   </div>

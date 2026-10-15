@@ -1,8 +1,8 @@
 <script lang="ts">
   import type { Receipt } from './../receipt';
   import HashField from './HashField.svelte';
-  let { receipt, output, tampered, ontamper, onrestore }: {
-    receipt: Receipt; output: string; tampered: boolean; ontamper: () => void; onrestore: () => void;
+  let { receipt, output, tampered, ontamper, onrestore, tamperNote = 'One trailing space was appended.' }: {
+    receipt: Receipt; output: string; tampered: boolean; ontamper: () => void; onrestore: () => void; tamperNote?: string;
   } = $props();
 </script>
 
@@ -14,8 +14,8 @@
 
   <div class="mt-5">
     <p class="mono text-xs text-neutral-500">output (the answer it returned)</p>
-    <p class="mono mt-1 whitespace-pre-wrap break-words border p-3 text-sm {tampered ? 'border-bad/60' : 'border-line'} bg-ink text-neutral-100">{output}<span class="{tampered ? 'bg-bad' : ''}">{tampered ? '\u00a0' : ''}</span></p>
-    {#if tampered}<p class="mono mt-1 text-xs text-bad">One trailing space was appended. The signed receipt was not re-issued.</p>{/if}
+    <p class="mono mt-1 whitespace-pre-wrap break-words border p-3 text-sm {tampered ? 'border-bad/60' : 'border-line'} bg-ink text-neutral-100">{output}<span class="{tampered && output.endsWith(' ') ? 'bg-bad' : ''}">{tampered && output.endsWith(' ') ? '\u00a0' : ''}</span></p>
+    {#if tampered}<p class="mono mt-1 text-xs text-bad">{tamperNote} The signed receipt was not re-issued.</p>{/if}
   </div>
 
   <div class="mt-4">
