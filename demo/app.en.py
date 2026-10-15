@@ -179,8 +179,8 @@ elif w:
     st.divider()
     st.subheader("Don't take it on faith — verify")
     st.markdown(
-        "The receipt is signed with the node's Ed25519 key, and the signature covers "
-        "**the digest of the response content** bound to the job identifier. Below "
+        "The receipt is signed with the node's Ed25519 key (domain `SIMON/RECEIPT/v1`), and the signature covers "
+        "**the digest of the response content** (`SIMON/OUTPUT/v1`, SHA-256) bound to the job identifier. Below "
         "you can verify it, and also try to fool the verification **in the three "
         "ways it would realistically be done**."
     )
@@ -217,8 +217,8 @@ elif w:
         if v.get("ok"):
             st.success("RECEIPT VALID")
             st.markdown(
-                "- Ed25519 signature: **valid**\n"
-                "- Content bound to the receipt: **yes**\n"
+                "- Ed25519 signature (`SIMON/RECEIPT/v1`): **valid**\n"
+                "- Content bound to the receipt (`SIMON/OUTPUT/v1`, SHA-256): **yes**\n"
                 "- Counters: **signed by the node** (not independently recomputed)\n"
                 "- Model execution: **not yet audited**"
             )
