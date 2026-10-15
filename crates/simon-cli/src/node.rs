@@ -768,24 +768,28 @@ async fn odczytaj_realny_ctx(model_url: &str, prompt: &str) -> Option<u32> {
     }
 }
 
-/// Wykrywa precyzję modelu na podstawie jego nazwy/identyfikatora.
+/// Precyzja z nazwy modelu (`model_hash` deklaruje operator, więc to i tak jego deklaracja).
+/// Kwantyzacje całkowitoliczbowe NIE są fp8/fp4; nazwa bez znacznika daje `Unknown` —
+/// podpisany receipt nie może zgadywać.
 pub(crate) fn wykryj_precyzje(model_hash: &str) -> Precision {
-    let lower = model_hash.to_ascii_lowercase();
-    if lower.contains("bf16") {
+    let n = model_hash.to_ascii_lowercase();
+    let ma = |znaczniki: &[&str]| znaczniki.iter().any(|z| n.contains(z));
+    if ma(&["bf16"]) {
         Precision::Bf16
-    } else if lower.contains("fp8") || lower.contains("q8") {
-        Precision::Fp8
-    } else if lower.contains("fp4")
-        || lower.contains("q4")
-        || lower.contains("awq")
-        || lower.contains("gptq")
-        || lower.contains("int4")
-    {
-        Precision::Fp4
-    } else if lower.contains("fp32") || lower.contains("f32") {
+    } else if ma(&["fp32", "f32"]) {
         Precision::Fp32
-    } else {
+    } else if ma(&["fp16", "f16"]) {
         Precision::Fp16
+    } else if ma(&["fp8"]) {
+        Precision::Fp8
+    } else if ma(&["fp4"]) {
+        Precision::Fp4
+    } else if ma(&["q8", "int8", "w8a8"]) {
+        Precision::Int8
+    } else if ma(&["q4", "int4", "awq", "gptq"]) {
+        Precision::Int4
+    } else {
+        Precision::Unknown
     }
 }
 
@@ -1179,15 +1183,24 @@ mod testy_receiptu {
     #[test]
     fn test_wykryj_precyzje_z_nazwy_modelu() {
         assert_eq!(wykryj_precyzje("gemma-4-26b-a4b-it-bf16"), Precision::Bf16);
-        assert_eq!(wykryj_precyzje("gemma-4-26b-a4b-it-qat-q4_0"), Precision::Fp4);
-        assert_eq!(wykryj_precyzje("qwen-q8_0"), Precision::Fp8);
-        assert_eq!(wykryj_precyzje("model-awq"), Precision::Fp4);
-        assert_eq!(wykryj_precyzje("model-gptq"), Precision::Fp4);
-        assert_eq!(wykryj_precyzje("model-int4"), Precision::Fp4);
+        // kwantyzacje całkowitoliczbowe to NIE fp4/fp8
+        assert_eq!(wykryj_precyzje("gemma-4-26b-a4b-it-qat-q4_0"), Precision::Int4);
+        assert_eq!(wykryj_precyzje("qwen-q8_0"), Precision::Int8);
+        assert_eq!(wykryj_precyzje("model-awq"), Precision::Int4);
+        assert_eq!(wykryj_precyzje("model-gptq"), Precision::Int4);
+        assert_eq!(wykryj_precyzje("model-int4"), Precision::Int4);
         assert_eq!(wykryj_precyzje("model-fp8"), Precision::Fp8);
+        assert_eq!(wykryj_precyzje("model-nvfp4"), Precision::Fp4);
         assert_eq!(wykryj_precyzje("model-fp32"), Precision::Fp32);
         assert_eq!(wykryj_precyzje("model-f32"), Precision::Fp32);
-        assert_eq!(wykryj_precyzje("standard-model"), Precision::Fp16);
+        assert_eq!(wykryj_precyzje("model-fp16"), Precision::Fp16);
+        // bez znacznika (albo Q5/Q6, których enum nie ma) — przyznajemy, że nie wiemy
+        assert_eq!(wykryj_precyzje("standard-model"), Precision::Unknown);
+        assert_eq!(wykryj_precyzje("deepseek-v4-flash-amd"), Precision::Unknown);
+        assert_eq!(wykryj_precyzje("llama-q5_k_m"), Precision::Unknown);
+        // serializacja: nazwy w receipcie
+        assert_eq!(serde_json::to_string(&Precision::Int4).unwrap(), "\"int4\"");
+        assert_eq!(serde_json::to_string(&Precision::Unknown).unwrap(), "\"unknown\"");
     }
 
     #[test]
@@ -1202,6 +1215,3 @@ mod testy_receiptu {
         assert_eq!(wyciagnij_liczbe_tokenow(&v_inny), None);
     }
 }
-
-
-

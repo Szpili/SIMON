@@ -25,6 +25,12 @@ pub enum Precision {
     Fp32,
     Fp8,
     Fp4,
+    /// Kwantyzacja całkowitoliczbowa wag (np. GGUF Q8_0, W8A8) — NIE fp8.
+    Int8,
+    /// Kwantyzacja całkowitoliczbowa wag 4-bit (GGUF Q4_*, AWQ, GPTQ) — NIE fp4.
+    Int4,
+    /// Węzeł nie zna precyzji (nazwa modelu jej nie mówi). Lepiej przyznać niż zgadywać.
+    Unknown,
 }
 
 /// Receipt jest tym, co node składa jako dowód wykonania pracy.
