@@ -137,9 +137,85 @@ pub fn wypisz_adresy(swarm: &libp2p::Swarm<Zachowanie>, rola: &str) {
     }
 }
 
+/// Wyciąga listę identyfikatorów tokenów (tablicę u32) z JSON-owej odpowiedzi `/tokenize`.
+#[allow(dead_code)]
+pub fn wyciagnij_id_tokenow(v: &serde_json::Value) -> Option<Vec<u32>> {
+    let arr = v.get("tokens").and_then(|t| t.as_array())?;
+    let ids: Vec<u32> = arr
+        .iter()
+        .filter_map(|x| x.as_u64().and_then(|n| u32::try_from(n).ok()))
+        .collect();
+    if ids.is_empty() {
+        None
+    } else {
+        Some(ids)
+    }
+}
+
+/// Woła endpoint `/tokenize` backendu LLM i zwraca identyfikatory tokenów.
+///
+/// Wyprowadza bazowy URL `{baza}/tokenize` z `model_url` (obcinając `/v1/...` lub `/api/...`),
+/// wysyła żądanie POST z ciałem `{"prompt": tekst, "content": tekst}` (timeout 2s)
+/// i parsuje odpowiedź za pomocą `wyciagnij_id_tokenow`.
+#[allow(dead_code)]
+pub async fn tokenizuj_tekst(model_url: &str, tekst: &str) -> Option<Vec<u32>> {
+    let trimmed = model_url.trim_end_matches('/');
+    let baza = if let Some(idx) = trimmed.find("/v1") {
+        &trimmed[..idx]
+    } else if let Some(idx) = trimmed.find("/api") {
+        &trimmed[..idx]
+    } else {
+        trimmed
+    };
+    let url = format!("{baza}/tokenize");
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .ok()?;
+    let payload = serde_json::json!({
+        "prompt": tekst,
+        "content": tekst,
+    });
+    let resp = client.post(&url).json(&payload).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let val: serde_json::Value = resp.json().await.ok()?;
+    wyciagnij_id_tokenow(&val)
+}
+
+/// Oblicza domyślny odcisk tokenizera dla podanego hasza/nazwy modelu.
+#[allow(dead_code)]
+pub fn domyslny_odcisk_tokenizera(model_hash: &str) -> Result<String, simon_core::SimonError> {
+    Ok(simon_core::receipt::odcisk_tokenizera(model_hash.as_bytes()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_wyciagnij_id_tokenow() {
+        let v1 = serde_json::json!({"tokens": [1u32, 2, 3, 4]});
+        assert_eq!(wyciagnij_id_tokenow(&v1), Some(vec![1, 2, 3, 4]));
+
+        let v2 = serde_json::json!({"tokens": []});
+        assert_eq!(wyciagnij_id_tokenow(&v2), None);
+
+        let v3 = serde_json::json!({"count": 42});
+        assert_eq!(wyciagnij_id_tokenow(&v3), None);
+
+        let v4 = serde_json::json!({"tokens": ["invalid", 42]});
+        assert_eq!(wyciagnij_id_tokenow(&v4), Some(vec![42]));
+    }
+
+    #[test]
+    fn test_domyslny_odcisk_tokenizera() {
+        let h1 = domyslny_odcisk_tokenizera("mistral-7b").unwrap();
+        let h2 = simon_core::receipt::odcisk_tokenizera(b"mistral-7b");
+        assert_eq!(h1, h2);
+        assert_ne!(h1, domyslny_odcisk_tokenizera("qwen-27b").unwrap());
+    }
 
     #[test]
     fn m12_deterministyczny_klucz_jest_stabilny() {
