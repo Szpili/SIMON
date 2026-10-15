@@ -747,10 +747,32 @@ async fn odczytaj_realny_ctx(model_url: &str, prompt: &str) -> Option<u32> {
     }
 }
 
+/// Wykrywa precyzję modelu na podstawie jego nazwy/identyfikatora.
+pub(crate) fn wykryj_precyzje(model_hash: &str) -> Precision {
+    let lower = model_hash.to_ascii_lowercase();
+    if lower.contains("bf16") {
+        Precision::Bf16
+    } else if lower.contains("fp8") || lower.contains("q8") {
+        Precision::Fp8
+    } else if lower.contains("fp4")
+        || lower.contains("q4")
+        || lower.contains("awq")
+        || lower.contains("gptq")
+        || lower.contains("int4")
+    {
+        Precision::Fp4
+    } else if lower.contains("fp32") || lower.contains("f32") {
+        Precision::Fp32
+    } else {
+        Precision::Fp16
+    }
+}
+
 /// M2.5.1: buduje receipt i PODPISUJE go kluczem node'a.
 ///
 /// `activation_hash` jest na razie jawnym placeholderem — TopLoc wymaga
 /// hidden states z runnera (nie z API vLLM). Nie udajemy, że jest policzony.
+#[allow(clippy::too_many_arguments)]
 fn zbuduj_podpisany_receipt(
     klucz: &Keypair,
     model_hash: &str,
@@ -767,7 +789,7 @@ fn zbuduj_podpisany_receipt(
         node_id: klucz.public().to_hex(),
         model_hash: model_hash.to_string(),
         runtime: runtime.to_string(),
-        precision: Precision::Fp16,
+        precision: wykryj_precyzje(model_hash),
         // M2.5.1b: do policzenia poza API vLLM (runner + hidden states).
         activation_hash: "toploc:NIE_POLICZONY".to_string(),
         // Odcisk TRESCI, nie metadanych. Metadane (czasy) i tak sa podpisane,
@@ -1132,5 +1154,20 @@ mod testy_receiptu {
         assert!(r.started_at_us <= r.finished_at_us);
         assert!(r.verify_self().is_ok());
     }
+
+    #[test]
+    fn test_wykryj_precyzje_z_nazwy_modelu() {
+        assert_eq!(wykryj_precyzje("gemma-4-26b-a4b-it-bf16"), Precision::Bf16);
+        assert_eq!(wykryj_precyzje("gemma-4-26b-a4b-it-qat-q4_0"), Precision::Fp4);
+        assert_eq!(wykryj_precyzje("qwen-q8_0"), Precision::Fp8);
+        assert_eq!(wykryj_precyzje("model-awq"), Precision::Fp4);
+        assert_eq!(wykryj_precyzje("model-gptq"), Precision::Fp4);
+        assert_eq!(wykryj_precyzje("model-int4"), Precision::Fp4);
+        assert_eq!(wykryj_precyzje("model-fp8"), Precision::Fp8);
+        assert_eq!(wykryj_precyzje("model-fp32"), Precision::Fp32);
+        assert_eq!(wykryj_precyzje("model-f32"), Precision::Fp32);
+        assert_eq!(wykryj_precyzje("standard-model"), Precision::Fp16);
+    }
 }
+
 
