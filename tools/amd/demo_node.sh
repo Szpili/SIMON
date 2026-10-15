@@ -111,7 +111,46 @@ RestartSec=10
 [Install]
 WantedBy=multi-user.target
 EOF
+cat > /usr/local/bin/simon-gpustats <<'EOF'
+#!/usr/bin/env python3
+"""GPU telemetry of this MI300X for the demo's /network page: GET /stats on 127.0.0.1:9101 (via the SSH tunnel)."""
+import json, subprocess, time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+last = [0.0, b"{}"]
+def read():
+    if time.time() - last[0] > 1:
+        c = next(iter(json.loads(subprocess.run(["rocm-smi", "--showuse", "--showmemuse", "--showtemp", "--showpower",
+             "--showmeminfo", "vram", "--showproductname", "--showmaxpower", "--json"], capture_output=True, text=True,
+             timeout=10).stdout).values()))
+        f = lambda k: float(c[k]) if c.get(k) not in (None, "N/A") else None
+        last[:] = [time.time(), json.dumps({"name": c.get("Card Series"), "util": f("GPU use (%)"),
+            "vram_used_mb": f("VRAM Total Used Memory (B)") / 2**20, "vram_total_mb": f("VRAM Total Memory (B)") / 2**20,
+            "temp_c": f("Temperature (Sensor junction) (C)"), "power_w": f("Current Socket Graphics Package Power (W)"),
+            "power_limit_w": f("Max Graphics Package Power (W)")}).encode()]
+    return last[1]
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        try:
+            body = read(); self.send_response(200)
+        except Exception as e:  # rocm-smi missing or busy: say so, never invent numbers
+            body = json.dumps({"error": str(e)[:200]}).encode(); self.send_response(503)
+        self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(body)
+    def log_message(self, *a): pass
+HTTPServer(("127.0.0.1", 9101), H).serve_forever()
+EOF
+chmod 755 /usr/local/bin/simon-gpustats
+cat > /etc/systemd/system/simon-gpustats.service <<EOF
+[Unit]
+Description=MI300X telemetry for the SIMON demo monitor (127.0.0.1:9101, reached through the SSH tunnel)
+[Service]
+ExecStart=/usr/local/bin/simon-gpustats
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
+EOF
 systemctl daemon-reload
+systemctl enable --now simon-gpustats.service
 systemctl enable --now simon-vllm.service
 systemctl enable simon-node.service && systemctl restart --no-block simon-node.service
 REMOTE
@@ -133,7 +172,7 @@ REMOTE
 Description=SSH tunnel to the SIMON MI300X node '$NAME' ($IP)
 [Service]
 ExecStart=/usr/bin/ssh -i $SSH_KEY -N -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 \
-  -o ServerAliveCountMax=3 -o StrictHostKeyChecking=accept-new -L 127.0.0.1:$LPORT:127.0.0.1:9001 root@$IP
+  -o ServerAliveCountMax=3 -o StrictHostKeyChecking=accept-new -L 127.0.0.1:$LPORT:127.0.0.1:9001 -L 127.0.0.1:$((LPORT + 1000)):127.0.0.1:9101 root@$IP
 Restart=always
 # the image rate-limits ssh (ufw limit): fast retries keep re-arming the block
 RestartSec=30
@@ -145,7 +184,8 @@ EOF
   echo "== 5/5 register in the demo: nodes.json (gateway re-reads it) + monitor =="
   json_edit "$NAME" "$(python3 -c 'import json,sys; n,p,m,lp,nid,lab=sys.argv[1:]; print(json.dumps({
     "node": {"name": n, "bootstrap": f"/ip4/127.0.0.1/tcp/{lp}/p2p/{p}", "model_hash": m},
-    "monitor": {"name": n, "label": lab, "model": m, "gpu": None, "node_id": nid}}))' \
+    "monitor": {"name": n, "label": lab, "model": m, "gpu": None, "node_id": nid,
+                "stats_url": f"http://127.0.0.1:{int(lp) + 1000}/stats"}}))' \
     "$NAME" "$PEER" "$MODEL" "$LPORT" "$NODE_ID" "$LABEL")"
   systemctl --user restart simon-monitor 2>/dev/null || true
   sleep 3

@@ -13,14 +13,16 @@ monitor.json:
                 "shared_with": "Strata"}]}
   model       — the gateway's model name; jobs are matched to the node by it
   node_id     — optional: match jobs by the receipt's node_id instead (two nodes serving one model)
-  gpu         — nvidia-smi index (PCI order) to sample, or null for a remote node (no telemetry)
+  gpu         — nvidia-smi index (PCI order) to sample, or null for a remote node
+  stats_url   — remote node: URL returning {name, util, vram_used_mb, vram_total_mb, temp_c, power_w,
+                power_limit_w} (tools/amd/demo_node.sh serves rocm-smi this way through its SSH tunnel)
   shared_with — shown on the card: GPU load is not all SIMON's
   canary      — optional: status file written by tools/simon-canary (operator self-check of the weights)
 
 GET /api/monitor → {generated_at, nodes[], jobs[] (last 50), totals}. No prompts, no
 outputs, no addresses: only what is already in a receipt plus GPU telemetry.
 """
-import json, os, subprocess, threading, time
+import json, os, subprocess, threading, time, urllib.request
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -75,6 +77,16 @@ def sample_gpus():
         return parse_nvidia_csv(r.stdout) if r.returncode == 0 else {}
     except (OSError, subprocess.TimeoutExpired):
         return {}  # no driver / no nvidia-smi → cards show "no telemetry"
+
+
+def fetch_stats(url):
+    """Telemetry of a remote node, or None (unreachable / error): the card then says so, no numbers invented."""
+    try:
+        with urllib.request.urlopen(url, timeout=1.5) as r:
+            d = json.loads(r.read())
+        return d if "error" not in d else None
+    except (OSError, ValueError):
+        return None
 
 
 class JobTail:
@@ -136,11 +148,11 @@ class State:
         with self.lock:
             nodes = []
             for i, n in enumerate(self.nodes):
-                g = self.gpu.get(n.get("gpu")) if n.get("gpu") is not None else None
+                g = self.gpu.get(n.get("gpu")) if n.get("gpu") is not None else self.gpu.get(n.get("stats_url"))
                 last = self.last_job.get(i)
                 nodes.append({
                     "label": n["label"], "model": n.get("model"), "shared_with": n.get("shared_with"),
-                    "telemetry": "remote" if n.get("gpu") is None else ("ok" if g else "unavailable"),
+                    "telemetry": ("ok" if g else "unavailable") if (n.get("gpu") is not None or n.get("stats_url")) else "remote",
                     "state": "active" if last and now - last <= ACTIVE_S else ("idle" if last else "no_jobs"),
                     "last_job_age_s": round(now - last) if last else None,
                     "gpu": g, "history": {k: list(v) for k, v in self.hist[i].items()},
@@ -153,13 +165,17 @@ class State:
 def loop(st, tail):
     while True:
         gpus = sample_gpus() if any(n.get("gpu") is not None for n in st.nodes) else {}
+        for n in st.nodes:
+            if n.get("stats_url"):
+                gpus[n["stats_url"]] = fetch_stats(n["stats_url"])
         new = tail.read_new()
         with st.lock:
             st.gpu = gpus
             for i, n in enumerate(st.nodes):
-                g = gpus.get(n.get("gpu"))
+                key = n.get("gpu") if n.get("gpu") is not None else n.get("stats_url")
+                g = gpus.get(key) if key is not None else None
                 h = st.hist[i]
-                if n.get("gpu") is not None and not g:
+                if key is not None and not g:
                     for k in ("util", "temp", "power", "vram"):
                         h[k].append(None)  # a missed sample is a visible gap, not a squeezed timeline
                 if g:
@@ -191,6 +207,7 @@ def make_handler(st):
 
 
 def selfcheck():
+    assert fetch_stats("http://127.0.0.1:1/stats") is None  # unreachable remote -> no numbers
     import tempfile
     cp = tempfile.mktemp()
     json.dump({"verdict": "ok", "hits": 8, "of": 8, "ts": time.time()}, open(cp, "w"))
