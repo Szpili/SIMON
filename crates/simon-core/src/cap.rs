@@ -94,13 +94,18 @@ pub fn waliduj(sufit: &Sufit, akcja: &str, parametry: &Value) -> Result<(), Odmo
         .get(akcja)
         .ok_or_else(|| Odmowa::NieznanaAkcja { akcja: akcja.to_string() })?;
 
-    let Some(o) = parametry.as_object() else {
-        return Err(Odmowa::ZlyTyp {
-            akcja: akcja.to_string(),
-            parametr: "parametry".to_string(),
-        });
+    // Brak `args` (serde daje Null) = brak parametrów; skalar albo tablica = zły typ.
+    let pusty = serde_json::Map::new();
+    let o = match parametry {
+        Value::Null => &pusty,
+        Value::Object(o) => o,
+        _ => {
+            return Err(Odmowa::ZlyTyp {
+                akcja: akcja.to_string(),
+                parametr: "parametry".to_string(),
+            })
+        }
     };
-    let obj = Some(o);
     // Nadmiarowe parametry: cokolwiek spoza kontraktu.
     for k in o.keys() {
         if !def.parametry.iter().any(|p| &p.nazwa == k) {
@@ -112,7 +117,7 @@ pub fn waliduj(sufit: &Sufit, akcja: &str, parametry: &Value) -> Result<(), Odmo
     }
 
     for p in &def.parametry {
-        let v = obj.and_then(|o| o.get(&p.nazwa));
+        let v = o.get(&p.nazwa);
         let Some(v) = v else {
             if p.wymagany {
                 return Err(Odmowa::BrakParametru {
@@ -503,6 +508,34 @@ mod testy {
         let tablica = serde_json::json!([1, 2, 3]);
         assert!(matches!(
             waliduj(&s, "log_message", &tablica),
+            Err(Odmowa::ZlyTyp { .. })
+        ));
+    }
+
+    #[test]
+    fn brak_args_to_brak_parametrow() {
+        let mut s = sufit();
+        s.akcje.insert(
+            "status".to_string(),
+            Akcja {
+                nazwa: "status".into(),
+                parametry: vec![Parametr {
+                    nazwa: "szczegoly".into(),
+                    wymagany: false,
+                    ograniczenie: Ograniczenie::Tekst { max_len: 10 },
+                }],
+            },
+        );
+        // narzędzie bez wymaganych parametrów, model pominął `args` -> serde daje Null -> OK
+        assert!(waliduj_json(&s, r#"{"tool":"status"}"#).is_ok());
+        // Null nie zastępuje wymaganego parametru
+        assert!(matches!(
+            waliduj_json(&s, r#"{"tool":"ustaw_tryb"}"#),
+            Err(Odmowa::BrakParametru { .. })
+        ));
+        // skalar i tablica nadal odrzucone
+        assert!(matches!(
+            waliduj_json(&s, r#"{"tool":"status","args":"x"}"#),
             Err(Odmowa::ZlyTyp { .. })
         ));
     }
