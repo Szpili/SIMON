@@ -10,6 +10,24 @@ import math
 OSF_LIMIT = {"L": 11000, "M": 12000, "H": 13000}  # tool wear [min] x torque [Nm], by product quality type
 
 
+# The only inspection steps a ticket may contain, per failure mode. The model picks IDs; it never writes
+# the step itself, so it cannot author an instruction for the technician (stress test, Joe, 2026-10-15).
+CHECKS = {
+    "HDF": {"HDF-1": "Check the cooling air flow at the spindle housing (fans, filters, ducts)",
+            "HDF-2": "Inspect cooling fins and heat exchanger surfaces for dust or blockage",
+            "HDF-3": "Compare the air and process temperature sensors against a reference thermometer"},
+    "PWF": {"PWF-1": "Check spindle motor current and torque against the drive's rated values",
+            "PWF-2": "Inspect the cutting tool and workpiece clamping for binding or slip",
+            "PWF-3": "Review the cutting parameters (speed, feed) of the current job with the process engineer"},
+    "OSF": {"OSF-1": "Measure the cutting tool's wear and compare it with the replacement criterion",
+            "OSF-2": "Review the torque load of the last jobs for overload",
+            "OSF-3": "Inspect the tool holder and spindle bearings for play or vibration"},
+    "TWF": {"TWF-1": "Measure the tool's flank wear and plan the tool change",
+            "TWF-2": "Confirm a replacement tool of the right type is in stock",
+            "TWF-3": "Record the tool's run time in the tool log"},
+}
+
+
 def features(r):
     air, proc = float(r["Air temperature [K]"]), float(r["Process temperature [K]"])
     rpm, torque, wear = float(r["Rotational speed [rpm]"]), float(r["Torque [Nm]"]), float(r["Tool wear [min]"])
@@ -44,6 +62,7 @@ def selfcheck():
     f = features(r)
     assert f["power_W"] == round(60 * 1300 * 2 * math.pi / 60) and f["temp_diff_K"] == 8.0
     assert [x["mode"] for x in findings(f)] == ["HDF", "OSF", "TWF"]  # 8170 W is inside the power band
+    assert all(k.startswith(m + "-") for m, c in CHECKS.items() for k in c)
 
 
 if __name__ == "__main__":

@@ -10,12 +10,14 @@
   type Rec = (typeof run.records)[number];
 
   const s = run.summary;
-  const tickets = run.records.filter((r) => r.ticket);
+  // A ticket with any failed check is held for a person, never published (stress test, 2026-10-15).
+  const tickets = run.records.filter((r) => r.ticket && !r.problems?.length);
+  const held = run.records.filter((r) => r.ticket && r.problems?.length);
   const misses = run.records.filter((r) => !r.ticket && !r.error);
   let verdict = $state<Record<string, { ok: boolean; why: string | null }>>({});
 
   onMount(() => {
-    for (const r of tickets) {
+    for (const r of [...tickets, ...held]) {
       if (!r.receipt || !r.signed_output) continue;
       verifyReceipt(JSON.stringify(r.receipt), r.signed_output)
         .then((v) => (verdict[r.record] = { ok: v.ok, why: v.powod }))
@@ -41,13 +43,13 @@
 
   <ol class="mt-6 grid gap-3 md:grid-cols-4 mono text-xs">
     <li class="border border-line bg-panel p-3"><b class="text-neutral-100">1 · Rules decide</b><br />Deterministic physics thresholds flag the risk and the failure mode. The language model never decides whether a machine is at risk.</li>
-    <li class="border border-line bg-panel p-3"><b class="text-neutral-100">2 · Gemma drafts</b><br />Gemma 4 26B-A4B writes the ticket (JSON) from the rule findings only: checks, urgency, evidence, marked for human review.</li>
-    <li class="border border-line bg-panel p-3"><b class="text-neutral-100">3 · Checked</b><br />Valid JSON, failure modes equal to the rules, no number the input lacks, no command to stop or bypass equipment.</li>
+    <li class="border border-line bg-panel p-3"><b class="text-neutral-100">2 · Gemma drafts</b><br />Gemma 4 26B-A4B writes the title and summary and picks inspection steps by ID from a fixed catalog per failure mode. It never writes a step itself.</li>
+    <li class="border border-line bg-panel p-3"><b class="text-neutral-100">3 · Checked</b><br />Exact fields, failure modes equal to the rules, steps from the catalog, short text with no new number, link, role marker or urgency. Any problem: held for a person.</li>
     <li class="border border-line bg-panel p-3"><b class="text-neutral-100">4 · Signed</b><br />The SIMON node signs the exact ticket text. Verified below, in your browser, offline.</li>
   </ol>
 
   <div class="mt-6 grid gap-3 sm:grid-cols-4 mono">
-    <div class="border border-line bg-panel p-4"><p class="text-xs text-neutral-500">tickets that passed every check</p><p class="text-2xl">{s.clean}/{s.tickets}</p></div>
+    <div class="border border-line bg-panel p-4"><p class="text-xs text-neutral-500">published (passed every check)</p><p class="text-2xl">{s.clean}/{s.tickets}</p></div>
     <div class="border border-line bg-panel p-4"><p class="text-xs text-neutral-500">median time per ticket</p><p class="text-2xl">{(s.median_ms / 1000).toFixed(1)} s</p></div>
     <div class="border border-line bg-panel p-4"><p class="text-xs text-neutral-500">records in the predeclared sample</p><p class="text-2xl">{s.records}</p></div>
     <div class="border border-line bg-panel p-4"><p class="text-xs text-neutral-500">GPU nodes in this run</p>{#each s.nodes as n}<p class="mt-1 text-xs leading-snug text-neutral-200">{n}</p>{/each}</div>
@@ -65,13 +67,30 @@
         </header>
         <h3 class="mt-2 font-bold text-neutral-100">{r.ticket?.title}</h3>
         <p class="mt-1 text-neutral-300">{r.ticket?.summary}</p>
-        <ul class="mt-2 list-disc pl-5 text-neutral-300">{#each r.ticket?.checks ?? [] as c}<li>{c}</li>{/each}</ul>
+        <ul class="mt-2 list-disc pl-5 text-neutral-300">{#each r.ticket?.check_steps ?? [] as c, i}<li>{c} <span class="mono whitespace-nowrap text-xs text-neutral-500">{r.ticket?.checks?.[i]}</span></li>{/each}</ul>
         <p class="mt-2 mono text-xs text-neutral-500">urgency: {r.ticket?.urgency} · evidence: {(r.ticket?.evidence ?? []).join(', ')}</p>
         <p class="mt-1 mono text-xs text-neutral-500">signed by {short(r.node_id)} ({r.node_label ?? 'node'}) · model {r.receipt?.model_hash} · {r.wall_ms} ms</p>
-        {#if r.problems?.length}<p class="mt-1 mono text-xs text-bad">checks failed: {r.problems.join('; ')}</p>{/if}
       </article>
     {/each}
   </div>
+
+  {#if held.length}
+    <h2 class="mt-10 mono text-sm font-bold tracking-wider text-neutral-300">Held for review (not published)</h2>
+    <p class="mt-2 text-sm text-neutral-400">These drafts failed a check, so they go to a person instead of the technician. The signed draft stays in the audit trail.</p>
+    {#each held as r (r.record)}
+      <article class="mt-3 border border-bad/60 bg-panel p-4 text-sm">
+        <header class="flex flex-wrap items-baseline justify-between gap-2 mono text-xs text-neutral-500">
+          <span>record {r.record} · {r.product} · rules: <span class="text-amber-400">{modes(r)}</span></span>
+          {#if !verdict[r.record]}<span>checking receipt…</span>
+          {:else if verdict[r.record].ok}<span class="text-valid">RECEIPT VALID · signature + text</span>
+          {:else}<span class="text-bad" title={verdict[r.record].why ?? ''}>RECEIPT REJECTED</span>{/if}
+        </header>
+        <p class="mt-2 mono text-xs text-bad">held: {r.problems?.join('; ')}</p>
+        <p class="mt-1 text-neutral-400">draft summary: “{r.ticket?.summary}”</p>
+        <p class="mt-1 mono text-xs text-neutral-500">signed by {short(r.node_id)} ({r.node_label ?? 'node'}) · rules said: {r.findings.map((f) => f.urgency).join(', ')}</p>
+      </article>
+    {/each}
+  {/if}
 
   {#if misses.length}
     <h2 class="mt-10 mono text-sm font-bold tracking-wider text-neutral-300">What the rules miss (no ticket)</h2>
@@ -84,7 +103,7 @@
   <h2 class="mt-10 mono text-sm font-bold tracking-wider text-neutral-300">Read this before trusting it</h2>
   <ul class="mt-2 list-disc pl-5 text-sm text-neutral-400">
     <li>Data: AI4I 2020 Predictive Maintenance (UCI, CC BY 4.0): 10,000 synthetic records modelled on a real milling machine. Its failure labels follow published physics, so our rules catch 321 of 339 labelled failures here; that is the dataset's design, not a result to quote for a real plant.</li>
-    <li>Gemma's role is the ticket text, not the diagnosis. A technician reviews every ticket.</li>
+    <li>Gemma's role is the ticket text, not the diagnosis. Inspection steps come only from the plant's catalog; evidence is copied from the rules by code. What the checks cannot judge is the meaning of the short free-text summary, so a technician reviews every ticket. The stress cases, including that known limit, run in CI: <code>tools/simon-industry/stress_corpus.json</code>.</li>
     <li>A receipt (proof level 0) proves which node's key signed this exact ticket. It does not prove which model ran; see the <a class="underline" href="{base}/demo">demo</a> and <a class="underline" href="{base}/network">network</a> pages.</li>
     <li>The sample (18 records, fixed seed, stratified by rule outcome) was chosen in code before any model output was seen: <code>tools/simon-industry/tickets.py</code>.</li>
   </ul>

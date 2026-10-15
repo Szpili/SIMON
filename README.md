@@ -21,15 +21,20 @@ prove which system produced which advice.
 
 1. Deterministic rules decide the risk and the failure mode (the published physics of the AI4I 2020
    milling-machine dataset, `tools/simon-industry/rules.py`). The language model never decides it.
-2. **Gemma 4 26B-A4B** drafts the technician ticket as JSON from the rule findings only, as a SIMON job on
+2. **Gemma 4 26B-A4B** drafts the technician ticket as JSON from the rule findings only (title, summary, and
+   inspection steps picked by ID from a fixed per-mode catalog; it never writes a step), as a SIMON job on
    the plant's RTX 3090 (QAT q4_0, llama.cpp) or on an **AMD Instinct MI300X** in AMD Developer Cloud
    (BF16, vLLM 0.27.1 on ROCm).
-3. Every ticket is checked: valid JSON, failure modes equal to the rules, no number the input lacks, no
-   instruction to stop or bypass equipment, marked for human review.
+3. Every ticket is checked: exact fields, failure modes and urgency equal to the rules, steps only from the
+   catalog, short free text with no number the input lacks, no link, role marker, urgency word or instruction
+   to stop or bypass equipment, marked for human review. A ticket with any problem is held for a person,
+   not published. The stress cases run in CI (`tools/simon-industry/stress_corpus.json`).
 4. The node signs the exact ticket text. The page re-checks every receipt in the browser.
 
-Result on a predeclared, stratified sample (`docs/industry/run-3090-mi300x-2026-10-15.jsonl`): all 15
-tickets cleared every check, median 1.7 s, all receipts valid; 8 written on the RTX 3090, 7 on the MI300X.
+Result on a predeclared, stratified sample (`docs/industry/run-catalog-3090-mi300x-2026-10-15.jsonl`): 14 of
+15 tickets published, 1 held (its summary said "Immediate inspection" while the rules said "inspect before next
+shift"; that check was added after seeing it), median 1.6 s, all receipts valid; 8 written on the RTX 3090,
+7 on the MI300X.
 Labelled failures the rules miss are shown as misses. AI4I is synthetic, and its labels follow the same
 physics as the rules, so the rule recall describes the dataset, not a real plant.
 
@@ -87,7 +92,7 @@ also names what is not done.
 | Model-identity verifier: agent behaviour (LIDAR-style) + single-token output distributions (`tools/simon-lidar`) | pilot, small N: family and size separate, quantization only in the single-token layer, no false alarm on another GPU (`docs/VERIFIER-PILOT.md`) |
 | AMD ROCm node (MI300X) | working and measured (see below) |
 | Gemma 4 26B-A4B nodes: RTX 3090 (QAT q4_0, llama.cpp) and AMD Instinct MI300X (BF16, vLLM 0.27.1, ROCm) | live in the demo; MI300X telemetry from rocm-smi on `/network` |
-| Maintenance tickets with an audit trail (`tools/simon-industry`, `/industry`) | working: 15/15 tickets cleared every check on a predeclared sample |
+| Maintenance tickets with an audit trail (`tools/simon-industry`, `/industry`) | working: 14/15 published, 1 held for review, on a predeclared sample |
 | Slashing rules for dishonest nodes | unresolved (see below) |
 
 Platforms proven end to end: Linux (CUDA), Linux (ROCm, AMD Instinct MI300X),

@@ -26,13 +26,15 @@ OpenAI-compatible API.
 **The Intelligent Industry product (live).**
 1. Deterministic rules (the published physics of the AI4I 2020 milling-machine dataset) flag the risk and the
    failure mode. The language model never decides it.
-2. Gemma 4 26B-A4B drafts the technician ticket as JSON from the rule findings only.
-3. Each ticket is checked: valid JSON, failure modes equal to the rules, no number the input does not contain,
-   no instruction to stop or bypass equipment, marked for human review.
+2. Gemma 4 26B-A4B drafts the technician ticket as JSON from the rule findings only: title, summary, and
+   inspection steps picked by ID from the plant's fixed catalog. It never writes a step itself.
+3. Each ticket is checked: exact fields, failure modes and urgency equal to the rules, steps from the catalog,
+   short free text with no new number, link, role marker or urgency word, marked for human review. A ticket
+   with any problem is held for a person, not published. A stress corpus of these attacks runs in CI.
 4. The GPU node signs the exact ticket. The /industry page re-checks every receipt in the browser.
 
-Result on a predeclared, stratified sample: 15 of 15 tickets passed every check, median 1.7 s per ticket, all
-receipts valid. Labelled failures the rules miss are shown as misses, not hidden.
+Result on a predeclared, stratified sample: 14 of 15 tickets published and 1 held (its summary escalated the
+urgency the rules had set), median 1.6 s per ticket, all receipts valid. Labelled failures the rules miss are shown as misses, not hidden.
 
 **AMD.** Gemma 4 runs on an AMD Instinct MI300X (vLLM 0.27.1, ROCm, AMD Developer Cloud) as a SIMON node next to
 the plant's RTX 3090. Measured on the MI300X: one card sustained 64 concurrent streams of a 27B model; SIMON
