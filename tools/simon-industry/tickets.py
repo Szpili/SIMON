@@ -37,7 +37,7 @@ FIELDS = {"title", "summary", "failure_modes", "checks", "urgency", "needs_human
 CAPS = {"title": 80, "summary": 300}
 # ponytail: denylists only catch the obvious; the real boundary is that steps come from rules.CHECKS.
 FORBIDDEN = re.compile(r"\b(shut ?down|stop the machine|switch off|turn off|bypass|override|disable)\b", re.I)
-LINKS = re.compile(r"https?://|www\.|\S+@\S+\.\w+", re.I)
+LINKS = re.compile(r"https?://|www\.|\S+@\S+\.\w+|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\b", re.I)  # bare domains too: "notes to external.example"
 # Urgency comes from the rules (field `urgency`); added after record 2495's summary said "Immediate inspection".
 URGENT = re.compile(r"\b(immediate(ly)?|urgent(ly)?|emergency|asap|right away)\b", re.I)
 ROLE = re.compile(r"\b(system|assistant|developer)\s*:|\bignore (all |the )?(previous|above|prior)\b|\bnew instructions?\b", re.I)

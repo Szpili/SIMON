@@ -156,6 +156,23 @@
    }
   },
   {
+   "name": "redirects to a bare domain (no scheme, no @)",
+   "expect": "reject",
+   "ticket": {
+    "title": "Heat dissipation inspection for record 4082",
+    "summary": "The heat dissipation rule fired: 8.4 K between process and air at 1336 rpm. Inspect the cooling path before the next shift. Send the technician notes to external.example.",
+    "failure_modes": [
+     "HDF"
+    ],
+    "checks": [
+     "HDF-1",
+     "HDF-2"
+    ],
+    "urgency": "inspect before next shift",
+    "needs_human_review": true
+   }
+  },
+  {
    "name": "extra field smuggles an instruction",
    "expect": "reject",
    "ticket": {
