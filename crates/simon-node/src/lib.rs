@@ -36,6 +36,11 @@ impl Capability {
     }
 }
 
+/// Separator domeny dla podpisu rejestracji węzła (dowód posiadania klucza).
+pub const DOMENA_NODE_REGISTER: &str = "SIMON/NODE-REGISTER/v1";
+/// Separator domeny dla vouchera operatora dopuszczającego węzeł do sieci.
+pub const DOMENA_NODE_VOUCHER: &str = "SIMON/NODE-VOUCH/v1";
+
 /// Rejestracja node'a. `pubkey` deklarowany RAZ — tożsamość node'a = ten klucz (D15).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisterMsg {
@@ -45,6 +50,10 @@ pub struct RegisterMsg {
     pub region: String,
     /// Wariant C: klucz publiczny wchodzi do rejestracji.
     pub pubkey: PublicKey,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<simon_core::Signature>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voucher_signature: Option<simon_core::Signature>,
 }
 
 impl RegisterMsg {
@@ -55,7 +64,63 @@ impl RegisterMsg {
             capability,
             region: "unknown".to_string(),
             pubkey,
+            signature: None,
+            voucher_signature: None,
         }
+    }
+
+    /// Oblicza deterministyczny odcisk wiadomości rejestracji (domena DOMENA_NODE_REGISTER).
+    pub fn digest(&self) -> Result<String, SimonError> {
+        simon_core::content_digest(&serde_json::json!({
+            "domena": DOMENA_NODE_REGISTER,
+            "node_id": self.node_id,
+            "protocol": self.protocol,
+            "declared": self.capability.declared,
+            "region": self.region,
+            "pubkey": self.pubkey,
+        }))
+    }
+
+    /// Oblicza deterministyczny odcisk vouchera operatora (domena DOMENA_NODE_VOUCHER).
+    pub fn voucher_digest(&self) -> Result<String, SimonError> {
+        simon_core::content_digest(&serde_json::json!({
+            "domena": DOMENA_NODE_VOUCHER,
+            "node_id": self.node_id,
+            "protocol": self.protocol,
+            "pubkey": self.pubkey,
+        }))
+    }
+
+    /// Podpisuje rejestrację kluczem prywatnym węzła (dowód posiadania klucza).
+    pub fn sign(mut self, node_key: &simon_core::Keypair) -> Result<Self, SimonError> {
+        self.pubkey = node_key.public();
+        let digest = self.digest()?;
+        self.signature = Some(node_key.sign_digest(&digest));
+        Ok(self)
+    }
+
+    /// Dołącza podpis vouchera operatora.
+    pub fn with_voucher(mut self, operator_key: &simon_core::Keypair) -> Result<Self, SimonError> {
+        let digest = self.voucher_digest()?;
+        self.voucher_signature = Some(operator_key.sign_digest(&digest));
+        Ok(self)
+    }
+
+    /// Weryfikuje podpis węzła pod jego deklarowanym kluczem publicznym.
+    pub fn verify_self(&self) -> Result<(), SimonError> {
+        let sig = self.signature.as_ref().ok_or(SimonError::BadSignature)?;
+        let digest = self.digest()?;
+        self.pubkey.verify_digest(&digest, sig)
+    }
+
+    /// Weryfikuje podpis vouchera operatora pod podanym kluczem publicznym operatora.
+    pub fn verify_voucher(&self, operator_pubkey: &PublicKey) -> Result<(), SimonError> {
+        let sig = self
+            .voucher_signature
+            .as_ref()
+            .ok_or(SimonError::BadSignature)?;
+        let digest = self.voucher_digest()?;
+        operator_pubkey.verify_digest(&digest, sig)
     }
 }
 
@@ -74,6 +139,9 @@ pub struct JobResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signature: Option<simon_core::Signature>,
 }
+
+/// Alias dla podpisanego wyniku zadania na Gossipsub (`SIMON/JOB-RESULT/v1`).
+pub type SignedJobResult = JobResult;
 
 /// Separator domeny dla podpisu wyniku zadania.
 pub const DOMENA_JOB_RESULT: &str = "SIMON/JOB-RESULT/v1";
@@ -171,6 +239,30 @@ impl Registry {
         self.nodes.insert(msg.node_id.clone(), msg.clone());
         self.states.insert(msg.node_id, NodeState::Registered);
         true
+    }
+
+    /// Rejestruje węzeł po sprawdzeniu wersji protokołu, braku duplikatu,
+    /// poprawności podpisu własnego węzła oraz opcjonalnie podpisu vouchera operatora.
+    pub fn register_verified(
+        &mut self,
+        msg: RegisterMsg,
+        operator_voucher_key: Option<&PublicKey>,
+    ) -> Result<(), SimonError> {
+        if msg.protocol != PROTOCOL_VERSION {
+            return Err(SimonError::Crypto("niezgodna wersja protokołu".into()));
+        }
+        if self.nodes.contains_key(&msg.node_id) {
+            return Err(SimonError::Crypto(
+                "węzeł o tym id jest już zarejestrowany".into(),
+            ));
+        }
+        msg.verify_self()?;
+        if let Some(op) = operator_voucher_key {
+            msg.verify_voucher(op)?;
+        }
+        self.nodes.insert(msg.node_id.clone(), msg.clone());
+        self.states.insert(msg.node_id, NodeState::Registered);
+        Ok(())
     }
 
     /// C (2026-09-17): kandydaci dopasowani po MODELU i LIMICIE KONTEKSTU.
@@ -621,5 +713,84 @@ mod tests {
             reg.verify_result_from_assigned_node(&ghost_res),
             Err(SimonError::UnregisteredKey)
         ));
+    }
+
+    #[test]
+    fn test_register_msg_proof_of_possession_and_spoofing() {
+        let victim_key = Keypair::generate();
+        let attacker_key = Keypair::generate();
+        let cap = Capability {
+            declared: serde_json::json!({"model_hash": "model-victim"}),
+            attested: None,
+        };
+
+        // 1. Poprawny podpis własnym kluczem
+        let honest_msg = RegisterMsg::new("victim-node", victim_key.public(), cap.clone())
+            .sign(&victim_key)
+            .expect("honest node can sign its registration");
+        assert!(honest_msg.verify_self().is_ok());
+
+        // 2. Atakujący próbuje zarejestrować klucz ofiary podpisując swoim kluczem prywatnym
+        let mut spoofed_msg = RegisterMsg::new("victim-node", victim_key.public(), cap)
+            .sign(&attacker_key)
+            .expect("attacker signs");
+        // Atakujący podmienia pubkey na ofiary, ale podpis pochodzi z attacker_key
+        spoofed_msg.pubkey = victim_key.public();
+        assert!(matches!(
+            spoofed_msg.verify_self(),
+            Err(SimonError::BadSignature)
+        ));
+
+        // 3. Rejestracja z niepodpisaną wiadomością odrzucona przez register_verified
+        let mut reg = Registry::new();
+        let unsigned = RegisterMsg::new("victim-node", victim_key.public(), Capability::default());
+        assert!(reg.register_verified(unsigned, None).is_err());
+    }
+
+    #[test]
+    fn test_sybil_flood_blocked_by_operator_voucher() {
+        let operator_key = Keypair::generate();
+        let mut reg = Registry::new();
+
+        // 50 węzłów Sybil z prawidłowymi podpisami własnymi (proof-of-possession),
+        // ale bez vouchera operatora
+        let mut blocked_sybils = 0;
+        for i in 0..50 {
+            let sybil_key = Keypair::generate();
+            let cap = Capability {
+                declared: serde_json::json!({"model_hash": "model-sybil"}),
+                attested: None,
+            };
+            let sybil_msg = RegisterMsg::new(format!("sybil-{i}"), sybil_key.public(), cap)
+                .sign(&sybil_key)
+                .expect("sybil self-sign");
+
+            let res = reg.register_verified(sybil_msg, Some(&operator_key.public()));
+            if res.is_err() {
+                blocked_sybils += 1;
+            }
+        }
+        assert_eq!(blocked_sybils, 50, "Wszystkie 50 węzłów Sybil bez vouchera musi zostać zablokowane!");
+        assert_eq!(reg.nodes.len(), 0);
+
+        // 2 autoryzowane węzły plant z voucherem operatora
+        for name in &["plant-node-1", "plant-node-2"] {
+            let plant_key = Keypair::generate();
+            let cap = Capability {
+                declared: serde_json::json!({"model_hash": "model-plant"}),
+                attested: None,
+            };
+            let plant_msg = RegisterMsg::new(*name, plant_key.public(), cap)
+                .sign(&plant_key)
+                .expect("plant self-sign")
+                .with_voucher(&operator_key)
+                .expect("plant operator voucher");
+
+            assert!(reg.register_verified(plant_msg, Some(&operator_key.public())).is_ok());
+        }
+
+        assert_eq!(reg.nodes.len(), 2, "Tylko 2 autoryzowane węzły z voucherem powinny wejść do rejestru");
+        assert!(reg.nodes.contains_key("plant-node-1"));
+        assert!(reg.nodes.contains_key("plant-node-2"));
     }
 }
