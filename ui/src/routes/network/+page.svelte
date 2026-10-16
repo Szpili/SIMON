@@ -20,7 +20,9 @@
   let sig = $state<Record<string, { ok: boolean; why: string | null }>>({});
   const pending = new Set<string>(); // checks in flight, so overlapping polls don't verify twice
 
-  const api = () => new URLSearchParams(location.search).get('api') ?? '/simon-monitor/api/monitor';
+  // The static mirror (GitHub Pages) is built with VITE_MONITOR_API pointing at the live monitor; it allows any origin.
+  const api = () =>
+    new URLSearchParams(location.search).get('api') ?? import.meta.env.VITE_MONITOR_API ?? '/simon-monitor/api/monitor';
   const fmt = (v: number | null | undefined, d = 0) => (v == null ? '–' : v.toFixed(d));
   const short = (s: string | null | undefined) => (s ? `${s.slice(0, 8)}…${s.slice(-6)}` : '–');
   const ago = (ts: number) => { const s = Math.max(0, Math.round(Date.now() / 1000 - ts)); return s < 60 ? `${s}s ago` : `${Math.round(s / 60)}m ago`; };
