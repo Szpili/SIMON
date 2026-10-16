@@ -1,6 +1,10 @@
-# SIMON
+# SIMON — Sovereign Inference & Model Orchestration Network
 
-Verifiable LLM inference on untrusted, heterogeneous hardware.
+**Your models. Independent nodes. Inference on demand.**
+
+Verifiable LLM inference on untrusted, heterogeneous hardware. "Sovereign" means you choose whose GPUs run
+your jobs (your own, a partner's, or rented cloud) and every answer comes back signed by the node that wrote
+it. It does not mean the prompt stays private: the node that runs a job sees it in plain text.
 
 SIMON is a peer-to-peer harness. It sends inference jobs to nodes that no one
 controls centrally, and it makes each result verifiable. Every job produces a

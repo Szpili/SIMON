@@ -13,6 +13,8 @@
 
 <section class="mx-auto flex max-w-3xl flex-col items-start px-4 py-16 sm:py-24">
   <pre class="mono max-w-full overflow-x-auto text-[9px] leading-[1.15] text-valid sm:text-sm sm:leading-[1.15]" aria-label="SIMON">{logo}</pre>
+  <p class="mono mt-4 text-sm tracking-wider text-neutral-400">Sovereign Inference &amp; Model Orchestration Network</p>
+  <p class="mt-2 text-lg font-bold text-neutral-100">Your models. Independent nodes. Inference on demand.</p>
 
   <p class="mt-10 max-w-xl text-xl leading-relaxed text-neutral-100 sm:text-2xl">
     Every inference job produces an Ed25519-signed receipt bound to its output. Anyone can verify it offline — in the browser, with the same Rust verifier the node harness uses.
