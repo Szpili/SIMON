@@ -6,7 +6,7 @@ wideo **MP4**, publiczne repo GitHub, URL działającej aplikacji.
 | Element | Plik / adres | Stan |
 |---|---|---|
 | Okładka 16:9 | `okladka-1920x1080.png` (źródło: `okladka.svg`) | gotowe |
-| Slajdy | `SIMON-slajdy.pdf` (12 stron, 1440×810 pt = 16:9); źródła w `slajdy/` | gotowe |
+| Slajdy | `SIMON-slajdy.pdf` (13 stron, 1440×810 pt = 16:9); źródła w `slajdy/` | gotowe |
 | Repo | `github.com/Szpili/SIMON` | gotowe, MIT |
 | Demo pod URL-em | Tailscale Funnel, usługi pod systemd | działa |
 | Wideo MP4 | `wideo/SIMON-wideo.mp4` (4:32, 1920×1080, narracja EN, Gemini TTS + intro/outro z Veo) — ten sam film co w zgłoszeniu lablab; źródła i potok: prywatne repo (`explainer/`: tts.py → record.py → build.py → outro.py) | gotowe |

@@ -61,4 +61,4 @@ WebAssembly · SvelteKit · Predictive maintenance · Manufacturing · Verifiabl
 - Demo: https://pop-os.tailaf1556.ts.net/simon/industry (also /simon/network, /simon/demo)
 - Static mirror (no dependency on our machine): https://szpili.github.io/SIMON/industry
 - Code (MIT): https://github.com/Szpili/SIMON
-- Slides: docs/zgloszenie/SIMON-slajdy.pdf · Video: SIMON-explainer-amd.mp4
+- Slides: docs/zgloszenie/SIMON-slajdy.pdf · Video: docs/zgloszenie/wideo/SIMON-wideo.mp4 (4:32, narrated)
