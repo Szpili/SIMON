@@ -84,8 +84,9 @@ OPCJE:
     --audyt <plik>           [z --verify-receipt] M3: plik JSON
                              {kroki:[{indeks,node_token,topk:[[id,lp],..]}]} —
                              ocena containment top-k (polityka domyślna k=2).
-    --expect-signer <hex>    [z --verify-receipt] sprawdź, czy receipt podpisał TEN
-                             węzeł (oczekiwany klucz publiczny Ed25519 w hex).
+    --expect-signer <hex>    [agent i --verify-receipt] receipt musi podpisać TEN węzeł
+                             (klucz publiczny Ed25519 w hex). Bez tego podpis dowodzi
+                             tylko, że JAKIŚ klucz podpisał tekst — receipt niesie własny klucz.
     --verify-receipt <plik>  sprawdź receipt, który ktoś Ci podał (`-` = stdin).
                              Offline, bez sieci. Z --expect-job-id/--expect-model
                              sprawdza też, czy to receipt do TEGO zlecenia.

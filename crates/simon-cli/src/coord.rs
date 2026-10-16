@@ -151,6 +151,7 @@ pub fn obsluz_wynik(rejestr: &mut Registry, res: JobResult) {
             res.node_id, res.job_id, res.ok, output_digest_pusty
         );
         let _ = rejestr.mark_degraded(&res.node_id);
+        let _ = rejestr.complete_job(&res.job_id); // porażka kończy przydział — job nie wisi w `assigned`
     } else {
         match rejestr.complete(&res) {
             Ok(()) => {
@@ -416,6 +417,7 @@ mod tests {
         // próba kontrolna: porażka od węzła, któremu job PRZYDZIELONO, nadal degraduje
         obsluz_wynik(&mut reg, JobResult::failure("job-x", "inny", "OOM"));
         assert_eq!(reg.states.get("inny"), Some(&NodeState::Degraded));
+        assert!(reg.assigned.get("job-x").is_none(), "porażka zwalnia przydział");
     }
 
     #[test]

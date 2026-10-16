@@ -183,8 +183,6 @@ TOOLS = [
                     "urgency": {
                         "type": "string",
                         "enum": [
-                            "medium",
-                            "high",
                             "inspect before next shift",
                             "plan tool change",
                         ],
@@ -252,7 +250,6 @@ def find_default_csv() -> Path:
     candidates = [
         Path(__file__).resolve().parent / "data" / "ai4i2020.csv",
         Path("tools/simon-industry/data/ai4i2020.csv"),
-        Path("/home/agent/SIMPN_ARGON_HANDOWER/workspaces/track_C/tools/simon-industry/data/ai4i2020.csv"),
     ]
     for c in candidates:
         if c.exists():
@@ -524,7 +521,11 @@ def run_triage_agent(
                 fn_args = json.loads(tc["function"]["arguments"])
             except Exception:
                 fn_args = {}
-            tool_output = execute_tool(fn, fn_args, csv_path, telemetry.get("findings"))
+            try:
+                tool_output = execute_tool(fn, fn_args, csv_path, telemetry.get("findings"))
+            except (ValueError, PermissionError) as e:
+                # odrzucona propozycja wraca do modelu jako wynik narzędzia (ticket nie powstaje), nie wywraca procesu
+                tool_output = {"status": "REJECTED_BY_CEILING", "error": str(e)}
             if fn == "propose_work_order" and tool_output.get("status") == "GATED_BY_OPERATOR_CAPABILITY_CEILING":
                 gated_proposals.append(tool_output)
             messages.append({

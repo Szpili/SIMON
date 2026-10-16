@@ -121,7 +121,7 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
         if let PromptReply::Ok(r) = &reply {
             sprawdz_wiadomosc_czatu(&r.output)?;
         }
-        return obsluz_odpowiedz(reply, siec_ms, &order.model_hash, opcje.json, t0, &klucz, opcje.rejestr.as_deref(), &order.nonce);
+        return obsluz_odpowiedz(reply, siec_ms, &order.model_hash, opcje.json, t0, &klucz, opcje.rejestr.as_deref(), &order.nonce, opcje.expect_signer.as_deref());
     }
 
     // --- Etap A (dziś jedyny etap, gdy --then-bootstrap nie podany) ---
@@ -136,7 +136,7 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
     let (reply, siec_ms) = wyslij_i_czekaj(&mut swarm, peer, request).await?;
 
     if opcje.then_bootstrap.is_empty() {
-        return obsluz_odpowiedz(reply, siec_ms, &order.model_hash, opcje.json, t0, &klucz, opcje.rejestr.as_deref(), &order.nonce);
+        return obsluz_odpowiedz(reply, siec_ms, &order.model_hash, opcje.json, t0, &klucz, opcje.rejestr.as_deref(), &order.nonce, opcje.expect_signer.as_deref());
     }
 
     // --- B2: łańcuch — etap A zweryfikowany, przekazujemy wynik do etapu B ---
@@ -144,7 +144,7 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
     // `wyodrebnij_output` zwraca Err i CAŁY łańcuch przerywa się TUTAJ — etap B
     // nigdy nie zostanie wywołany z niezweryfikowanym wynikiem. To jest wprost
     // gwarancja kontroli przepływu Rust (`?`), nie dodatkowa logika do przetestowania.
-    let wynik_a = wyodrebnij_output(reply, &order.model_hash, &order.nonce)?;
+    let wynik_a = wyodrebnij_output(reply, &order.model_hash, &order.nonce, opcje.expect_signer.as_deref())?;
     println!("\n=== ETAP A (zweryfikowany) ===\n{wynik_a}");
 
     let then_model = opcje.then_model_hash.clone().unwrap_or_else(|| model_zadany.clone());
@@ -158,7 +158,7 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
     let (reply_b, siec_ms_b) = wyslij_i_czekaj(&mut swarm, then_peer, request_b).await?;
 
     println!("\n=== ETAP B ===");
-    obsluz_odpowiedz(reply_b, siec_ms_b, &order_b.model_hash, opcje.json, t0b, &klucz, opcje.rejestr.as_deref(), &order_b.nonce)
+    obsluz_odpowiedz(reply_b, siec_ms_b, &order_b.model_hash, opcje.json, t0b, &klucz, opcje.rejestr.as_deref(), &order_b.nonce, opcje.expect_signer.as_deref())
 }
 
 /// Pola żądania OpenAI, które idą do node'a (ta sama biała lista co w node.rs).
@@ -330,6 +330,7 @@ async fn uruchom_map_reduce(
             n,
             &mut znak_na_tok,
             4,
+            opcje.expect_signer.as_deref(),
         )
         .await?;
         let _ = std::fs::write(format!("{checkpoint_dir}/kawalek_{i:04}.txt"), &wynik);
@@ -374,7 +375,7 @@ async fn uruchom_map_reduce(
             let (order, request) =
                 zbuduj_zlecenie(model, &tekst_reduce, opcje.fee, opcje.max_tokens, klucz, false)?;
             let (reply, _ms) = wyslij_i_czekaj(swarm, peer, request).await?;
-            nowy_poziom.push(wyodrebnij_output(reply, model, &order.nonce)?);
+            nowy_poziom.push(wyodrebnij_output(reply, model, &order.nonce, opcje.expect_signer.as_deref())?);
         }
         poziom = nowy_poziom;
     }
@@ -405,6 +406,7 @@ async fn wyslij_kawalek_z_retry(
     n: usize,
     znak_na_tok: &mut f64,
     max_glebokosc_dzielenia: u32,
+    oczekiwany_signer: Option<&str>,
 ) -> Result<String, String> {
     let mut kolejka: VecDeque<(String, u32)> = VecDeque::new();
     kolejka.push_back((kawalek_startowy.to_string(), max_glebokosc_dzielenia));
@@ -443,7 +445,7 @@ async fn wyslij_kawalek_z_retry(
                 kolejka.push_front((b.iter().collect(), glebokosc_zostala - 1));
                 kolejka.push_front((a.iter().collect(), glebokosc_zostala - 1));
             }
-            _ => czesciowe.push(wyodrebnij_output(reply, model, &order.nonce)?),
+            _ => czesciowe.push(wyodrebnij_output(reply, model, &order.nonce, oczekiwany_signer)?),
         }
     }
     Ok(czesciowe.join("\n"))
@@ -577,7 +579,12 @@ pub(crate) async fn wyslij_i_czekaj(
 /// Wyciąga `output` z odpowiedzi, weryfikując receipt (RULES #6: klient nie
 /// ufa node'owi). Używane przez map/reduce, gdzie nie potrzeba pełnego
 /// wydruku pomiaru M2.7 na KAŻDY kawałek — tylko wynik albo błąd.
-fn wyodrebnij_output(reply: PromptReply, oczekiwany_model: &str, oczekiwany_nonce: &str) -> Result<String, String> {
+fn wyodrebnij_output(
+    reply: PromptReply,
+    oczekiwany_model: &str,
+    oczekiwany_nonce: &str,
+    oczekiwany_signer: Option<&str>,
+) -> Result<String, String> {
     match reply {
         PromptReply::Blad(e) => Err(format!("node zwrócił błąd {}: {}", e.kod, e.opis)),
         PromptReply::Ok(r) => {
@@ -586,7 +593,9 @@ fn wyodrebnij_output(reply: PromptReply, oczekiwany_model: &str, oczekiwany_nonc
                 (Some(th), Some(pt), Some(ot)) => Some((th.as_str(), oczekiwany_nonce, pt.as_slice(), ot.as_slice())),
                 _ => None,
             };
-            if !zweryfikuj_receipt(&r.receipt, &r.job_id, oczekiwany_model, Some(&r.output), m1_info) {
+            if !zweryfikuj_receipt(&r.receipt, &r.job_id, oczekiwany_model, Some(&r.output), m1_info)
+                || !podpisal_oczekiwany(&r.receipt, oczekiwany_signer)
+            {
                 return Err(format!("receipt nie przechodzi weryfikacji (job_id={})", r.job_id));
             }
             Ok(r.output)
@@ -605,6 +614,7 @@ fn obsluz_odpowiedz(
     klucz_klienta: &Keypair,
     rejestr: Option<&str>,
     oczekiwany_nonce: &str,
+    oczekiwany_signer: Option<&str>,
 ) -> Result<(), String> {
     match reply {
         PromptReply::Blad(e) => {
@@ -629,7 +639,8 @@ fn obsluz_odpowiedz(
 
             // M2.5.1: weryfikujemy wobec TEGO zlecenia (job_id + model), nie „jakiegokolwiek".
             let weryfikacja =
-                zweryfikuj_receipt(&r.receipt, &r.job_id, oczekiwany_model, Some(&r.output), m1_info);
+                zweryfikuj_receipt(&r.receipt, &r.job_id, oczekiwany_model, Some(&r.output), m1_info)
+                    && podpisal_oczekiwany(&r.receipt, oczekiwany_signer);
             let poziom_dowodu = poziom_sprawdzony(weryfikacja, m1_info.is_some(), poziom_deklarowany);
             if !weryfikacja {
                 eprintln!("[agent][diagnoza] oczekiwano job_id={} model={}", r.job_id, oczekiwany_model);
@@ -715,6 +726,8 @@ fn obsluz_odpowiedz(
                     "job_id": r.job_id,
                     "poziom_dowodu": poziom_dowodu,
                     "poziom_deklarowany_przez_node": poziom_deklarowany,
+                    // czy klient wiedział, CZYJ klucz ma podpisać (przypięty node_id), czy tylko że ktoś podpisał
+                    "signer_pinned": oczekiwany_signer.is_some(),
                     "ttft_ms": r.ttft_ms,
                     "gen_ms": r.gen_ms,
                     "siec_ms": siec_ms,
@@ -758,6 +771,17 @@ fn obsluz_odpowiedz(
             Ok(())
         }
     }
+}
+
+/// Przypięcie klucza węzła. `verify_self` sprawdza podpis kluczem ZAPISANYM W SAMYM receipcie, więc
+/// bez przypięcia każdy może wygenerować własny klucz i podpisać dowolny tekst — a weryfikacja przejdzie.
+/// `Some(hex)` (z `--expect-signer`, np. node_id z nodes.json bramki) = tylko ten klucz się liczy.
+/// `None` = podpis jest, ale nie wiemy CZYJ: wynik raportuje `signer_pinned: false`.
+fn podpisal_oczekiwany(receipt_json: &str, oczekiwany: Option<&str>) -> bool {
+    let Some(hex) = oczekiwany else { return true };
+    serde_json::from_str::<Receipt>(receipt_json)
+        .map(|r| r.signer.to_hex().eq_ignore_ascii_case(hex.trim()))
+        .unwrap_or(false)
 }
 
 /// Poziom dowodu, który KLIENT sprawdził: 1 tylko gdy receipt przeszedł weryfikację, deklaruje M1
@@ -818,6 +842,28 @@ fn _rejestr() -> RejestrKoordynatorow {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn obcy_klucz_odrzucony_gdy_signer_przypiety() {
+        let wezel = Keypair::from_seed(&[3u8; 32]);
+        let napastnik = Keypair::from_seed(&[4u8; 32]);
+        let r = Receipt {
+            job_id: "j".into(), node_id: napastnik.public().to_hex(), model_hash: "m".into(),
+            runtime: "vllm/1".into(), precision: simon_core::receipt::Precision::Unknown,
+            activation_hash: "a".into(), prompt_tokens: 1, completion_tokens: 1,
+            output_digest: simon_core::receipt::odcisk_wyjscia("j", "dowolny tekst").unwrap(),
+            started_at_us: 1, finished_at_us: 2, signer: napastnik.public(), signature: None, wiazania: None,
+        }
+        .sign(&napastnik)
+        .unwrap();
+        let json = serde_json::to_string(&r).unwrap();
+        // samopodpisany receipt napastnika przechodzi zwykłą weryfikację (to jest luka)...
+        assert!(super::zweryfikuj_receipt(&json, "j", "m", Some("dowolny tekst"), None));
+        // ...ale nie przechodzi, gdy klient przypiął klucz węzła
+        assert!(!super::podpisal_oczekiwany(&json, Some(&wezel.public().to_hex())));
+        assert!(super::podpisal_oczekiwany(&json, Some(&napastnik.public().to_hex())));
+        assert!(super::podpisal_oczekiwany(&json, None));
+    }
+
     #[test]
     fn poziom_dowodu_to_sprawdzony_nie_deklarowany() {
         // node deklaruje M1, ale nie odesłał tokenów -> niczego nie sprawdziliśmy -> 0

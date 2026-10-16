@@ -7,7 +7,8 @@ The answer comes back with the node's signed receipt and the client-side verdict
     SIMON_BIN=target/release/simon SIMON_API_NODES=nodes.json python3 tools/simon-api/simon_api.py
     curl -s 127.0.0.1:18600/v1/chat/completions -d '{"model":"qwen3.8-27b-bf16","messages":[...]}'
 
-nodes.json: {"<model name>": {"bootstrap": "/ip4/.../tcp/.../p2p/<peer_id>", "model_hash": "..."}}
+nodes.json: {"<model name>": {"bootstrap": "/ip4/.../tcp/.../p2p/<peer_id>", "model_hash": "...", "node_id": "<signer hex>"}}
+(node_id pins the receipt signer; without it a receipt only proves that SOME key signed the text.)
 A model may map to a LIST of such nodes: jobs rotate across them, and an unreachable or busy
 node hands the job to the next one. The file is re-read when it changes (add a node, no restart).
 
@@ -80,6 +81,10 @@ def run_job(node, req, max_tokens):
     # The request goes in on stdin (chat mode): messages and tools never show up in `ps`.
     cmd = [BIN, "--role", "agent", "--bootstrap", node["bootstrap"], "--model-hash", node["model_hash"],
            "--request-file", "-", "--max-tokens", str(max_tokens), "--identity-file", IDENTITY, "--json"]
+    # node_id w nodes.json = klucz, który MA podpisać receipt (przypięcie). Bez niego agent sprawdza tylko,
+    # że ktoś podpisał ten tekst, nie że zrobił to ten węzeł — odpowiedź mówi to polem signer_pinned.
+    if node.get("node_id"):
+        cmd += ["--expect-signer", node["node_id"]]
     chat = json.dumps({k: req[k] for k in CHAT_FIELDS if k in req})
     t0 = time.time()
     p = subprocess.run(cmd, input=chat, capture_output=True, text=True, timeout=TIMEOUT_S)
@@ -129,6 +134,7 @@ def completion(req, r, t0):
         "verification_status": "not_performed",  # execution (M3 audit) is not verified here
         "proof_level": int(r.get("poziom_dowodu") or 0),  # verified by the agent, not the node's declared receipt_level
         "m1_binding_checked": int(r.get("poziom_dowodu") or 0) >= 1,  # token binding checked client-side by the SIMON agent
+        "signer_pinned": bool(r.get("signer_pinned")),  # receipt key == node_id pinned in nodes.json
         "proof_note": "the node's key signed this exact output (text and tool calls) for this job; "
                       "this does NOT prove which model or precision ran",
         "receipt": rc,

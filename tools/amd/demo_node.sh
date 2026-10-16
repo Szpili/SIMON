@@ -184,7 +184,7 @@ EOF
 
   echo "== 5/5 register in the demo: nodes.json (gateway re-reads it) + monitor =="
   json_edit "$NAME" "$(python3 -c 'import json,sys; n,p,m,lp,nid,lab=sys.argv[1:]; print(json.dumps({
-    "node": {"name": n, "bootstrap": f"/ip4/127.0.0.1/tcp/{lp}/p2p/{p}", "model_hash": m},
+    "node": {"name": n, "bootstrap": f"/ip4/127.0.0.1/tcp/{lp}/p2p/{p}", "model_hash": m, "node_id": nid},
     "monitor": {"name": n, "label": lab, "model": m, "gpu": None, "node_id": nid,
                 "stats_url": f"http://127.0.0.1:{int(lp) + 1000}/stats"}}))' \
     "$NAME" "$PEER" "$MODEL" "$LPORT" "$NODE_ID" "$LABEL")"

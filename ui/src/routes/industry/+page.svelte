@@ -179,7 +179,6 @@
 
     const params = {
       action_code: actionCode,
-      checks: t.checks ?? [],
       failure_modes: t.failure_modes ?? [mode],
       part_id: partId,
       summary: t.summary ?? '',
@@ -208,7 +207,7 @@
         part_id: partId,
         urgency: params.urgency,
         failure_modes: params.failure_modes,
-        checks: params.checks
+        checks: t.checks ?? [] // shown for the technician; NOT part of the 5 hashed parameters
       }
     };
   }
