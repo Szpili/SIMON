@@ -47,7 +47,7 @@ This single command executes:
 * **Mechanism**:
   - `JobResult` (`SignedJobResult`) signed with domain tag `SIMON/JOB-RESULT/v1` over `(job_id, node_id, ok, error, receipt_digest)` by the assigned node's Ed25519 key. Both successes and failures are cryptographically verifiable.
   - `RegisterMsg` signed with domain tag `SIMON/NODE-REGISTER/v1` (proof-of-possession of the advertised public key).
-  - Optional operator voucher signed with domain tag `SIMON/NODE-VOUCH/v1` by a recognized plant operator key (`obsluz_rejestracje` / `register_verified`).
+  - Optional operator voucher signed with domain tag `SIMON/NODE-VOUCH/v1` by a recognized plant operator key, enforced by `Registry::register_verified(msg, Some(op))`. **Limit:** the live `simon --role coord` passes `None` (no CLI flag for the operator key yet), so on the running coordinator only the node self-signature is enforced.
 * **Test Evidence**:
   - `cargo test -p simon-node -p simon-cli` (`niepodpisany_lub_obcy_blad_odrzucony`, `sybil_bez_vouchera_odrzucony_w_trybie_voucher`, `f3_receipt`)
   - Unit tests covering forged failure rejection, unassigned node rejection, and 50-node Sybil flood rejection.
@@ -99,6 +99,7 @@ This single command executes:
 | `5de1c6c` | `[FZ-G1] docs(arch): add docs/ARCHITECTURE.md with Mermaid data flows and claim hierarchy` | `docs/ARCHITECTURE.md` | `git cherry-pick 5de1c6cf61d542429d4d28f6ac1a1d3d73ae25d0` |
 | `063d2bf` | `[FZ-G2] docs(stress-tests,threat-model): update stress-test matrix rows 7/17/18 and milestone statuses` | `docs/STRESS-TESTS.md`, `docs/THREAT-MODEL.md`, `ROADMAP.md`, `docs/whitepaper/SIMON-whitepaper-EN.md` | `git cherry-pick 063d2bf6b9f57dd677e2e765b9befe039211e622` |
 | `c40ec8c` | `[FZ-I1] feat(scripts): add scripts/verify_all_fast.sh full-stack verification and guardrail runner` | `scripts/verify_all_fast.sh` | `git cherry-pick c40ec8cdae9e7e8a4a642251743c55a1562b1bdd` |
+| `87d9d59` | `[FZ-G3] docs(arch,stress-tests,roadmap): state what Stage 2 does not prove` (voucher is library-level, live M1 token ids are re-tokenized, `tokenizer_hash` hashes the model label) | `docs/ARCHITECTURE.md`, `docs/STRESS-TESTS.md`, `ROADMAP.md` | `git cherry-pick 87d9d59600bda7c51473bed84774410c5d38752c` |
 
 ---
 
@@ -117,7 +118,7 @@ bash scripts/verify_all_fast.sh
 If you prefer to review and land subsystems incrementally:
 ```bash
 # 1. Verification script & Architecture Docs (zero risk, immediate review benefit)
-git cherry-pick c40ec8c 5de1c6c 063d2bf
+git cherry-pick c40ec8c 5de1c6c 063d2bf 87d9d59
 
 # 2. Signed JobResult & Sybil Registration (Category 1)
 git cherry-pick 2acd635 5604df5 e7e8a50
