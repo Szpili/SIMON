@@ -1,5 +1,7 @@
 # SIMON — Threat Model & Claim Matrix
 
+> Attack-by-attack results for the "small company inside a VPN" deployment, each with a test in CI: [STRESS-TESTS.md](STRESS-TESTS.md).
+
 **Scope:** this document fixes what SIMON claims and, more importantly, what it does **not**
 claim. Every public sentence about security must map to one of three labels:
 
