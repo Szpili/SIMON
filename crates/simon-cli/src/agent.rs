@@ -900,6 +900,7 @@ mod tests {
             prompt: None,
             max_tokens: 128,
             max_jobs: 1,
+            rate_per_peer: 16.0,
             request_file: None,
             fee: 1,
             key: None,

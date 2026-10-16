@@ -146,6 +146,12 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
     // więc głębsza kolejka i tak skończyłaby się timeoutem u klienta.
     let przyjecia = Arc::new(Semaphore::new(opcje.max_jobs * KOLEJKA_NA_SLOT));
     let (gotowe_tx, mut gotowe_rx) = tokio::sync::mpsc::unbounded_channel();
+    // DoS z wnętrza sieci (model zagrożeń „firma w VPN”): jeden peer nie może zająć całej kolejki,
+    // a powtórzone zlecenie (ten sam peer + job_id) nie liczy się drugi raz na GPU.
+    let mut kubelki: std::collections::HashMap<libp2p::PeerId, simon_core::protokol::Kubelek> =
+        std::collections::HashMap::new();
+    let mut ostatnie_joby: std::collections::VecDeque<(libp2p::PeerId, String)> =
+        std::collections::VecDeque::new();
     let backend = Arc::new(Backend {
         model_url,
         model: model_deklarowany,
@@ -187,6 +193,17 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
                         request.max_ctx
                     );
                     if let Some(reply) = sprawdz_wersje(&request) {
+                        let _ = swarm.behaviour_mut().prompt_rr.send_response(channel, reply);
+                        continue;
+                    }
+                    if let Some(reply) = limit_peera(
+                        &mut kubelki,
+                        &mut ostatnie_joby,
+                        peer,
+                        &request,
+                        opcje.rate_per_peer,
+                        teraz_us(),
+                    ) {
                         let _ = swarm.behaviour_mut().prompt_rr.send_response(channel, reply);
                         continue;
                     }
@@ -768,6 +785,44 @@ async fn odczytaj_realny_ctx(model_url: &str, prompt: &str) -> Option<u32> {
     }
 }
 
+fn teraz_us() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_micros() as u64).unwrap_or(0)
+}
+
+/// Pamięć ostatnich (peer, job_id) do odrzucania powtórek.
+const PAMIEC_JOBOW: usize = 4096;
+
+/// Limit per peer + odrzucenie powtórzonego zlecenia. `Some(błąd)` = nie przyjmować.
+/// ponytail: kubełki tylko rosną z liczbą RÓŻNYCH peerów; przy >10k czyścimy całość (sieć firmowa ma ich kilka).
+fn limit_peera(
+    kubelki: &mut std::collections::HashMap<libp2p::PeerId, simon_core::protokol::Kubelek>,
+    ostatnie: &mut std::collections::VecDeque<(libp2p::PeerId, String)>,
+    peer: libp2p::PeerId,
+    req: &PromptRequest,
+    rate: f64,
+    teraz: u64,
+) -> Option<PromptReply> {
+    if ostatnie.iter().any(|(p, j)| *p == peer && *j == req.job_id) {
+        return Some(blad(req, "powtorzony_job", "ten job_id od tego peera już był — powtórka nie jest liczona drugi raz"));
+    }
+    if rate > 0.0 {
+        if kubelki.len() > 10_000 {
+            kubelki.clear();
+        }
+        let k = kubelki
+            .entry(peer)
+            .or_insert_with(|| simon_core::protokol::Kubelek::nowy(rate * 4.0, rate, teraz));
+        if k.zezwol(teraz).is_err() {
+            return Some(blad(req, "rate_limit", &format!("limit {rate} zleceń/s od jednego peera — zwolnij")));
+        }
+    }
+    ostatnie.push_back((peer, req.job_id.clone()));
+    if ostatnie.len() > PAMIEC_JOBOW {
+        ostatnie.pop_front();
+    }
+    None
+}
+
 /// Precyzja z nazwy modelu (`model_hash` deklaruje operator, więc to i tak jego deklaracja).
 /// Podpisany receipt nie może zgadywać, więc reguła jest zachowawcza:
 /// - całe tokeny nazwy (`gemma-bf16-iq4_xs` -> `gemma`,`bf16`,`iq4`,`xs`), nigdy podciągi z hashy;
@@ -1228,6 +1283,36 @@ mod testy_receiptu {
         assert_eq!(r.finished_at_us, finished);
         assert!(r.started_at_us <= r.finished_at_us);
         assert!(r.verify_self().is_ok());
+    }
+
+    #[test]
+    fn limit_peera_odrzuca_powtorke_i_nadmiar() {
+        use std::collections::{HashMap, VecDeque};
+        let (mut k, mut o) = (HashMap::new(), VecDeque::new());
+        let peer = libp2p::PeerId::random();
+        let inny = libp2p::PeerId::random();
+        let req = |job: &str| PromptRequest {
+            v: 1, order_id: "o".into(), job_id: job.into(), model_hash: "m".into(), prompt: "p".into(),
+            max_tokens: 1, max_ctx: 8, nonce: "n".into(), chat: false,
+        };
+        let kod = |r: Option<PromptReply>| match r { Some(PromptReply::Blad(e)) => Some(e.kod), _ => None };
+        // ten sam job od tego samego peera drugi raz = powtórka
+        assert_eq!(kod(limit_peera(&mut k, &mut o, peer, &req("j1"), 1.0, 0)), None);
+        assert_eq!(kod(limit_peera(&mut k, &mut o, peer, &req("j1"), 1.0, 0)).as_deref(), Some("powtorzony_job"));
+        // kubełek: rate 1/s, zapas 4 -> j1 + 3 kolejne przechodzą, piąty w tej samej chwili nie
+        for j in ["j2", "j3", "j4"] {
+            assert_eq!(kod(limit_peera(&mut k, &mut o, peer, &req(j), 1.0, 0)), None, "{j}");
+        }
+        assert_eq!(kod(limit_peera(&mut k, &mut o, peer, &req("j5"), 1.0, 0)).as_deref(), Some("rate_limit"));
+        // inny peer ma własny kubełek
+        assert_eq!(kod(limit_peera(&mut k, &mut o, inny, &req("j5"), 1.0, 0)), None);
+        // po 2 s peer odzyskuje miejsce
+        assert_eq!(kod(limit_peera(&mut k, &mut o, peer, &req("j6"), 1.0, 2_000_000)), None);
+        // 0 = bez limitu
+        let (mut k2, mut o2) = (HashMap::new(), VecDeque::new());
+        for i in 0..100 {
+            assert_eq!(kod(limit_peera(&mut k2, &mut o2, peer, &req(&format!("x{i}")), 0.0, 0)), None);
+        }
     }
 
     #[test]

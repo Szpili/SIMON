@@ -109,7 +109,8 @@ def run_on_nodes(nodes, req, max_tokens):
             raise
         except Exception as e:
             errors.append(str(e))
-    raise RuntimeError(("node_zajety: " if all("node_zajety" in e for e in errors) else "")
+    # node_zajety i rate_limit = chwilowe przeciążenie: klient ma ponowić (503), nie traktować jak awarii
+    raise RuntimeError(("node_zajety: " if all("node_zajety" in e or "rate_limit" in e for e in errors) else "")
                        + f"failed on {len(errors)} node(s): {errors[-1]}")
 
 
