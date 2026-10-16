@@ -15,7 +15,8 @@ architecture.
 
 ## Hackathon entry: maintenance tickets with an audit trail (Intelligent Industry, Gemma 4)
 
-**[Live: /simon/industry](https://pop-os.tailaf1556.ts.net/simon/industry)**. The user is the maintenance
+**[Live: /simon/industry](https://pop-os.tailaf1556.ts.net/simon/industry)**. Static mirror that does not depend on our
+machine: [szpili.github.io/SIMON/industry](https://szpili.github.io/SIMON/industry) (the same signed tickets, verified in your browser). The user is the maintenance
 planner of a machining plant. Machine alarms become technician tickets by hand, late, and nobody can later
 prove which system produced which advice.
 
@@ -36,6 +37,12 @@ Result on a predeclared, stratified sample (`docs/industry/run-catalog-3090-mi30
 shift"; that check was added after seeing it), median 1.6 s (1.37 s on the RTX 3090, 1.64 s on the MI300X), all receipts valid; 8 written on the RTX 3090,
 7 on the MI300X. Each receipt carries the node's measured runtime, precision and execution time, and the
 gateway pins each node's signer key (run of 2026-10-17, after the receipt fixes; the 2026-10-15 run gave the same 14/15).
+**Measured improvement (safety and quality).** A ticket draft takes 1.6 s (median) on the plant's own GPU or on
+the MI300X. In a teammate's stress test, the first validator (a keyword denylist) accepted 7 of 12 unsafe drafts.
+After the redesign (steps only from the plant's catalog, evidence copied from the rules, short checked free text,
+any problem holds the ticket), all 15 reject cases in the CI stress corpus, modelled on those attack classes, are
+held. One documented known-limit case passes (unsafe meaning in plain words), which is why a technician reviews
+every ticket. On the live sample, 1 of 15 drafts was held for raising the urgency the rules had set.
 Labelled failures the rules miss are shown as misses. AI4I is synthetic, and its labels follow the same
 physics as the rules, so the rule recall describes the dataset, not a real plant.
 
