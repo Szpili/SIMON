@@ -37,15 +37,16 @@ OpenAI-compatible API.
 Result on a predeclared, stratified sample (`docs/industry/run-catalog-3090-mi300x-2026-10-17.jsonl`): 14 of 15 tickets published and 1 held (its summary escalated the
 urgency the rules had set), median 1.6 s per ticket (1.37 s on the plant's RTX 3090, 1.64 s on the MI300X in AMD Developer Cloud), all receipts valid (8 written on RTX 3090, 7 on MI300X). Labelled failures the rules miss are shown as misses, not hidden.
 
-**Measured improvement.** In a teammate's stress test, the first keyword-based validator accepted 7 of 12 unsafe
-drafts. After the redesign, all 15 reject cases in the CI stress corpus (modelled on those attack classes) are held;
-one documented known limit (unsafe meaning in plain words) is why a technician reviews every ticket. A draft takes
-1.6 s median.
+**Measured improvement.** On our adversarial corpus the unsafe-draft escape rate fell from 7 of 12 (the first,
+keyword-based validator, in a teammate's stress test) to 0 of 15 after the redesign; one documented known limit
+(unsafe meaning in plain words) is why a technician reviews every ticket. This is a software safety metric, not yet
+a measured plant outcome. A draft takes 1.6 s median.
 
 **AMD & Architecture.** Gemma 4 runs on an AMD Instinct MI300X (vLLM 0.27.1, ROCm, AMD Developer Cloud) as a SIMON node next to
-the plant's RTX 3090. Measured on the MI300X: one card sustained 64 concurrent streams of a 27B model; SIMON
-added no measurable throughput cost (510/510 receipts verified); an honest AMD node flagged exactly the same
-prompts as the NVIDIA reference in our pre-registered cross-vendor test. The codebase spans 5 modular Rust crates (`simon-core`, `simon-verify-wasm`, `simon-harness`, `simon-node`, `simon-cli`) with automated unit/integration tests (run by CI on every push) and Python self-checks.
+the plant's RTX 3090. Benchmark on the MI300X (Qwen3.8-27B BF16, vLLM): one card sustained 64 concurrent streams;
+SIMON added no measurable throughput cost (510/510 receipts verified). In our pre-registered cross-vendor test the
+audit flagged the same 5 of 32 prompts on the MI300X as on an RTX 3090 checked against itself, so it does not
+penalise a node for its GPU vendor. The codebase spans 5 modular Rust crates (`simon-core`, `simon-verify-wasm`, `simon-harness`, `simon-node`, `simon-cli`) with automated unit/integration tests (run by CI on every push) and Python self-checks.
 
 **Honest limits.** A receipt proves who signed an output, not which model ran (execution audit is research, not
 shipped). AI4I is synthetic; its labels follow the same physics as the rules, so rule recall describes the
