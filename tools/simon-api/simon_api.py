@@ -19,6 +19,7 @@ import hashlib, hmac, itertools, json, os, subprocess, threading, time, uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 BIN = os.environ.get("SIMON_BIN", "simon")
+MAX_BODY = int(os.environ.get("SIMON_API_MAX_BODY", 1 << 20))  # 1 MiB; agent contexts stay far below
 HOST, PORT = "127.0.0.1", int(os.environ.get("SIMON_API_PORT", "18600"))
 TIMEOUT_S = int(os.environ.get("SIMON_API_TIMEOUT", "600"))
 IDENTITY = os.environ.get("SIMON_API_IDENTITY", os.path.expanduser("~/.simon/api-client.id"))
@@ -201,7 +202,13 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.rstrip("/") not in ("/v1/chat/completions", "/chat/completions"):
             return self._err(404, "not found")
         try:
-            req = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+            n = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            return self._err(400, "bad Content-Length")
+        if not 0 <= n <= MAX_BODY:  # a huge Content-Length would be read into memory before any check
+            return self._err(413, f"request body over {MAX_BODY} bytes")
+        try:
+            req = json.loads(self.rfile.read(n) or b"{}")
         except ValueError:
             return self._err(400, "invalid JSON")
         node = nodes_in_turn(req.get("model"))  # the node list, in rotation order

@@ -55,7 +55,8 @@ def prompt(rec_id, f, finds):
 
 
 def numbers(s):
-    return {float(x) for x in re.findall(r"-?\d+(?:\.\d+)?", s)}
+    # ponytail: no negative quantities in this data; abs() stops "3500-9000 W" (a rule range) reading as -9000
+    return {abs(float(x)) for x in re.findall(r"-?\d+(?:\.\d+)?", s)}
 
 
 def check(ticket_text, msgs, finds):

@@ -9,7 +9,7 @@ wideo **MP4**, publiczne repo GitHub, URL działającej aplikacji.
 | Slajdy | `SIMON-slajdy.pdf` (12 stron, 1440×810 pt = 16:9); źródła w `slajdy/` | gotowe |
 | Repo | `github.com/Szpili/SIMON` | gotowe, MIT |
 | Demo pod URL-em | Tailscale Funnel, usługi pod systemd | działa |
-| Wideo MP4 | `wideo/SIMON-wideo.mp4` (1:35, 1920×1080, bez narracji) — składane `wideo/zloz.sh` z: slajdu AMD, nagrania demo na MI300X (2026-10-11), slajdu z narzutem SIMON (2026-10-13), żywej strony `/network`, slajdu statusu | gotowe; ujęcia z przeglądarki i narracja ze scenariusza — do dogrania |
+| Wideo MP4 | `wideo/SIMON-wideo.mp4` (4:32, 1920×1080, narracja EN, Gemini TTS + intro/outro z Veo) — ten sam film co w zgłoszeniu lablab; źródła i potok: prywatne repo (`explainer/`: tts.py → record.py → build.py → outro.py) | gotowe |
 
 ## Slajdy
 

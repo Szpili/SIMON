@@ -24,6 +24,9 @@
     {/each}
   </ul>
 
-  <a href="{base}/demo" class="btn btn-primary mt-10 px-6 py-3 text-base">Try the demo</a>
-  <p class="mt-4 max-w-md text-sm text-neutral-500">Tamper with a node's output, then check the receipt. It takes about ten seconds.</p>
+  <div class="mt-10 flex flex-wrap gap-3">
+    <a href="{base}/industry" class="btn btn-primary px-6 py-3 text-base">Shop-floor demo: Gemma 4 on AMD MI300X</a>
+    <a href="{base}/demo" class="btn px-6 py-3 text-base">Tamper with a receipt</a>
+  </div>
+  <p class="mt-4 max-w-md text-sm text-neutral-500">Maintenance tickets written by Gemma 4 on the plant's RTX 3090 and an AMD Instinct MI300X, each with a signed receipt checked in your browser. Or tamper with a node's output and watch verification fail.</p>
 </section>

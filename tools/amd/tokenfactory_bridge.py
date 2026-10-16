@@ -59,7 +59,10 @@ class H(BaseHTTPRequestHandler):
         self._relay("GET")
 
     def do_POST(self):
-        body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        n = int(self.headers.get("Content-Length", 0) or 0)
+        if not 0 <= n <= 1 << 20:  # 1 MiB: never read an arbitrary Content-Length into memory
+            self.send_response(413); self.end_headers(); return
+        body = self.rfile.read(n)
         self._relay("POST", prepare(body) if self.path.endswith("/chat/completions") else body)
 
     def log_message(self, fmt, *a):

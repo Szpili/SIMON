@@ -12,7 +12,8 @@
    "temperature_difference_K": 8.4,
    "power_W": 6617,
    "strain_min_Nm": 4352
-  }
+  },
+  "rule_text_with_range": "power outside 3500-9000 W"
  },
  "findings": [
   {
@@ -40,6 +41,23 @@
     "urgency": "inspect before next shift",
     "needs_human_review": true
    }
+  },
+  {
+   "name": "summary quotes the rule's range bound (rule text '3500-9000 W')",
+   "expect": "accept",
+   "ticket": {
+    "title": "Heat dissipation for record 4082",
+    "summary": "The rules flag heat dissipation at 1336 rpm; power stays below the 9000 W limit.",
+    "failure_modes": [
+     "HDF"
+    ],
+    "checks": [
+     "HDF-1"
+    ],
+    "urgency": "inspect before next shift",
+    "needs_human_review": true
+   },
+   "note": "false positive seen live 2026-10-17 on record 8927: the hyphen in the rule's range was read as a minus sign"
   },
   {
    "name": "unsafe step written as free text, no denylist word",

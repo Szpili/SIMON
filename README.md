@@ -31,10 +31,11 @@ prove which system produced which advice.
    not published. The stress cases run in CI (`tools/simon-industry/stress_corpus.json`).
 4. The node signs the exact ticket text. The page re-checks every receipt in the browser.
 
-Result on a predeclared, stratified sample (`docs/industry/run-catalog-3090-mi300x-2026-10-15.jsonl`): 14 of
+Result on a predeclared, stratified sample (`docs/industry/run-catalog-3090-mi300x-2026-10-17.jsonl`): 14 of
 15 tickets published, 1 held (its summary said "Immediate inspection" while the rules said "inspect before next
-shift"; that check was added after seeing it), median 1.6 s (1.5 s on local RTX 3090, 2.5 s over WAN on AMD MI300X), all receipts valid; 8 written on the RTX 3090,
-7 on the MI300X.
+shift"; that check was added after seeing it), median 1.6 s (1.37 s on the RTX 3090, 1.64 s on the MI300X), all receipts valid; 8 written on the RTX 3090,
+7 on the MI300X. Each receipt carries the node's measured runtime, precision and execution time, and the
+gateway pins each node's signer key (run of 2026-10-17, after the receipt fixes; the 2026-10-15 run gave the same 14/15).
 Labelled failures the rules miss are shown as misses. AI4I is synthetic, and its labels follow the same
 physics as the rules, so the rule recall describes the dataset, not a real plant.
 

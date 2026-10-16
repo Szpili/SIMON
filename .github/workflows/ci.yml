@@ -75,6 +75,8 @@ jobs:
           cache-dependency-path: ui/package-lock.json
       - run: npm ci
       - run: npm run check
+      - name: Stored /industry receipts verify with the committed wasm
+        run: node scripts/check-receipts.mjs
       - name: Fixtures zgodne z przyklady/
         run: npm run fixtures && git diff --exit-code src/lib/fixture.ts
       - run: npm run build
