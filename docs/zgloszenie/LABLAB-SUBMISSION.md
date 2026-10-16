@@ -35,7 +35,7 @@ OpenAI-compatible API.
 4. The GPU node signs the exact ticket. The /industry page re-checks every receipt in the browser.
 
 Result on a predeclared, stratified sample (`docs/industry/run-catalog-3090-mi300x-2026-10-15.jsonl`): 14 of 15 tickets published and 1 held (its summary escalated the
-urgency the rules had set), median 1.6 s per ticket (1.5 s on local RTX 3090, 2.5 s over WAN on AMD MI300X), all receipts valid (8 written on RTX 3090, 7 on MI300X). Labelled failures the rules miss are shown as misses, not hidden.
+urgency the rules had set), median 1.6 s per ticket (1.56 s on the plant's RTX 3090, 1.67 s on the MI300X in AMD Developer Cloud), all receipts valid (8 written on RTX 3090, 7 on MI300X). Labelled failures the rules miss are shown as misses, not hidden.
 
 **AMD & Architecture.** Gemma 4 runs on an AMD Instinct MI300X (vLLM 0.27.1, ROCm, AMD Developer Cloud) as a SIMON node next to
 the plant's RTX 3090. Measured on the MI300X: one card sustained 64 concurrent streams of a 27B model; SIMON
