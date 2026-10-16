@@ -6,10 +6,11 @@
 
 <div class="flex min-h-screen flex-col bg-ink">
   <header class="border-b border-line">
-    <nav class="mx-auto flex max-w-6xl items-center justify-between px-4 py-3 mono text-sm">
+    <nav class="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-y-1 px-4 py-3 mono text-sm">
       <a href="{base}/" class="font-bold tracking-widest text-neutral-100">SIMON</a>
-      <div class="flex gap-5 text-neutral-400">
+      <div class="flex flex-wrap gap-x-4 gap-y-1 text-neutral-400">
         <a class="hover:text-neutral-100" href="{base}/demo">demo</a>
+        <a class="hover:text-neutral-100" href="{base}/receipts">receipts</a>
         <a class="hover:text-neutral-100" href="{base}/network">network</a>
         <a class="hover:text-neutral-100" href="{base}/industry">industry</a>
         <a class="hover:text-neutral-100" href="https://github.com/Szpili/SIMON" rel="noopener">source</a>
