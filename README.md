@@ -33,7 +33,7 @@ prove which system produced which advice.
 
 Result on a predeclared, stratified sample (`docs/industry/run-catalog-3090-mi300x-2026-10-15.jsonl`): 14 of
 15 tickets published, 1 held (its summary said "Immediate inspection" while the rules said "inspect before next
-shift"; that check was added after seeing it), median 1.6 s, all receipts valid; 8 written on the RTX 3090,
+shift"; that check was added after seeing it), median 1.6 s (1.5 s on local RTX 3090, 2.5 s over WAN on AMD MI300X), all receipts valid; 8 written on the RTX 3090,
 7 on the MI300X.
 Labelled failures the rules miss are shown as misses. AI4I is synthetic, and its labels follow the same
 physics as the rules, so the rule recall describes the dataset, not a real plant.
@@ -211,10 +211,10 @@ We measured it on ROCm instead of speculation (AMD Developer Cloud, 1× MI300X,
 
 ```bash
 cargo build --release
-cargo test --workspace      # 192 tests, 0 compiler warnings (CI runs on every push)
+cargo test --workspace      # unit + integration tests across 5 workspace crates, 0 compiler warnings (CI runs on every push)
 ```
 
-SIMON is a Rust workspace. The build needs no external services. A node also
+SIMON is a Rust workspace composed of 5 crates (`crates/simon-core`, `crates/simon-verify-wasm`, `crates/simon-harness`, `crates/simon-node`, `crates/simon-cli`) alongside Python test and self-check suites (`tools/simon-industry/rules.py`, `tools/simon-canary/simon_canary.py`, `tools/simon-verifier/verifier_loop.py`). The build needs no external services. A node also
 needs an OpenAI-compatible inference server. We use vLLM on Linux and llama.cpp
 elsewhere.
 

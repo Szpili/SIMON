@@ -94,21 +94,30 @@ pub fn waliduj(sufit: &Sufit, akcja: &str, parametry: &Value) -> Result<(), Odmo
         .get(akcja)
         .ok_or_else(|| Odmowa::NieznanaAkcja { akcja: akcja.to_string() })?;
 
-    let obj = parametry.as_object();
+    // Brak `args` (serde daje Null) = brak parametrów; skalar albo tablica = zły typ.
+    let pusty = serde_json::Map::new();
+    let o = match parametry {
+        Value::Null => &pusty,
+        Value::Object(o) => o,
+        _ => {
+            return Err(Odmowa::ZlyTyp {
+                akcja: akcja.to_string(),
+                parametr: "parametry".to_string(),
+            })
+        }
+    };
     // Nadmiarowe parametry: cokolwiek spoza kontraktu.
-    if let Some(o) = obj {
-        for k in o.keys() {
-            if !def.parametry.iter().any(|p| &p.nazwa == k) {
-                return Err(Odmowa::NadmiarowyParametr {
-                    akcja: akcja.to_string(),
-                    parametr: k.clone(),
-                });
-            }
+    for k in o.keys() {
+        if !def.parametry.iter().any(|p| &p.nazwa == k) {
+            return Err(Odmowa::NadmiarowyParametr {
+                akcja: akcja.to_string(),
+                parametr: k.clone(),
+            });
         }
     }
 
     for p in &def.parametry {
-        let v = obj.and_then(|o| o.get(&p.nazwa));
+        let v = o.get(&p.nazwa);
         let Some(v) = v else {
             if p.wymagany {
                 return Err(Odmowa::BrakParametru {
@@ -294,6 +303,11 @@ pub fn sprawdz(
     // 3) TTL
     if k.teraz_us > z.wazne_do_us {
         return Err(OdmowaZ::Wygaslo);
+    }
+    if let Some(b) = z.budzet {
+        if b <= 0 {
+            return Err(OdmowaZ::Wygaslo);
+        }
     }
     // 4) odwołane / użyte
     if k.odwolane.iter().any(|x| x == &z.id) {
@@ -481,5 +495,85 @@ mod testy {
         ));
         // opcjonalny `limit` pominięty — OK
         assert!(waliduj_json(&s, r#"{"tool":"ustaw_tryb","args":{"tryb":"fast"}}"#).is_ok());
+    }
+
+    #[test]
+    fn nieobiektowe_parametry_odrzucone() {
+        let s = sufit();
+        let nie_obj = serde_json::json!("ciag_znakow_nie_obiekt");
+        assert!(matches!(
+            waliduj(&s, "log_message", &nie_obj),
+            Err(Odmowa::ZlyTyp { .. })
+        ));
+        let tablica = serde_json::json!([1, 2, 3]);
+        assert!(matches!(
+            waliduj(&s, "log_message", &tablica),
+            Err(Odmowa::ZlyTyp { .. })
+        ));
+    }
+
+    #[test]
+    fn brak_args_to_brak_parametrow() {
+        let mut s = sufit();
+        s.akcje.insert(
+            "status".to_string(),
+            Akcja {
+                nazwa: "status".into(),
+                parametry: vec![Parametr {
+                    nazwa: "szczegoly".into(),
+                    wymagany: false,
+                    ograniczenie: Ograniczenie::Tekst { max_len: 10 },
+                }],
+            },
+        );
+        // narzędzie bez wymaganych parametrów, model pominął `args` -> serde daje Null -> OK
+        assert!(waliduj_json(&s, r#"{"tool":"status"}"#).is_ok());
+        // Null nie zastępuje wymaganego parametru
+        assert!(matches!(
+            waliduj_json(&s, r#"{"tool":"ustaw_tryb"}"#),
+            Err(Odmowa::BrakParametru { .. })
+        ));
+        // skalar i tablica nadal odrzucone
+        assert!(matches!(
+            waliduj_json(&s, r#"{"tool":"status","args":"x"}"#),
+            Err(Odmowa::ZlyTyp { .. })
+        ));
+        assert!(matches!(
+            waliduj_json(&s, r#"{"tool":"status","args":[]}"#),
+            Err(Odmowa::ZlyTyp { .. })
+        ));
+        // jawne `null` = pominięte `args`
+        assert!(waliduj_json(&s, r#"{"tool":"status","args":null}"#).is_ok());
+    }
+
+    #[test]
+    fn budzet_zerowy_lub_ujemny_odrzucony() {
+        let s = sufit();
+        let op = Keypair::from_seed(&[5u8; 32]);
+        let pk_hex = op.public().to_hex();
+        let par = serde_json::json!({"msg": "hello"});
+        let z = Zezwolenie {
+            id: "g-zero".into(),
+            akcja: "log_message".into(),
+            parametry_digest: odcisk_parametrow_akcji("log_message", &par).unwrap(),
+            wystawca: String::new(),
+            wazne_do_us: 1_000_000,
+            budzet: Some(0),
+            podpis: None,
+        }
+        .podpisz(&op)
+        .unwrap();
+        let k = Kontekst {
+            teraz_us: 500_000,
+            oczekiwany_wystawca: &pk_hex,
+            odwolane: &[],
+            uzyte: &[],
+        };
+        assert_eq!(sprawdz(&s, &z, "log_message", &par, &k), Err(OdmowaZ::Wygaslo));
+
+        let mut z_ujemny = z.clone();
+        z_ujemny.budzet = Some(-1);
+        let z_ujemny = z_ujemny.podpisz(&op).unwrap();
+        assert_eq!(sprawdz(&s, &z_ujemny, "log_message", &par, &k), Err(OdmowaZ::Wygaslo));
     }
 }

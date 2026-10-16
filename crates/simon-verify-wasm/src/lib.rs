@@ -13,6 +13,8 @@
 //! liczy hashy po swojemu — koniec rozjazdu `ui/src/lib/crypto.ts` vs
 //! `simon-core`.
 
+#![allow(clippy::doc_overindented_list_items)]
+
 use serde::Serialize;
 use simon_core::receipt::Receipt;
 use wasm_bindgen::prelude::*;
@@ -258,6 +260,7 @@ mod testy {
             wiazania: None,
         };
         let r = base
+            .clone()
             .z_wiazaniem_m1(
                 "TH".into(),
                 "NONCE".into(),
@@ -282,6 +285,18 @@ mod testy {
         // zły nonce
         let bad2 = super::weryfikuj_m1(&rj, "TH", "INNY", "[1,2,3]", "[7,8,9]");
         assert_eq!(pole(&bad2, "ok"), serde_json::json!(false), "{bad2}");
+        // niepodpisany receipt
+        let rj_unsigned = serde_json::to_string(&base.z_wiazaniem_m1(
+            "TH".into(),
+            "NONCE".into(),
+            &prompt,
+            &out,
+            "SP".into(),
+            7,
+            "llama.cpp/Q4_K_M/cpu".into(),
+        ).unwrap()).unwrap();
+        let bad_unsigned = super::weryfikuj_m1(&rj_unsigned, "TH", "NONCE", "[1,2,3]", "[7,8,9]");
+        assert_eq!(pole(&bad_unsigned, "ok"), serde_json::json!(false), "{bad_unsigned}");
     }
 
     #[test]

@@ -23,7 +23,7 @@ export interface Receipt {
   model_hash: string;
   /** Wersja runtime (D67): niezgodna = nie wchodzi do puli. */
   runtime: string;
-  precision: 'bf16' | 'fp16' | 'fp32' | 'fp8' | 'fp4' | string;
+  precision: 'bf16' | 'fp16' | 'fp32' | 'fp8' | 'fp4' | 'int8' | 'int4' | 'unknown' | string;
   /** LSH aktywacji wg TopLoc (na dziś zwykle "NIE_POLICZONY"). */
   activation_hash: string;
   /** Odcisk TREŚCI wyniku, domenowo rozdzielony i związany z job_id. */

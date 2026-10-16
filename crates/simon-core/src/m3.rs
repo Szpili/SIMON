@@ -90,9 +90,23 @@ pub fn ocena(kroki: &[Krok], p: &Polityka) -> Werdykt {
     let mut powod: Option<String> = None;
 
     for (i, kr) in kroki.iter().enumerate() {
-        let top1_lp = kr.topk.first().map(|x| x.1);
-        let traf = kr
-            .topk
+        if kr.topk.iter().any(|(_, lp)| !lp.is_finite()) {
+            poza += 1;
+            poza_lista += 1;
+            if powod.is_none() {
+                powod = Some(format!(
+                    "step {i} (idx {}): non-finite logprob in top-k",
+                    kr.indeks
+                ));
+            }
+            continue;
+        }
+
+        let mut posortowane = kr.topk.clone();
+        posortowane.sort_by(|a, b| b.1.total_cmp(&a.1));
+
+        let top1_lp = posortowane.first().map(|x| x.1);
+        let traf = posortowane
             .iter()
             .enumerate()
             .find(|(_, (id, _))| *id == kr.node_token);
@@ -181,7 +195,16 @@ pub fn odcisk_audytu(kroki: &[Krok]) -> Result<String, SimonError> {
 
 /// Parsuje JSON audytu i od razu ocenia.
 pub fn ocena_json(json: &str, p: &Polityka) -> Result<Werdykt, SimonError> {
-    let a: Audyt = serde_json::from_str(json)?;
+    let v: serde_json::Value = serde_json::from_str(json)?;
+    // `verifier_loop.py --dry-run` oznacza syntetyczne logprob polem `simulated`: to nie dowód.
+    // Każda wartość poza `false` odrzuca plik. To etykieta przeciw POMYŁCE (dry-run wzięty za audyt),
+    // nie ochrona przed fałszerzem — kto usunie pole, ten i tak sam pisze `kroki`.
+    if v.get("simulated").is_some_and(|s| s != &serde_json::Value::Bool(false)) {
+        return Err(SimonError::ReceiptMismatch(
+            "simulated audit (verifier_loop --dry-run) is not evidence".into(),
+        ));
+    }
+    let a: Audyt = serde_json::from_value(v)?;
     Ok(ocena(&a.kroki, p))
 }
 
@@ -250,6 +273,22 @@ pub fn decyzja(w: &Werdykt, receipt_level: u8, progi: &Progi) -> Decyzja {
 
 #[cfg(test)]
 mod testy {
+    #[test]
+    fn symulowany_audyt_odrzucony() {
+        let p = super::Polityka::default();
+        let prawdziwy = r#"{"kroki":[{"indeks":0,"node_token":5,"topk":[[5,-0.01],[6,-2.0]]}]}"#;
+        assert!(super::ocena_json(prawdziwy, &p).is_ok());
+        let symulowany = r#"{"simulated":true,"kroki":[{"indeks":0,"node_token":5,"topk":[[5,-0.01],[6,-2.0]]}]}"#;
+        assert!(super::ocena_json(symulowany, &p).is_err());
+        for zle in ["true", r#""true""#, "1", "null"] {
+            let j = format!(r#"{{"simulated":{zle},"kroki":[{{"indeks":0,"node_token":5,"topk":[[5,-0.01],[6,-2.0]]}}]}}"#);
+            let e = super::ocena_json(&j, &p).expect_err("simulated != false musi odrzucić");
+            assert!(e.to_string().contains("simulated"), "simulated={zle}: odrzucone z innego powodu: {e}");
+        }
+        let jawnie_nie = r#"{"simulated":false,"kroki":[{"indeks":0,"node_token":5,"topk":[[5,-0.01],[6,-2.0]]}]}"#;
+        assert!(super::ocena_json(jawnie_nie, &p).is_ok());
+    }
+
     use super::*;
 
     fn topk(pary: &[(u32, f64)]) -> Vec<(u32, f64)> {
@@ -378,5 +417,44 @@ mod testy {
         c[0].node_token = 3;
         assert_eq!(odcisk_audytu(&a).unwrap(), odcisk_audytu(&b).unwrap());
         assert_ne!(odcisk_audytu(&a).unwrap(), odcisk_audytu(&c).unwrap());
+    }
+
+    #[test]
+    fn nan_lub_inf_w_topk_jest_odrzucony() {
+        let kroki = vec![Krok {
+            indeks: 0,
+            node_token: 528,
+            topk: topk(&[(528, f64::NAN), (28742, -1.0)]),
+        }];
+        let w = ocena(&kroki, &Polityka::default());
+        assert!(!w.ok);
+        assert_eq!(w.poza_topk, 1);
+        assert_eq!(w.poza_lista, 1);
+        assert!(w.powod.unwrap().contains("non-finite"));
+
+        let kroki_inf = vec![Krok {
+            indeks: 0,
+            node_token: 528,
+            topk: topk(&[(528, f64::INFINITY)]),
+        }];
+        let w_inf = ocena(&kroki_inf, &Polityka::default());
+        assert!(!w_inf.ok);
+        assert_eq!(w_inf.poza_topk, 1);
+        assert_eq!(w_inf.poza_lista, 1);
+    }
+
+    #[test]
+    fn nieposortowane_topk_jest_sortowane_przed_ocena() {
+        // Node token 1 ma -2.5, a inny token ma -0.5. Gdyby topk nie było sortowane,
+        // token 1 na początku listy zostałby błędnie uznany za rank 1 z marginesem 0.0.
+        let kroki = vec![Krok {
+            indeks: 0,
+            node_token: 1,
+            topk: topk(&[(1, -2.5), (2, -0.5)]),
+        }];
+        let w = ocena(&kroki, &Polityka::default());
+        assert!(!w.ok);
+        assert_eq!(w.najgorszy_rank, 2);
+        assert!((w.najgorszy_margin - 2.0).abs() < 1e-6);
     }
 }

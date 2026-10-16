@@ -121,7 +121,7 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
         if let PromptReply::Ok(r) = &reply {
             sprawdz_wiadomosc_czatu(&r.output)?;
         }
-        return obsluz_odpowiedz(reply, siec_ms, &order.model_hash, opcje.json, t0, &klucz, opcje.rejestr.as_deref());
+        return obsluz_odpowiedz(reply, siec_ms, &order.model_hash, opcje.json, t0, &klucz, opcje.rejestr.as_deref(), &order.nonce);
     }
 
     // --- Etap A (dziś jedyny etap, gdy --then-bootstrap nie podany) ---
@@ -136,7 +136,7 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
     let (reply, siec_ms) = wyslij_i_czekaj(&mut swarm, peer, request).await?;
 
     if opcje.then_bootstrap.is_empty() {
-        return obsluz_odpowiedz(reply, siec_ms, &order.model_hash, opcje.json, t0, &klucz, opcje.rejestr.as_deref());
+        return obsluz_odpowiedz(reply, siec_ms, &order.model_hash, opcje.json, t0, &klucz, opcje.rejestr.as_deref(), &order.nonce);
     }
 
     // --- B2: łańcuch — etap A zweryfikowany, przekazujemy wynik do etapu B ---
@@ -144,7 +144,7 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
     // `wyodrebnij_output` zwraca Err i CAŁY łańcuch przerywa się TUTAJ — etap B
     // nigdy nie zostanie wywołany z niezweryfikowanym wynikiem. To jest wprost
     // gwarancja kontroli przepływu Rust (`?`), nie dodatkowa logika do przetestowania.
-    let wynik_a = wyodrebnij_output(reply, &order.model_hash)?;
+    let wynik_a = wyodrebnij_output(reply, &order.model_hash, &order.nonce)?;
     println!("\n=== ETAP A (zweryfikowany) ===\n{wynik_a}");
 
     let then_model = opcje.then_model_hash.clone().unwrap_or_else(|| model_zadany.clone());
@@ -158,7 +158,7 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
     let (reply_b, siec_ms_b) = wyslij_i_czekaj(&mut swarm, then_peer, request_b).await?;
 
     println!("\n=== ETAP B ===");
-    obsluz_odpowiedz(reply_b, siec_ms_b, &order_b.model_hash, opcje.json, t0b, &klucz, opcje.rejestr.as_deref())
+    obsluz_odpowiedz(reply_b, siec_ms_b, &order_b.model_hash, opcje.json, t0b, &klucz, opcje.rejestr.as_deref(), &order_b.nonce)
 }
 
 /// Pola żądania OpenAI, które idą do node'a (ta sama biała lista co w node.rs).
@@ -371,10 +371,10 @@ async fn uruchom_map_reduce(
                 continue;
             }
             let tekst_reduce = zbuduj_prompt_reduce(pytanie, &grupa);
-            let (_order, request) =
+            let (order, request) =
                 zbuduj_zlecenie(model, &tekst_reduce, opcje.fee, opcje.max_tokens, klucz, false)?;
             let (reply, _ms) = wyslij_i_czekaj(swarm, peer, request).await?;
-            nowy_poziom.push(wyodrebnij_output(reply, model)?);
+            nowy_poziom.push(wyodrebnij_output(reply, model, &order.nonce)?);
         }
         poziom = nowy_poziom;
     }
@@ -412,7 +412,7 @@ async fn wyslij_kawalek_z_retry(
 
     while let Some((fragment, glebokosc_zostala)) = kolejka.pop_front() {
         let tekst = zbuduj_prompt_map(pytanie, &fragment, i, n);
-        let (_order, request) = zbuduj_zlecenie(model, &tekst, fee, max_tokens, klucz, false)?;
+        let (order, request) = zbuduj_zlecenie(model, &tekst, fee, max_tokens, klucz, false)?;
         let (reply, _ms) = wyslij_i_czekaj(swarm, peer, request).await?;
         match reply {
             PromptReply::Blad(e) if e.kod == "ctx_ponad_limit" && glebokosc_zostala > 0 => {
@@ -443,7 +443,7 @@ async fn wyslij_kawalek_z_retry(
                 kolejka.push_front((b.iter().collect(), glebokosc_zostala - 1));
                 kolejka.push_front((a.iter().collect(), glebokosc_zostala - 1));
             }
-            _ => czesciowe.push(wyodrebnij_output(reply, model)?),
+            _ => czesciowe.push(wyodrebnij_output(reply, model, &order.nonce)?),
         }
     }
     Ok(czesciowe.join("\n"))
@@ -577,11 +577,16 @@ pub(crate) async fn wyslij_i_czekaj(
 /// Wyciąga `output` z odpowiedzi, weryfikując receipt (RULES #6: klient nie
 /// ufa node'owi). Używane przez map/reduce, gdzie nie potrzeba pełnego
 /// wydruku pomiaru M2.7 na KAŻDY kawałek — tylko wynik albo błąd.
-fn wyodrebnij_output(reply: PromptReply, oczekiwany_model: &str) -> Result<String, String> {
+fn wyodrebnij_output(reply: PromptReply, oczekiwany_model: &str, oczekiwany_nonce: &str) -> Result<String, String> {
     match reply {
         PromptReply::Blad(e) => Err(format!("node zwrócił błąd {}: {}", e.kod, e.opis)),
         PromptReply::Ok(r) => {
-            if !zweryfikuj_receipt(&r.receipt, &r.job_id, oczekiwany_model, Some(&r.output)) {
+            let m1_info = match (&r.tokenizer_hash, &r.prompt_token_ids, &r.output_token_ids) {
+                // nonce z NASZEGO zlecenia, nie z receiptu — inaczej wiązanie nonce niczego nie sprawdza
+                (Some(th), Some(pt), Some(ot)) => Some((th.as_str(), oczekiwany_nonce, pt.as_slice(), ot.as_slice())),
+                _ => None,
+            };
+            if !zweryfikuj_receipt(&r.receipt, &r.job_id, oczekiwany_model, Some(&r.output), m1_info) {
                 return Err(format!("receipt nie przechodzi weryfikacji (job_id={})", r.job_id));
             }
             Ok(r.output)
@@ -590,6 +595,7 @@ fn wyodrebnij_output(reply: PromptReply, oczekiwany_model: &str) -> Result<Strin
 }
 
 /// Wypisuje wynik, weryfikuje receipt i podaje rozbicie pomiaru (format Hermesa).
+#[allow(clippy::too_many_arguments)]
 fn obsluz_odpowiedz(
     reply: PromptReply,
     siec_ms: u64,
@@ -598,6 +604,7 @@ fn obsluz_odpowiedz(
     t0: std::time::Instant,
     klucz_klienta: &Keypair,
     rejestr: Option<&str>,
+    oczekiwany_nonce: &str,
 ) -> Result<(), String> {
     match reply {
         PromptReply::Blad(e) => {
@@ -608,9 +615,22 @@ fn obsluz_odpowiedz(
             Err(format!("node zwrócił błąd: {}", e.kod))
         }
         PromptReply::Ok(r) => {
+            let rec = serde_json::from_str::<Receipt>(&r.receipt).ok();
+            // Deklaracja node'a (receipt_level) to nie dowód: poziom 1 liczy się dopiero, gdy
+            // sami sprawdziliśmy wiązanie M1 na tokenach z odpowiedzi (niżej, zweryfikuj_receipt).
+            let poziom_deklarowany = rec.as_ref().map(|x| x.poziom()).unwrap_or(0);
+            let m1_info = match (&r.tokenizer_hash, &r.prompt_token_ids, &r.output_token_ids) {
+                (Some(th), Some(pt), Some(ot)) => {
+                    // nonce ZAWSZE z naszego zlecenia; nonce z receiptu sprawdzałby receipt sam ze sobą
+                    Some((th.as_str(), oczekiwany_nonce, pt.as_slice(), ot.as_slice()))
+                }
+                _ => None,
+            };
+
             // M2.5.1: weryfikujemy wobec TEGO zlecenia (job_id + model), nie „jakiegokolwiek".
             let weryfikacja =
-                zweryfikuj_receipt(&r.receipt, &r.job_id, oczekiwany_model, Some(&r.output));
+                zweryfikuj_receipt(&r.receipt, &r.job_id, oczekiwany_model, Some(&r.output), m1_info);
+            let poziom_dowodu = poziom_sprawdzony(weryfikacja, m1_info.is_some(), poziom_deklarowany);
             if !weryfikacja {
                 eprintln!("[agent][diagnoza] oczekiwano job_id={} model={}", r.job_id, oczekiwany_model);
                 eprintln!("[agent][diagnoza] odebrany receipt: {}", r.receipt);
@@ -693,6 +713,8 @@ fn obsluz_odpowiedz(
                     "ok": true,
                     "output": r.output,
                     "job_id": r.job_id,
+                    "poziom_dowodu": poziom_dowodu,
+                    "poziom_deklarowany_przez_node": poziom_deklarowany,
                     "ttft_ms": r.ttft_ms,
                     "gen_ms": r.gen_ms,
                     "siec_ms": siec_ms,
@@ -726,8 +748,9 @@ fn obsluz_odpowiedz(
                 println!("  node_declared_tok_s:   {tok_s:.1} tok/s (z deklaracji, nie z pomiaru klienta)");
             }
             println!(
-                "Weryfikacja:     {}",
-                if weryfikacja { "receipt spójny" } else { "RECEIPT NIESPÓJNY" }
+                "Weryfikacja:     {} (poziom {})",
+                if weryfikacja { "receipt spójny" } else { "RECEIPT NIESPÓJNY" },
+                poziom_dowodu
             );
             if !weryfikacja {
                 return Err("receipt nie przechodzi weryfikacji".into());
@@ -737,19 +760,26 @@ fn obsluz_odpowiedz(
     }
 }
 
-/// M2.5.1 — weryfikacja receiptu po stronie klienta.
+/// Poziom dowodu, który KLIENT sprawdził: 1 tylko gdy receipt przeszedł weryfikację, deklaruje M1
+/// i dostaliśmy tokeny, na których M1 faktycznie sprawdziliśmy. Deklaracja bez tokenów = 0.
+fn poziom_sprawdzony(weryfikacja: bool, m1_sprawdzone: bool, deklarowany: u8) -> u8 {
+    u8::from(weryfikacja && m1_sprawdzone && deklarowany >= 1)
+}
+
+/// M2.5.1 / M1 — weryfikacja receiptu po stronie klienta.
 ///
-/// **Klient NIE ufa node'owi (RULES #6).** Trzy bramki:
+/// **Klient NIE ufa node'owi (RULES #6).** Bramki:
 ///   1. receipt deserializuje się do `Receipt`,
 ///   2. podpis Ed25519 zgadza się z kluczem ZAWIARTYM w receipcie (`verify_self`),
-///   3. `job_id` i `model_hash` zgadzają się z tym, o co prosiliśmy.
-///
-/// Bramka 2 to realna zmiana: wcześniej każdy oszust bez podpisu przechodził.
+///   3. `job_id` i `model_hash` zgadzają się z tym, o co prosiliśmy,
+///   4. czy receipt opisuje TEN tekst (`zgodny_z_wyjsciem`),
+///   5. Wiązanie M1 (jeśli przekazano wiązania M1 i receipt ma poziom >= 1): `zweryfikuj_m1`.
 fn zweryfikuj_receipt(
     receipt_json: &str,
     oczekiwany_job_id: &str,
     oczekiwany_model: &str,
     wyjscie: Option<&str>,
+    m1: Option<(&str, &str, &[u32], &[u32])>,
 ) -> bool {
     let Ok(r) = serde_json::from_str::<Receipt>(receipt_json) else {
         return false;
@@ -763,10 +793,21 @@ fn zweryfikuj_receipt(
     // Bramka 4 (2026-09-18): czy receipt opisuje TEN tekst. Bez niej podpis
     // dowodzil tylko, ze node cos policzyl — node mogl odeslac dowolna tresc
     // i wszystkie pozostale bramki i tak zapalaly sie na zielono.
-    match wyjscie {
-        Some(t) => r.zgodny_z_wyjsciem(t),
-        None => true,
+    if let Some(t) = wyjscie {
+        if !r.zgodny_z_wyjsciem(t) {
+            return false;
+        }
     }
+    // Bramka 5 (M1): weryfikacja łańcucha tokenów
+    if let Some((tok_hash, nonce, p_ids, o_ids)) = m1 {
+        if r.poziom() >= 1 {
+            if let Err(e) = r.zweryfikuj_m1(tok_hash, nonce, p_ids, o_ids) {
+                eprintln!("[agent][diagnoza] weryfikacja M1 nie powiodła się: {e}");
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// Pomocnicze — nieużywane bezpośrednio, ale trzyma typ w zasięgu dla testów.
@@ -777,6 +818,18 @@ fn _rejestr() -> RejestrKoordynatorow {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn poziom_dowodu_to_sprawdzony_nie_deklarowany() {
+        // node deklaruje M1, ale nie odesłał tokenów -> niczego nie sprawdziliśmy -> 0
+        assert_eq!(super::poziom_sprawdzony(true, false, 1), 0);
+        // tokeny są, M1 sprawdzone, receipt OK -> 1
+        assert_eq!(super::poziom_sprawdzony(true, true, 1), 1);
+        // weryfikacja padła -> 0 niezależnie od deklaracji
+        assert_eq!(super::poziom_sprawdzony(false, true, 1), 0);
+        // receipt poziomu 0 -> 0
+        assert_eq!(super::poziom_sprawdzony(true, true, 0), 0);
+    }
+
     use super::*;
 
     #[test]
@@ -820,6 +873,7 @@ mod tests {
             expect_model: None,
             tokens: None,
             audyt: None,
+            expect_signer: None,
         }
     }
 
@@ -867,10 +921,10 @@ mod tests {
     fn m125_receipt_bez_podpisu_odrzucony() {
         // M2.5.1: sam JSON z polami to ZA MAŁO — bez podpisu Ed25519 odrzucamy.
         // To jest asercja, która PRZED poprawką była odwrotna (oszust przechodził).
-        assert!(!zweryfikuj_receipt("{}", "j", "m", None));
-        assert!(!zweryfikuj_receipt("nie-json", "j", "m", None));
+        assert!(!zweryfikuj_receipt("{}", "j", "m", None, None));
+        assert!(!zweryfikuj_receipt("nie-json", "j", "m", None, None));
         assert!(
-            !zweryfikuj_receipt(r#"{"job_id":"j","order_id":"o","model_hash":"m"}"#, "j", "m", None),
+            !zweryfikuj_receipt(r#"{"job_id":"j","order_id":"o","model_hash":"m"}"#, "j", "m", None, None),
             "receipt BEZ podpisu nie może przejść"
         );
     }
@@ -898,11 +952,11 @@ mod tests {
         .expect("podpis");
         let json = serde_json::to_string(&receipt).unwrap();
 
-        assert!(zweryfikuj_receipt(&json, "job-1", "qwen3.8-27b", None), "podpisany receipt przechodzi");
+        assert!(zweryfikuj_receipt(&json, "job-1", "qwen3.8-27b", None, None), "podpisany receipt przechodzi");
         // Zły job_id -> odrzucony (receipt dotyczy innego zlecenia).
-        assert!(!zweryfikuj_receipt(&json, "job-INNY", "qwen3.8-27b", None));
+        assert!(!zweryfikuj_receipt(&json, "job-INNY", "qwen3.8-27b", None, None));
         // Zły model -> odrzucony (D67).
-        assert!(!zweryfikuj_receipt(&json, "job-1", "inny-model", None));
+        assert!(!zweryfikuj_receipt(&json, "job-1", "inny-model", None, None));
     }
 
     /// REGRESJA 2026-09-18 — najgrozniejsza dziura, jaka tu byla.
@@ -937,15 +991,15 @@ mod tests {
         let json = serde_json::to_string(&receipt).unwrap();
 
         assert!(
-            zweryfikuj_receipt(&json, "job-1", "qwen3.8-27b", Some(prawdziwy)),
+            zweryfikuj_receipt(&json, "job-1", "qwen3.8-27b", Some(prawdziwy), None),
             "receipt opisujacy TEN tekst musi przejsc"
         );
         assert!(
-            !zweryfikuj_receipt(&json, "job-1", "qwen3.8-27b", Some("cos zupelnie innego")),
+            !zweryfikuj_receipt(&json, "job-1", "qwen3.8-27b", Some("cos zupelnie innego"), None),
             "node odsylajacy INNY tekst niz podpisany MUSI zostac odrzucony"
         );
         // Nawet drobna zmiana: dopisana spacja to juz inny wynik.
-        assert!(!zweryfikuj_receipt(&json, "job-1", "qwen3.8-27b", Some("42 to odpowiedz ")));
+        assert!(!zweryfikuj_receipt(&json, "job-1", "qwen3.8-27b", Some("42 to odpowiedz "), None));
     }
 
     /// Zawyzenie licznikow PO podpisaniu lamie podpis. To NIE jest dowod, ze
@@ -978,14 +1032,14 @@ mod tests {
         zawyzony.completion_tokens = 5_000;
         let json = serde_json::to_string(&zawyzony).unwrap();
         assert!(
-            !zweryfikuj_receipt(&json, "job-1", "m", Some(tekst)),
+            !zweryfikuj_receipt(&json, "job-1", "m", Some(tekst), None),
             "podbicie completion_tokens po podpisie musi zostac zlapane"
         );
 
         let mut zawyzony2 = podpisany;
         zawyzony2.prompt_tokens = 9_999;
         let json2 = serde_json::to_string(&zawyzony2).unwrap();
-        assert!(!zweryfikuj_receipt(&json2, "job-1", "m", Some(tekst)));
+        assert!(!zweryfikuj_receipt(&json2, "job-1", "m", Some(tekst), None));
     }
 
     /// Separator domeny: ten sam job_id i tekst w innej domenie protokolu
@@ -1039,7 +1093,94 @@ mod tests {
         // Podmiana treści PO podpisaniu musi unieważnić receipt.
         receipt.output_digest = "digest-po-kradziezy".into();
         let json = serde_json::to_string(&receipt).unwrap();
-        assert!(!zweryfikuj_receipt(&json, "job-1", "qwen3.8-27b", None));
+        assert!(!zweryfikuj_receipt(&json, "job-1", "qwen3.8-27b", None, None));
+    }
+
+    #[test]
+    fn test_m1_receipt_zweryfikuj_przechodzi_i_odrzuca_tamper() {
+        let klucz = simon_core::crypto::Keypair::generate();
+        let job_id = "job-m1-test";
+        let model = "qwen3.8-27b";
+        let tekst = "42 to odpowiedz";
+        let tokenizer_hash = "tok-hash-xyz";
+        let nonce = "nonce-12345";
+        let prompt_tokens = vec![101, 1002, 305];
+        let output_tokens = vec![42, 55, 999];
+
+        let receipt = Receipt {
+            job_id: job_id.into(),
+            node_id: klucz.public().to_hex(),
+            model_hash: model.into(),
+            runtime: "vllm/0.27.1".into(),
+            precision: simon_core::receipt::Precision::Fp16,
+            activation_hash: "toploc:test".into(),
+            output_digest: simon_core::receipt::odcisk_wyjscia(job_id, tekst).unwrap(),
+            prompt_tokens: prompt_tokens.len() as u32,
+            completion_tokens: output_tokens.len() as u32,
+            started_at_us: 0,
+            finished_at_us: 1_000_000,
+            signer: klucz.public(),
+            signature: None,
+            wiazania: None,
+        }
+        .z_wiazaniem_m1(
+            tokenizer_hash.into(),
+            nonce.into(),
+            &prompt_tokens,
+            &output_tokens,
+            "sampling_hash".into(),
+            4242,
+            "profile_v1".into(),
+        )
+        .expect("z_wiazaniem_m1")
+        .sign(&klucz)
+        .expect("podpis");
+
+        assert_eq!(receipt.poziom(), 1);
+        let json = serde_json::to_string(&receipt).unwrap();
+
+        // 1. Poprawne wiązania M1 przechodzą
+        let m1_valid = (tokenizer_hash, nonce, prompt_tokens.as_slice(), output_tokens.as_slice());
+        assert!(
+            zweryfikuj_receipt(&json, job_id, model, Some(tekst), Some(m1_valid)),
+            "poprawny receipt M1 musi przejść weryfikację"
+        );
+
+        // 2. Zmanipulowane output_token_ids są odrzucane
+        let tampered_output = vec![42, 55, 1000];
+        let m1_tampered_output = (tokenizer_hash, nonce, prompt_tokens.as_slice(), tampered_output.as_slice());
+        assert!(
+            !zweryfikuj_receipt(&json, job_id, model, Some(tekst), Some(m1_tampered_output)),
+            "tampered output_token_ids musi zostać odrzucony"
+        );
+
+        // 3. Zmanipulowane prompt_token_ids są odrzucane
+        let tampered_prompt = vec![101, 1002, 999];
+        let m1_tampered_prompt = (tokenizer_hash, nonce, tampered_prompt.as_slice(), output_tokens.as_slice());
+        assert!(
+            !zweryfikuj_receipt(&json, job_id, model, Some(tekst), Some(m1_tampered_prompt)),
+            "tampered prompt_token_ids musi zostać odrzucony"
+        );
+
+        // 4. Zmanipulowany tokenizer_hash jest odrzucany
+        let m1_tampered_tok = ("inny-tokenizer", nonce, prompt_tokens.as_slice(), output_tokens.as_slice());
+        assert!(
+            !zweryfikuj_receipt(&json, job_id, model, Some(tekst), Some(m1_tampered_tok)),
+            "tampered tokenizer_hash musi zostać odrzucony"
+        );
+
+        // 5. Zmanipulowany client_nonce jest odrzucany
+        let m1_tampered_nonce = (tokenizer_hash, "inny-nonce", prompt_tokens.as_slice(), output_tokens.as_slice());
+        assert!(
+            !zweryfikuj_receipt(&json, job_id, model, Some(tekst), Some(m1_tampered_nonce)),
+            "tampered client_nonce musi zostać odrzucony"
+        );
+
+        // 6. Niezgodny output tekstowy jest odrzucany
+        assert!(
+            !zweryfikuj_receipt(&json, job_id, model, Some("inny wynik"), Some(m1_valid)),
+            "niezgodny output tekstowy musi zostać odrzucony"
+        );
     }
 
     #[test]

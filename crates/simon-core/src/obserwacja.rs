@@ -80,6 +80,7 @@ impl ClientObservationV1 {
     }
 
     pub fn sign(mut self, klucz: &Keypair) -> Result<Self, SimonError> {
+        self.client_pubkey = klucz.public();
         let d = self.digest()?;
         self.client_signature = Some(klucz.sign_digest(&d));
         Ok(self)
@@ -137,5 +138,15 @@ mod testy {
             o.observed_time_to_first_event_ms.is_none(),
             "czas calej odpowiedzi to NIE jest TTFT"
         );
+    }
+
+    #[test]
+    fn sign_ustawia_client_pubkey_z_klucza() {
+        let dummy_k = Keypair::from_seed(&[1u8; 32]);
+        let signer_k = Keypair::from_seed(&[2u8; 32]);
+        let obs = przykladowa(&dummy_k);
+        let signed = obs.sign(&signer_k).unwrap();
+        assert_eq!(signed.client_pubkey, signer_k.public());
+        assert!(signed.verify_self().is_ok());
     }
 }

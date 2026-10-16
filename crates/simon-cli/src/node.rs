@@ -12,7 +12,7 @@ use simon_core::crypto::Keypair;
 use simon_core::receipt::{Precision, Receipt};
 use simon_harness::request_response::{PromptError, PromptReply, PromptRequest, PromptResponse};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::Semaphore;
 
 /// Domniemany endpoint modelu (vLLM/Ollama, API OpenAI).
@@ -338,6 +338,11 @@ async fn policz(
         Err(e) => return blad(req, "client", &format!("nie mogę zbudować klienta HTTP: {e}")),
     };
 
+    let started_at_us = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_micros() as u64)
+        .unwrap_or(0);
+
     let odp = match klient.post(&url).json(&body).send().await {
         Ok(o) => o,
         Err(e) => {
@@ -355,6 +360,12 @@ async fn policz(
         Ok(t) => t,
         Err(e) => return blad(req, "odczyt", &format!("nie mogę odczytać odpowiedzi: {e}")),
     };
+
+    let finished_at_us = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_micros() as u64)
+        .unwrap_or(0)
+        .max(started_at_us);
 
     if !status.is_success() {
         return blad(
@@ -411,7 +422,15 @@ async fn policz(
     // Receipt PRZED przeniesieniem `output` — podpisujemy dokladnie ten tekst,
     // ktory zaraz odeslemy.
     let receipt = zbuduj_podpisany_receipt(
-        klucz, model_hash, runtime, req, &output, prompt_tokens, tokens_out,
+        klucz,
+        model_hash,
+        runtime,
+        req,
+        &output,
+        prompt_tokens,
+        tokens_out,
+        started_at_us,
+        finished_at_us,
     );
 
     PromptReply::Ok(PromptResponse {
@@ -426,6 +445,9 @@ async fn policz(
         tokens_out,
         ttft_ms,
         gen_ms,
+        tokenizer_hash: None,
+        prompt_token_ids: None,
+        output_token_ids: None,
     })
 }
 
@@ -659,13 +681,31 @@ async fn wykryj_runtime(model_url: &str) -> String {
             }
         }
     }
+    // llama.cpp: GET /props -> {"default_generation_settings": ..., "total_slots": ...}
+    if let Ok(o) = klient.get(format!("{baza}/props")).send().await {
+        if o.status().is_success() {
+            if let Ok(v) = o.json::<serde_json::Value>().await {
+                if v.get("default_generation_settings").is_some() || v.get("total_slots").is_some() {
+                    return "llama.cpp/1".to_string();
+                }
+            }
+        }
+    }
     eprintln!("[node] UWAGA: nie rozpoznaję silnika pod {baza} — receipt powie 'nieznany'");
     "nieznany/1".to_string()
 }
 
-/// C+1: prawdziwa liczba tokenów promptu przez `/tokenize` vLLM (endpoint
-/// zgodny z API OpenAI: `POST {"prompt": ...} -> {"count": N, ...}`).
-/// `None` gdy vLLM nieosiągalny lub odpowiedź nie ma pola `count` — WOŁAJĄCY
+/// Pomocnik do wyciągania liczby tokenów z odpowiedzi endpointu `/tokenize`.
+/// Obsługuje format vLLM (`count: N`) oraz llama-server (`tokens: [...]`).
+pub(crate) fn wyciagnij_liczbe_tokenow(v: &serde_json::Value) -> Option<u64> {
+    v.get("count")
+        .and_then(|c| c.as_u64())
+        .or_else(|| v.get("tokens").and_then(|t| t.as_array()).map(|a| a.len() as u64))
+}
+
+/// C+1: prawdziwa liczba tokenów promptu przez `/tokenize` vLLM / llama-server
+/// (POST `{"prompt": ..., "content": ...}` -> `{"count": N}` lub `{"tokens": [...]}`).
+/// `None` gdy backend nieosiągalny lub odpowiedź nie ma pola tokenów — WOŁAJĄCY
 /// spada wtedy na deklarację agenta. Każda droga do `None` loguje PRZYCZYNĘ:
 /// cichy fallback bez logu maskowałby realny błąd parsowania jako "nieosiągalny".
 async fn odczytaj_realny_ctx(model_url: &str, prompt: &str) -> Option<u32> {
@@ -682,7 +722,7 @@ async fn odczytaj_realny_ctx(model_url: &str, prompt: &str) -> Option<u32> {
     };
     let odp = match klient
         .post(&url)
-        .json(&serde_json::json!({"prompt": prompt}))
+        .json(&serde_json::json!({"prompt": prompt, "content": prompt}))
         .send()
         .await
     {
@@ -708,7 +748,7 @@ async fn odczytaj_realny_ctx(model_url: &str, prompt: &str) -> Option<u32> {
             return None;
         }
     };
-    match v["count"].as_u64() {
+    match wyciagnij_liczbe_tokenow(&v) {
         // Kontrola zakresu: `n as u32` przy n > u32::MAX po cichu obcina liczbę
         // i przepuściłoby za długi prompt przez bramkę. Wolimy głośno spaść na
         // deklarację agenta niż porównywać z obciętą wartością.
@@ -722,9 +762,84 @@ async fn odczytaj_realny_ctx(model_url: &str, prompt: &str) -> Option<u32> {
             }
         },
         None => {
-            eprintln!("[node] /tokenize: odpowiedź bez pola `count`: {v}");
+            eprintln!("[node] /tokenize: odpowiedź bez pola `count` ani `tokens`: {v}");
             None
         }
+    }
+}
+
+/// Precyzja z nazwy modelu (`model_hash` deklaruje operator, więc to i tak jego deklaracja).
+/// Podpisany receipt nie może zgadywać, więc reguła jest zachowawcza:
+/// - całe tokeny nazwy (`gemma-bf16-iq4_xs` -> `gemma`,`bf16`,`iq4`,`xs`), nigdy podciągi z hashy;
+/// - rodziny kwantyzacji po prefiksie: `q4…`/`iq4…` (GGUF), `w4a…`/`w8a…`, `fp8…`, `fp4`/`nvfp4`/`mxfp4`;
+/// - JAKIKOLWIEK znacznik kwantyzacji blokuje spadek do formatu bazowego (`bf16-iq4_xs` to nie bf16);
+/// - sprzeczne znaczniki albo szerokość spoza enuma (Q5, Q6…) -> `Unknown`;
+/// - AWQ/GPTQ to słaby znacznik (domyślnie int4), ustępuje jawnemu `8bit`/`int8`.
+pub(crate) fn wykryj_precyzje(model_hash: &str) -> Precision {
+    let n = model_hash.to_ascii_lowercase();
+    let tokeny: Vec<&str> = n.split(|c: char| !c.is_ascii_alphanumeric()).filter(|t| !t.is_empty()).collect();
+    // Bity z CAŁEGO tokenu GGUF: `q4`, `iq4`, zwarte `q4k`/`q4km` (q4_k_m dzieli się na q4,k,m).
+    // `q80`, `q4foo`, `q8deadbeef` to nie GGUF — nie wolno ich czytać po pierwszej cyfrze.
+    let bity_gguf = |t: &str| -> Option<u32> {
+        let r = t.strip_prefix('i').unwrap_or(t).strip_prefix('q')?;
+        let mut z = r.chars();
+        let b = z.next()?.to_digit(10)?;
+        matches!(z.as_str(), "" | "k" | "ks" | "km" | "kl").then_some(b)
+    };
+    let mut jawne: Vec<Precision> = Vec::new();
+    let mut nieobslugiwana = false;
+    let mut slaby_int4 = false;
+    for t in &tokeny {
+        let p = if matches!(*t, "fp4" | "nvfp4" | "mxfp4") {
+            Some(Precision::Fp4)
+        } else if t.starts_with("fp8") {
+            Some(Precision::Fp8)
+        } else if matches!(*t, "int8" | "8bit") || t.starts_with("w8a") {
+            Some(Precision::Int8)
+        } else if matches!(*t, "int4" | "4bit") || t.starts_with("w4a") {
+            Some(Precision::Int4)
+        } else if let Some(b) = bity_gguf(t) {
+            match b {
+                8 => Some(Precision::Int8),
+                4 => Some(Precision::Int4),
+                _ => {
+                    nieobslugiwana = true;
+                    None
+                }
+            }
+        } else {
+            if matches!(*t, "awq" | "gptq") {
+                slaby_int4 = true;
+            }
+            // ogólny znacznik kwantyzacji bez szerokości: blokuje format bazowy
+            if matches!(*t, "quant" | "quantized") {
+                nieobslugiwana = true;
+            }
+            None
+        };
+        if let Some(p) = p {
+            if !jawne.contains(&p) {
+                jawne.push(p);
+            }
+        }
+    }
+    // AWQ/GPTQ (wagi całkowitoliczbowe) obok fp8/fp4 to sprzeczność; jawna szerokość int8/int4 ją rozstrzyga.
+    let sprzeczny_slaby = slaby_int4 && jawne.iter().any(|p| matches!(p, Precision::Fp8 | Precision::Fp4));
+    if nieobslugiwana || jawne.len() > 1 || sprzeczny_slaby {
+        return Precision::Unknown;
+    }
+    if let Some(p) = jawne.first() {
+        return *p;
+    }
+    if slaby_int4 {
+        return Precision::Int4;
+    }
+    let baza = |z: &[&str]| tokeny.iter().any(|t| z.contains(t));
+    match (baza(&["bf16"]), baza(&["fp16", "f16"]), baza(&["fp32", "f32"])) {
+        (true, false, false) => Precision::Bf16,
+        (false, true, false) => Precision::Fp16,
+        (false, false, true) => Precision::Fp32,
+        _ => Precision::Unknown,
     }
 }
 
@@ -732,6 +847,7 @@ async fn odczytaj_realny_ctx(model_url: &str, prompt: &str) -> Option<u32> {
 ///
 /// `activation_hash` jest na razie jawnym placeholderem — TopLoc wymaga
 /// hidden states z runnera (nie z API vLLM). Nie udajemy, że jest policzony.
+#[allow(clippy::too_many_arguments)]
 fn zbuduj_podpisany_receipt(
     klucz: &Keypair,
     model_hash: &str,
@@ -740,20 +856,15 @@ fn zbuduj_podpisany_receipt(
     output: &str,
     prompt_tokens: u32,
     tokens_out: u32,
+    started_at_us: u64,
+    finished_at_us: u64,
 ) -> String {
-    // Mikrosekundy jako u64 — NIE float. Podpisywana treść nie może zawierać
-    // f64, bo JSON i CBOR serializują go inaczej (naprawa 2026-09-17).
-    let teraz = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_micros() as u64)
-        .unwrap_or(0);
-
     let receipt = Receipt {
         job_id: req.job_id.clone(),
         node_id: klucz.public().to_hex(),
         model_hash: model_hash.to_string(),
         runtime: runtime.to_string(),
-        precision: Precision::Fp16,
+        precision: wykryj_precyzje(model_hash),
         // M2.5.1b: do policzenia poza API vLLM (runner + hidden states).
         activation_hash: "toploc:NIE_POLICZONY".to_string(),
         // Odcisk TRESCI, nie metadanych. Metadane (czasy) i tak sa podpisane,
@@ -761,9 +872,9 @@ fn zbuduj_podpisany_receipt(
         prompt_tokens,
         completion_tokens: tokens_out,
         output_digest: simon_core::receipt::odcisk_wyjscia(&req.job_id, output)
-        .unwrap_or_else(|_| "digest-blad".to_string()),
-        started_at_us: teraz,
-        finished_at_us: teraz,
+            .unwrap_or_else(|_| "digest-blad".to_string()),
+        started_at_us,
+        finished_at_us,
         signer: klucz.public(),
         signature: None,
         wiazania: None,
@@ -1085,5 +1196,97 @@ mod testy_czatu {
                             "function": {"name": "ls", "arguments": "{}"}}]}}]});
         let (_, pusta) = wyjscie(&v, true);
         assert!(!pusta, "tool_calls bez content to nie 'pusta odpowiedź'");
+    }
+}
+
+#[cfg(test)]
+mod testy_receiptu {
+    use super::*;
+    use simon_harness::request_response::PromptRequest;
+
+    #[test]
+    fn test_receipt_timestamps_prawdziwe_i_uporzadkowane() {
+        let klucz = Keypair::generate();
+        let req = PromptRequest {
+            v: 1,
+            order_id: "ord-1".into(),
+            job_id: "job-1".into(),
+            model_hash: "gemma-4".into(),
+            prompt: "test".into(),
+            max_tokens: 16,
+            max_ctx: 128,
+            nonce: "nonce-1".into(),
+            chat: false,
+        };
+        let started = 1_700_000_000_000_000;
+        let finished = 1_700_000_000_500_000;
+        let json_receipt = zbuduj_podpisany_receipt(
+            &klucz, "gemma-4", "llama.cpp/1", &req, "odpowiedz", 10, 5, started, finished,
+        );
+        let r: Receipt = serde_json::from_str(&json_receipt).unwrap();
+        assert_eq!(r.started_at_us, started);
+        assert_eq!(r.finished_at_us, finished);
+        assert!(r.started_at_us <= r.finished_at_us);
+        assert!(r.verify_self().is_ok());
+    }
+
+    #[test]
+    fn test_wykryj_precyzje_z_nazwy_modelu() {
+        assert_eq!(wykryj_precyzje("gemma-4-26b-a4b-it-bf16"), Precision::Bf16);
+        // kwantyzacje całkowitoliczbowe to NIE fp4/fp8
+        assert_eq!(wykryj_precyzje("gemma-4-26b-a4b-it-qat-q4_0"), Precision::Int4);
+        assert_eq!(wykryj_precyzje("qwen-q8_0"), Precision::Int8);
+        assert_eq!(wykryj_precyzje("model-awq"), Precision::Int4);
+        assert_eq!(wykryj_precyzje("model-gptq"), Precision::Int4);
+        assert_eq!(wykryj_precyzje("model-int4"), Precision::Int4);
+        assert_eq!(wykryj_precyzje("model-fp8"), Precision::Fp8);
+        assert_eq!(wykryj_precyzje("model-nvfp4"), Precision::Fp4);
+        assert_eq!(wykryj_precyzje("model-fp32"), Precision::Fp32);
+        assert_eq!(wykryj_precyzje("model-f32"), Precision::Fp32);
+        assert_eq!(wykryj_precyzje("model-fp16"), Precision::Fp16);
+        // bez znacznika (albo Q5/Q6, których enum nie ma) — przyznajemy, że nie wiemy
+        assert_eq!(wykryj_precyzje("standard-model"), Precision::Unknown);
+        assert_eq!(wykryj_precyzje("deepseek-v4-flash-amd"), Precision::Unknown);
+        assert_eq!(wykryj_precyzje("llama-q5_k_m"), Precision::Unknown);
+        // kwantyzacja wygrywa z formatem bazowym w nazwie
+        assert_eq!(wykryj_precyzje("gemma-4-26b-bf16-q4_0"), Precision::Int4);
+        assert_eq!(wykryj_precyzje("llama-fp16-awq"), Precision::Int4);
+        assert_eq!(wykryj_precyzje("model-gptq-8bit"), Precision::Int8);
+        // rodziny GGUF i zapisy zwarte; kwantyzacja blokuje spadek do formatu bazowego
+        assert_eq!(wykryj_precyzje("model-bf16-iq4_xs"), Precision::Int4);
+        assert_eq!(wykryj_precyzje("llama-q4km"), Precision::Int4);
+        assert_eq!(wykryj_precyzje("qwen-q8_k"), Precision::Int8);
+        assert_eq!(wykryj_precyzje("model-w4a16"), Precision::Int4);
+        assert_eq!(wykryj_precyzje("model-w8a8"), Precision::Int8);
+        assert_eq!(wykryj_precyzje("model-fp8e4m3"), Precision::Fp8);
+        assert_eq!(wykryj_precyzje("model-bf16-q6_k"), Precision::Unknown);
+        // sprzeczne znaczniki (wagi int4 + fp8 KV) — nie zgadujemy
+        assert_eq!(wykryj_precyzje("llama-int4-fp8"), Precision::Unknown);
+        assert_eq!(wykryj_precyzje("llama-awq-fp8"), Precision::Unknown);
+        assert_eq!(wykryj_precyzje("llama-gptq-fp4"), Precision::Unknown);
+        assert_eq!(wykryj_precyzje("model-bf16-quantized"), Precision::Unknown);
+        // tylko pełne tokeny GGUF: „q80”/„q8deadbeef” nie są kwantyzacją
+        assert_eq!(wykryj_precyzje("model-q80"), Precision::Unknown);
+        assert_eq!(wykryj_precyzje("bf16-q8deadbeef"), Precision::Bf16);
+        // dwa formaty bazowe naraz — też nie zgadujemy
+        assert_eq!(wykryj_precyzje("merge-bf16-fp16"), Precision::Unknown);
+        // całe tokeny, nie podciągi: hex z „f16”/„bf16”/„f32” w środku to nie precyzja
+        assert_eq!(wykryj_precyzje("model@0a8f16c3bf16e9f32d"), Precision::Unknown);
+        assert_eq!(wykryj_precyzje("qwen2.5-32b-instruct"), Precision::Unknown);
+        // serializacja: nazwy w receipcie
+        assert_eq!(serde_json::to_string(&Precision::Int4).unwrap(), "\"int4\"");
+        assert_eq!(serde_json::to_string(&Precision::Unknown).unwrap(), "\"unknown\"");
+    }
+
+    #[test]
+    fn test_tokenize_llama_cpp_format() {
+        let v_vllm = serde_json::json!({"count": 42});
+        assert_eq!(wyciagnij_liczbe_tokenow(&v_vllm), Some(42));
+
+        let v_llama = serde_json::json!({"tokens": [10, 20, 30]});
+        assert_eq!(wyciagnij_liczbe_tokenow(&v_llama), Some(3));
+
+        let v_inny = serde_json::json!({"other": "field"});
+        assert_eq!(wyciagnij_liczbe_tokenow(&v_inny), None);
     }
 }

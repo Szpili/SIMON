@@ -177,8 +177,8 @@ elif w:
     st.divider()
     st.subheader("Nie wierz na słowo — sprawdź")
     st.markdown(
-        "Receipt jest podpisany kluczem Ed25519 węzła, a podpis obejmuje **odcisk "
-        "treści odpowiedzi** związany z identyfikatorem zlecenia. Poniżej możesz go "
+        "Receipt jest podpisany kluczem Ed25519 węzła (domena `SIMON/RECEIPT/v1`), a podpis obejmuje **odcisk "
+        "treści odpowiedzi** (`SIMON/OUTPUT/v1`, SHA-256) związany z identyfikatorem zlecenia. Poniżej możesz go "
         "zweryfikować, a także spróbować oszukać weryfikację **trzema sposobami, "
         "którymi realnie by się to zrobiło**."
     )
@@ -215,8 +215,8 @@ elif w:
         if v.get("ok"):
             st.success("RECEIPT WAŻNY")
             st.markdown(
-                "- Podpis Ed25519: **poprawny**\n"
-                "- Treść związana z receiptem: **tak**\n"
+                "- Podpis Ed25519 (`SIMON/RECEIPT/v1`): **poprawny**\n"
+                "- Treść związana z receiptem (`SIMON/OUTPUT/v1`, SHA-256): **tak**\n"
                 "- Liczniki: **podpisane przez węzeł** (nie przeliczone niezależnie)\n"
                 "- Wykonanie modelu: **jeszcze niezaudytowane**"
             )

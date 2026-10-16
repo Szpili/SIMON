@@ -25,6 +25,12 @@ pub enum Precision {
     Fp32,
     Fp8,
     Fp4,
+    /// Kwantyzacja całkowitoliczbowa wag (np. GGUF Q8_0, W8A8) — NIE fp8.
+    Int8,
+    /// Kwantyzacja całkowitoliczbowa wag 4-bit (GGUF Q4_*, AWQ, GPTQ) — NIE fp4.
+    Int4,
+    /// Węzeł nie zna precyzji (nazwa modelu jej nie mówi). Lepiej przyznać niż zgadywać.
+    Unknown,
 }
 
 /// Receipt jest tym, co node składa jako dowód wykonania pracy.
@@ -304,9 +310,20 @@ impl Receipt {
         prompt_token_ids: &[u32],
         output_token_ids: &[u32],
     ) -> Result<(), SimonError> {
+        self.verify_self()?;
         let w = self.wiazania.as_ref().ok_or_else(|| {
             SimonError::ReceiptMismatch("no M1 bindings (proof level 0)".into())
         })?;
+        if w.receipt_level < RECEIPT_LEVEL_M1 {
+            return Err(SimonError::ReceiptMismatch(
+                "receipt_level below M1".into(),
+            ));
+        }
+        if w.schema_version != SCHEMA_VERSION_M1 {
+            return Err(SimonError::ReceiptMismatch(
+                "unsupported schema_version for M1".into(),
+            ));
+        }
         if w.tokenizer_hash != tokenizer_hash {
             return Err(SimonError::ReceiptMismatch(
                 "tokenizer_hash does not match the receipt".into(),
@@ -492,6 +509,30 @@ mod testy_m1 {
         assert!(r.zweryfikuj_m1("tokhash", "nonce-1", &prompt, &out2).is_err());
         assert!(r.zweryfikuj_m1("tokhash", "nonce-2", &prompt, &out).is_err());
         assert!(r.zweryfikuj_m1("tokhash-x", "nonce-1", &prompt, &out).is_err());
+    }
+
+    #[test]
+    fn zweryfikuj_m1_odrzuca_niepodpisany_receipt() {
+        let k = Keypair::from_seed(&[9u8; 32]);
+        let prompt = [10u32, 20, 30];
+        let out = [40u32, 50, 60];
+        let r = bazowy()
+            .z_wiazaniem_m1(
+                "tokhash".into(),
+                "nonce-1".into(),
+                &prompt,
+                &out,
+                "params".into(),
+                42,
+                "llama.cpp/Q4_K_M/cpu".into(),
+            )
+            .unwrap();
+        // unsigned: signature is None
+        assert!(r.signature.is_none());
+        assert!(r.zweryfikuj_m1("tokhash", "nonce-1", &prompt, &out).is_err());
+        // signed passes
+        let signed = r.sign(&k).unwrap();
+        assert!(signed.zweryfikuj_m1("tokhash", "nonce-1", &prompt, &out).is_ok());
     }
 
     #[test]

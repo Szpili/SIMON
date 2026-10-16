@@ -1,8 +1,14 @@
 <script lang="ts">
   import type { Receipt } from './../receipt';
   import HashField from './HashField.svelte';
-  let { receipt, output, tampered, ontamper, onrestore, tamperNote = 'One trailing space was appended.' }: {
-    receipt: Receipt; output: string; tampered: boolean; ontamper: () => void; onrestore: () => void; tamperNote?: string;
+  let { receipt, output, tampered, ontamper, onTamperSig, onrestore, tamperNote = 'One trailing space was appended.' }: {
+    receipt: Receipt;
+    output: string;
+    tampered: boolean;
+    ontamper: () => void;
+    onTamperSig?: () => void;
+    onrestore: () => void;
+    tamperNote?: string;
   } = $props();
   // Nodes sign a JSON envelope ({"content": ..., "finish_reason": ...}); show its text, verify the exact bytes.
   const shown = $derived.by(() => {
@@ -13,7 +19,7 @@
 <section class="scanlines flex flex-col border border-line bg-panel p-5" aria-labelledby="node-h">
   <div class="flex items-center justify-between">
     <h2 id="node-h" class="mono text-base font-bold text-neutral-100">Untrusted Node</h2>
-    <span class="mono text-xs {tampered ? 'text-bad' : 'text-neutral-500'}">{tampered ? 'output modified' : 'as served'}</span>
+    <span class="mono text-xs {tampered ? 'text-bad' : 'text-neutral-500'}">{tampered ? 'tampered (modified)' : 'as served'}</span>
   </div>
 
   <div class="mt-5">
@@ -37,6 +43,9 @@
 
   <div class="mt-5 flex flex-wrap gap-3">
     <button type="button" class="btn btn-danger" onclick={ontamper} disabled={tampered}>Tamper with output</button>
+    {#if onTamperSig}
+      <button type="button" class="btn btn-danger" onclick={onTamperSig} disabled={tampered}>Tamper signature</button>
+    {/if}
     <button type="button" class="btn" onclick={onrestore} disabled={!tampered}>Restore original</button>
   </div>
 </section>
