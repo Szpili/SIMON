@@ -413,6 +413,9 @@ mod tests {
         obsluz_wynik(&mut reg, JobResult::failure("job-x", "ofiara", "fake"));
         assert_ne!(reg.states.get("ofiara"), Some(&NodeState::Degraded));
         assert_eq!(reg.assigned.get("job-x").map(String::as_str), Some("inny"));
+        // próba kontrolna: porażka od węzła, któremu job PRZYDZIELONO, nadal degraduje
+        obsluz_wynik(&mut reg, JobResult::failure("job-x", "inny", "OOM"));
+        assert_eq!(reg.states.get("inny"), Some(&NodeState::Degraded));
     }
 
     #[test]

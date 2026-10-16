@@ -96,14 +96,23 @@ PARTS_INVENTORY = {
 
 FORBIDDEN = re.compile(
     r"\b(shut\s*down|stop\s+the\s+machine|switch\s+off|turn\s+off|power\s+(?:down|off)|cut\s+(?:the\s+)?power"
-    r"|de-?energi[sz]e|disconnect|bypass|override|disable)\b",
+    r"|de\s*energi[sz]\w*|bypass\w*|override\w*|disabl\w*)\b",
     re.I,
 )
 
 
 def _znormalizuj(t: str) -> str:
-    """NFKC (pełna szerokość, ligatury) + zwinięte białe znaki, żeby 'shut  down' czy 'ｓｈｕｔ down' nie przeszły."""
-    return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", t))
+    """NFKC (pełna szerokość, ligatury), bez znaków formatujących (zero-width, miękki dywiz),
+    myślniki jak spacje, zwinięte białe znaki: 'shut  down', 'shut-down', 'shut\u200bdown' nie przejdą."""
+    t = unicodedata.normalize("NFKC", t)
+    t = "".join(c for c in t if unicodedata.category(c) != "Cf")
+    t = re.sub(r"[-\u2010-\u2015_]", " ", t)
+    return re.sub(r"\s+", " ", t)
+
+
+def _czysty_id(v, dozwolone: str = r"[^A-Za-z0-9-]", maks: int = 16) -> str:
+    """Pola z CSV (Product ID, Type) przed modelem: tylko znaki identyfikatora — dane nie niosą instrukcji."""
+    return re.sub(dozwolone, "", str(v))[:maks]
 
 TOOLS = [
     {
@@ -274,7 +283,7 @@ def execute_lookup_machine_history(csv_path: Path, product_type: str, udi: int) 
         f = rules.features(r)
         history.append({
             "udi": cur_uid,
-            "type": r["Type"],
+            "type": _czysty_id(r["Type"], r"[^A-Za-z]", 2),
             "wear_min": f["wear_min"],
             "temp_diff_K": f["temp_diff_K"],
             "torque_Nm": f["torque_Nm"],
@@ -327,8 +336,8 @@ def execute_inspect_sensor_telemetry(csv_path: Path, udi: int) -> dict:
             finds = rules.findings(f)
             return {
                 "udi": udi,
-                "product_id": r["Product ID"],
-                "type": r["Type"],
+                "product_id": _czysty_id(r["Product ID"]),
+                "type": _czysty_id(r["Type"], r"[^A-Za-z]", 2),
                 "features": f,
                 "findings": finds,
                 "allowed_checks": {k: v for x in finds for k, v in rules.CHECKS.get(x["mode"], {}).items()},
@@ -375,7 +384,7 @@ def execute_propose_work_order(args: dict, findings: list | None) -> dict:
     summary = args.get("summary", "")
     if not isinstance(summary, str) or not summary.strip():
         raise ValueError("M7 Capability Ceiling Violation: summary must be non-empty text")
-    if len(summary) > 300:
+    if len(_znormalizuj(summary)) > 300 or len(summary) > 300:
         raise ValueError(f"M7 Capability Ceiling Violation: summary exceeds 300 characters ({len(summary)})")
     if FORBIDDEN.search(_znormalizuj(summary)):
         matched = FORBIDDEN.search(_znormalizuj(summary)).group(0)
@@ -390,15 +399,22 @@ def execute_propose_work_order(args: dict, findings: list | None) -> dict:
 
     # Reguły decydują, model tylko powtarza (kontrola krzyżowa z rules.findings dla tej maszyny).
     tryby_reguly = {f["mode"] for f in findings}
+    if len(set(failure_modes)) != len(failure_modes):
+        raise ValueError("M7 Capability Ceiling Violation: duplicate failure_modes")
     if set(failure_modes) != tryby_reguly:
         raise ValueError(
             f"M7 Capability Ceiling Violation: failure_modes {sorted(set(failure_modes))} != rules {sorted(tryby_reguly)}"
         )
     if urgency != findings[0]["urgency"]:  # findings są posortowane: najpilniejsze pierwsze
         raise ValueError(f"M7 Capability Ceiling Violation: urgency '{urgency}' != rules '{findings[0]['urgency']}'")
-    pary = {(PARTS_INVENTORY[m]["action_code"], PARTS_INVENTORY[m]["part_id"]) for m in tryby_reguly}
-    if (action_code, part_id) not in pary:
-        raise ValueError(f"M7 Capability Ceiling Violation: ({action_code}, {part_id}) is not the catalog action for {sorted(tryby_reguly)}")
+    # Zlecenie dotyczy NAJPILNIEJSZEGO ustalenia (rules.findings: najpilniejsze pierwsze): jego pilność i jego akcja.
+    glowny = PARTS_INVENTORY.get(findings[0]["mode"])
+    if glowny is None:
+        raise ValueError(f"M7 Capability Ceiling Violation: no catalog action for rule mode {findings[0]['mode']}")
+    if (action_code, part_id) != (glowny["action_code"], glowny["part_id"]):
+        raise ValueError(
+            f"M7 Capability Ceiling Violation: ({action_code}, {part_id}) is not the catalog action for {findings[0]['mode']}"
+        )
 
     # 2. Compute exact SIMON/GRANT-PARAMS/v1 parameter commitment digest
     parametry_digest = compute_grant_params_digest("propose_work_order", args)
@@ -608,6 +624,9 @@ def selfcheck():
         ({**valid_args, "summary": "Shut  down the spindle first."}, PermissionError),
         ({**valid_args, "summary": "Then ｐｏｗｅｒ off the drive."}, PermissionError),
         ({**valid_args, "summary": "De-energize the cabinet."}, PermissionError),
+        ({**valid_args, "summary": "Shut-down and de-energising first."}, PermissionError),
+        ({**valid_args, "summary": "shut\u200bdown now"}, PermissionError),
+        ({**valid_args, "failure_modes": ["HDF", "HDF"]}, ValueError),
     ]:
         try:
             execute_propose_work_order(zle, reg)
@@ -618,8 +637,19 @@ def selfcheck():
     except ValueError:
         rejected += 1
 
-    assert rejected == 11, f"Expected 11 ceiling rejections, got {rejected}"
-    print(f"  [Pass 5/5] M7 ceiling boundary rejections OK ({rejected}/11 violations blocked)")
+    # dwa ustalenia (HDF najpilniejsze, potem TWF): akcja/część TWF z pilnością HDF to podmiana — odrzucone
+    dwa = [{"mode": "HDF", "urgency": "inspect before next shift"}, {"mode": "TWF", "urgency": "plan tool change"}]
+    try:
+        execute_propose_work_order({**valid_args, "failure_modes": ["HDF", "TWF"],
+                                    "action_code": "REPLACE_TOOL_INSERT", "part_id": "INS-CRB-100"}, dwa)
+    except ValueError:
+        rejected += 1
+    assert execute_propose_work_order({**valid_args, "failure_modes": ["HDF", "TWF"]}, dwa)["status"]
+    # zwykły krok serwisowy nie jest blokowany
+    assert execute_propose_work_order({**valid_args, "summary": "Disconnect the faulty sensor cable and inspect it."}, reg)
+
+    assert rejected == 15, f"Expected 15 ceiling rejections, got {rejected}"
+    print(f"  [Pass 5/5] M7 ceiling boundary rejections OK ({rejected}/15 violations blocked)")
 
     # 6. Simulate deterministic multi-turn tool calling loop
     sim_msgs = [

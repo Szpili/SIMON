@@ -69,7 +69,8 @@ def log_job(model, r):
                        # receipt it verified (signature + output binding); execution is not verified
                        "execution_status": "completed", "receipt_status": "signature_valid_output_bound",
                        "verification_status": "not_performed",
-                       "proof_level": int(r.get("poziom_dowodu") or 0)}) + "\n"  # level the agent VERIFIED (M1 only if checked on tokens)
+                       "proof_level": int(r.get("poziom_dowodu") or 0),  # level the agent VERIFIED (M1 only if checked on tokens)
+                       "m1_binding_checked": int(r.get("poziom_dowodu") or 0) >= 1}) + "\n"
     with _joblog_lock, open(JOBLOG, "a") as f:  # one write per line under a lock: no torn lines
         f.write(line)
 
@@ -125,8 +126,9 @@ def completion(req, r, t0):
         # Three separate claims; a valid signature is not a verified computation.
         "execution_status": "completed",
         "receipt_status": "signature_valid_output_bound",
-        "verification_status": "not_performed",
+        "verification_status": "not_performed",  # execution (M3 audit) is not verified here
         "proof_level": int(r.get("poziom_dowodu") or 0),  # verified by the agent, not the node's declared receipt_level
+        "m1_binding_checked": int(r.get("poziom_dowodu") or 0) >= 1,  # token binding checked client-side by the SIMON agent
         "proof_note": "the node's key signed this exact output (text and tool calls) for this job; "
                       "this does NOT prove which model or precision ran",
         "receipt": rc,

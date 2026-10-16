@@ -394,7 +394,7 @@
           <div class="flex flex-wrap items-center justify-between gap-2 border-b border-line/40 py-1">
             <span class="text-neutral-400">Output Digest Gate (SIMON/OUTPUT/v1 digest_ok):</span>
             <span class={simVerdict?.tresc_ok ? 'text-valid' : 'text-bad'}>
-              {simVerdict?.tresc_ok ? 'VALID (SHA-256 Digest Matches)' : 'FAILED (SHA-256 Mismatch — MITM Caught!)'}
+              {simVerdict?.tresc_ok ? 'VALID (SHA-256 Digest Matches)' : 'FAILED (text differs from signed digest)'}
             </span>
           </div>
           <div class="flex flex-wrap items-center justify-between gap-2 border-b border-line/40 py-1">
