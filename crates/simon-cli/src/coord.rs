@@ -417,7 +417,7 @@ mod tests {
         // próba kontrolna: porażka od węzła, któremu job PRZYDZIELONO, nadal degraduje
         obsluz_wynik(&mut reg, JobResult::failure("job-x", "inny", "OOM"));
         assert_eq!(reg.states.get("inny"), Some(&NodeState::Degraded));
-        assert!(reg.assigned.get("job-x").is_none(), "porażka zwalnia przydział");
+        assert!(!reg.assigned.contains_key("job-x"), "porażka zwalnia przydział");
     }
 
     #[test]
