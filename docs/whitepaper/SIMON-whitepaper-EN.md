@@ -1,8 +1,8 @@
 # SIMON — Whitepaper
 
-**Version:** 1.0 · 2026-09-17
-**Status:** architecture + protocol core; network running on two machines (test), computation verification DESIGNED, not implemented
-**Concept:** Karol (Szpili) · implementation and measurements: Szpon (OpenClaw) + Claude Code
+**Version:** 1.1 · 2026-10-16
+**Status:** architecture + protocol core + live Level 1 token binding; enterprise VPN network running across heterogeneous GPUs (RTX 3090 + AMD Instinct MI300X); computation verification demoted to empirical diagnostic (M3) with cryptographic publication attestation (Level 0/Level 1)
+**Concept:** Karol (Szpili) · implementation and measurements: Szpon (OpenClaw) + Claude Code + Filip (FZ)
 **Governing rule:** no evidence, no status (DESIGNED / IMPLEMENTED / MEASURED)
 
 ---
@@ -363,31 +363,30 @@ does.** Only measuring both cases with one methodology will settle it.
 
 ## 12. Implementation status
 
-**Code:** ~5800 lines of Rust (+ tests). Protocol core, transport (libp2p), coordinator, node, harness.
+**Code:** ~8000 lines of Rust (+ comprehensive tests in CI) + Python tools + SvelteKit 5 UI with WASM verification.
 
-**Done and verified live (2026-09-17):**
+**Done and verified live (2026-10-16):**
 
 | Element | Evidence |
 |---|---|
-| Context-limit gate based on truth (`/tokenize`) | smoke test: declared 1000 vs 1400 in reality → controlled refusal |
-| Chunking + map-reduce for files above a node's limit | live: 20/20 chunks, reduction 20→2→1, zero timeouts |
-| Agent→agent chain (CODER→TESTER) | mock + live, both stages with receipt verification |
-| Per-process `peer_id` (previously identical for every node) | live: two nodes → two different IDs |
-| Two concurrent agents on two GPUs | live: Szpon/qwen3.8-27b + Franko/Bielik |
-| Transport: libp2p's default 10 s timeout (a hidden bug) | found live, raised to 300 s |
-| Portability (macOS) | audit: no native-C dependencies; `temp_dir()` fix |
+| Context-limit gate based on truth (`/tokenize`) | smoke test: declared 1000 vs 1400 in reality → controlled refusal (`ctx_ponad_limit`) |
+| Chunking + map-reduce for files above a node's limit | live: 20/20 chunks, reduction 20→2→1, zero timeouts (`mapreduce.rs`) |
+| Live M1 token binding (`WiazaniaM1`) | `node.rs` calls `/tokenize` for prompt and output, binds token arrays with `MAX_M1_TOKENS = 65_536` length caps; in-process E2E test (`crates/simon-cli/tests/e2e_m1_receipt.rs`) |
+| Offline & browser WASM verification | Level 0 (`verify_self`, `zgodny_z_wyjsciem`) + Level 1 (`zweryfikuj_m1` against client's `order.nonce`); key pinning (`--expect-signer`, `signer_pinned`) |
+| Gossipsub Coordinator Security | `SignedJobResult` (`SIMON/JOB-RESULT/v1`) signed by node for successes & failures (`coord.rs::niepodpisany_lub_obcy_blad_odrzucony`); `RegisterMsg` (`SIMON/NODE-REGISTER/v1`) with operator `NodeVoucher` (`SIMON/NODE-VOUCH/v1`) gating admission (`coord.rs::sybil_bez_vouchera_odrzucony_w_trybie_voucher`) |
+| Heterogeneous GPU concurrency & benchmark | AMD Instinct MI300X (ROCm 7.2.3, vLLM 0.27.1): 64 concurrent streams at ~2000 tok/s (1998.8 tok/s), 510/510 receipts verified (`docs/AMD-MI300X-RESULTS.md`); cross-vendor FP parity confirmed |
+| Track 1 Intelligent Industry Pipeline | Deterministic physics rules on 10,000 rows (8 ms, 0 tokens) + Gemma 4 26B-A4B triage on RTX 3090 and MI300X (12–17 s/alert, median 1.56 s / 1.67 s), M7 capability ceiling (`Zezwolenie`) and SvelteKit UI |
+| Enterprise VPN stress-test matrix | 18 reproducible attack-vs-test rows in CI (`docs/STRESS-TESTS.md`) |
 
-**What is missing:**
+**Out of scope / future roadmap:**
 
 | Element | Status |
 |---|---|
-| **Activation verification (TopLoc)** | **DESIGNED — this is the moment of truth** |
-| A ledger with transaction finality | `BurnProof` is synthetic today |
-| The ACP layer | designed, not implemented |
-| Simulations (sybil, economics) | not run |
-| Model router (sleep mode) | a plan, not code |
+| **Proof of model execution without TEE** | **Not proven — receipts attest to publication integrity, not GPU execution; M3 is demoted to empirical drift diagnostic** |
+| Open-network permissionless staking & slash finality | Enterprise admission uses operator vouchers; permissionless economics remain research |
+| Prepared VPN target network attack harness | Scheduled for Stage 3 (`vpn_attack_harness.rs`) |
 
-**Honestly: 50-80% of today's code will be rewritten before production.** That is normal, and it is the reason to freeze the format only after verification.
+**Core principle:** SIMON is verifiable inference-result publication, not execution proof. A receipt proves who signed what output for what input, backed by cryptographic non-repudiation.
 
 ---
 

@@ -1082,7 +1082,7 @@ Kolejność realizacji na końcu sekcji.
 - **Do zrobienia:** realny verifier-loop (spięcie `m3::ocena` z re-runem llama.cpp), reguły
   slashingu keyed po `receipt_level`.
 
-### M7 — ODPORNOŚĆ NA PROMPT INJECTION (I1..I5) — W TOKU
+### M7 — ODPORNOŚĆ NA PROMPT INJECTION I PIPELINE PRZEMYSŁOWY — ✅ WDROŻONE (2026-10-16)
 Injection to przepływ uprawnień, nie treść. Krytyk (bunny): najsilniejsze I2/I3; **I1 = teatr**
 (etykieta nie odbiera uprawnień), I4 tylko zawężone do konkretnych przepływów.
 - **I2 schemat wyjścia + capability ceiling** — ✅ WDROŻONE (`simon_core::cap`: `Sufit`,
@@ -1090,17 +1090,15 @@ Injection to przepływ uprawnień, nie treść. Krytyk (bunny): najsilniejsze I2
 - **I3 `Zezwolenie`** — ✅ WDROŻONE (`simon_core::cap::Zezwolenie`: krypto-wiązane z kluczem
   operatora, zakres akcja+odcisk WARTOŚCI, TTL, single-use, odwoływalne, wymuszone na granicy
   zdolności; testy na każdej bramce).
+- **Track 1 Intelligent Industry Pipeline (`tools/simon-industry/`)** — ✅ WDROŻONE:
+  - `rules.py`: deterministyczne reguły fizyki na 10 000 wierszy AI4I 2020 (8 ms, 0 tokenów LLM, 5 trybów awarii).
+  - `agent_triage.py` + `tickets.py`: triage Gemma 4 26B-A4B na RTX 3090 + AMD MI300X (12–17 s/alert, mediany 1,56 s / 1,67 s). Tryby, pilność i akcje rygorystycznie zablokowane do `rules.findings(row)[0]`, kroki ograniczone do katalogu `STEP_CATALOG[mode]`, normalizacja Unicode NFKC + strip znaków `Cf`.
 - **I1 provenance** — **ZDEGRADOWANE do konwencji interfejsu** (etykieta `peer` z zerowymi
   przywilejami), NIE filar bezpieczeństwa (bunny: label ≠ capability; bez TEE klient nie dowodzi
   wykonania zdalnego node'a).
-- **I4** — zawęzić do konkretnych przepływów (`Trust` enum; model-derived→args, retrieved→instrukcje,
+- **I4** — zawężone do konkretnych przepływów (`Trust` enum; model-derived→args, retrieved→instrukcje,
   peer→kolejne zlecenie, tool→parametry uprzywilejowane); bez twierdzenia „pełne IFC”.
-- **I5** — limity zasobów (THINK per krok, deadline, budżety) + need-to-know; TODO.
-- Krytyk: `~/reports/simon-injection-krytyk-2026-10-04.md`; fakt:
-  `~/brain/facts/simon-odpornosc-na-prompt-injection-2026-10-04.md`.
-- **Pierwszy test:** „malicious JSON parameter" (`log_message` z `args.msg="rm -rf /"`) — brak
-  walidacji parametru = dziura.
-- **Uczciwy residual:** bez TEE to redukcja blast-radius przez strukturę, nie absolut.
+- **I5** — limity zasobów (THINK per krok, deadline, budżety) + need-to-know.
 
 ### M8 — MAŁY GUARD CPU (Joe nie udźwignął) — ✅ WDROŻONE 2026-10-04
 - `tools/simon-guard/` = reguły PII/sekret (`pii_pl`) + Bielik-Guard 0.5B (toksyczność 5 kat.).
@@ -1110,8 +1108,29 @@ Injection to przepływ uprawnień, nie treść. Krytyk (bunny): najsilniejsze I2
 - Serwis: `~/.config/systemd/user/simon-guard-small.service` → `127.0.0.1:19301`.
 - Fakt: `~/brain/facts/simon-maly-guard-cpu-2026-10-04.md`.
 
-### Kolejność realizacji (po kolei)
-1. M6 domknięcie — realny verifier-loop + slashing keyed po `receipt_level`.
-2. M7/I2 + pierwszy test (malicious JSON) — największy zysk, najniższy koszt.
-3. M7/I1 — provenance w `JobOrder`.
-4. M8 dalsze — pakiet ONNX dla małych node'ów + wpięcie guarda w harness.
+---
+
+## ETAP 2 (STAGE 2) — PROTOKÓŁ P2P, M1 LIVE I BEZPIECZEŃSTWO SIECI FIRMOWEJ (2026-10-16) — ✅ WDROŻONE
+
+Wdrożono domknięcia protokołu i bezpieczeństwa zdefiniowane podczas audytu Stage 1 i weryfikacji architektury:
+
+1. **Wiązanie tokenów M1 na żywo (`node.rs` $\leftrightarrow$ `agent.rs`)**:
+   - `node.rs` wywołuje `/tokenize` dla promptu i outputu, buduje `WiazaniaM1` z `client_nonce` i łańcuchem tokenów.
+   - Wymuszenie twardego limitu `MAX_M1_TOKENS = 65_536` w `wspolne.rs` i `node.rs` (ochrona przed wyczerpaniem pamięci OOM).
+   - Test end-to-end w procesie: `crates/simon-cli/tests/e2e_m1_receipt.rs`.
+2. **Podpisane wyniki zleceń na Gossipsub (`SignedJobResult`)**:
+   - Wdrożono domenę `SIMON/JOB-RESULT/v1`: każdy `JobResult` (zarówno sukces jak i błąd) jest podpisywany kluczem Ed25519 przypisanego węzła.
+   - Koordynator (`coord.rs`) weryfikuje podpis węzła przed degradacją (`mark_degraded`) lub zakończeniem zadania (`complete_job`). Test: `coord.rs::niepodpisany_lub_obcy_blad_odrzucony`.
+3. **Uwierzytelniona rejestracja węzłów i vouchery (`RegisterMsg` + `NodeVoucher`)**:
+   - Wdrożono domeny `SIMON/NODE-REGISTER/v1` (podpis proof-of-possession klucza węzła) oraz `SIMON/NODE-VOUCH/v1` (voucher operatora sieci firmowej).
+   - Tryb `--require-voucher` w koordynatorze blokuje ataki Sybil w sieci wewnętrznej VPN. Test: `coord.rs::sybil_bez_vouchera_odrzucony_w_trybie_voucher`.
+4. **Pomiary wydajności i benchmark AMD MI300X**:
+   - Wyniki w `docs/AMD-MI300X-RESULTS.md`: 64 równoległe strumienie przy ~2000 tok/s (1998,8 tok/s) na vLLM 0.27.1 (192/192 w limitach, 510/510 zweryfikowanych receiptów).
+   - Potwierdzono brak nadmiarowych false-positives między architekturami NVIDIA RTX 3090 i AMD MI300X w teście M3.
+5. **Macierz 18 ataków w sieci firmowej VPN (`docs/STRESS-TESTS.md`)**:
+   - Każdy atak poparty testem regresyjnym w CI (wiersze 1–18).
+
+### Kolejność realizacji (kolejne etapy)
+1. Przygotowany harness sieciowy dla zewnętrznych testerów (`vpn_attack_harness.rs`).
+2. Twardy limit rozmiaru żądania 1 MiB w bramce OpenAI (`simon_api.py`) i ograniczenie buforów telemetrycznych w `simon_monitor.py`.
+3. Dalsze testy obciążeniowe i rozszerzenie korpusu odporności przemysłowej.

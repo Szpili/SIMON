@@ -19,13 +19,12 @@ Repositioning: SIMON is **verifiable inference-result publication**, not verifia
 
 ## Cryptographically proven
 
-1. The named operator signed the receipt (Ed25519 over the digest of the whole receipt).
-2. The receipt binds the exact prompt token ids (tokenizer hash + client nonce + prompt digest)
-   and the exact output token chain (M1).
-3. The declared model id, runtime, precision, sampling commitment and `rng_seed` are committed.
-4. The receipt cannot be modified after signing; replay is detected via the client nonce.
-5. `simon verify` (CLI) and the WASM verifier recompute these commitments from the data a
-   verifier holds — offline, no network, no GPU.
+1. The named operator signed the receipt (Ed25519 over the digest of the whole receipt, `SIMON/RECEIPT/v1`), verified against pinned keys (`--expect-signer`, `signer_pinned`).
+2. The receipt binds the exact prompt token IDs (`SIMON/PROMPT/v1` with `tokenizer_hash`, `client_nonce`, and prompt token array) and the exact output token chain (`SIMON/CHAIN/v1`), with array lengths capped at `MAX_M1_TOKENS = 65_536` (Level 1 M1 token binding).
+3. The declared model ID, runtime, conservative precision (`Bf16`, `Fp16`, `Fp8`, `Fp4`, `Int8`, `Int4`, or `Unknown` — never guessed), sampling commitment (`SIMON/SAMPLING/v1`), and `rng_seed` are committed.
+4. The receipt cannot be modified after signing; replay is detected via client-held `order.nonce` and a 4096-entry per-peer ring cache.
+5. `simon verify` (CLI) and `crates/simon-verify-wasm` recompute these commitments from the data a verifier holds — offline, on a CPU or browser, without network or GPU access.
+6. Coordinator and gossipsub state transitions are authenticated: `SignedJobResult` (`SIMON/JOB-RESULT/v1`) signed by the assigned node's Ed25519 key (for both successes and failures), and `RegisterMsg` (`SIMON/NODE-REGISTER/v1`) with optional operator vouching (`SIMON/NODE-VOUCH/v1`).
 
 ## Empirically detected (named measurements only)
 
