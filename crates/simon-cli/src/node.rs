@@ -107,7 +107,7 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
         }
     };
     println!("[node] node_id={}", klucz.public().to_hex());
-    // Rejestracja: to, co node realnie ma (nie to, co mu kazano wpisać).
+    // Rejestracja: to, co node realnie ma (nie to, co mu kazano wpisać), podpisane kluczem node'a.
     let rejestracja = simon_node::RegisterMsg::new(
         klucz.public().to_hex(),
         klucz.public(),
@@ -122,7 +122,9 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
                 "max_ctx": max_ctx,
             })),
         },
-    );
+    )
+    .sign(&klucz)
+    .map_err(|e| format!("nie mogę podpisać rejestracji: {e}"))?;
     if let Ok(bajty) = serde_json::to_vec(&rejestracja) {
         match swarm.behaviour_mut().gossipsub.publish(
             libp2p::gossipsub::IdentTopic::new(
@@ -252,12 +254,12 @@ const KOLEJKA_NA_SLOT: usize = 4;
 const WERSJA_PROMPTU: u16 = 1;
 
 /// Co zadanie musi wiedzieć o backendzie — współdzielone między zadaniami.
-struct Backend {
-    model_url: String,
-    model: String,
-    runtime: String,
-    klucz: Keypair,
-    max_ctx: u32,
+pub struct Backend {
+    pub model_url: String,
+    pub model: String,
+    pub runtime: String,
+    pub klucz: Keypair,
+    pub max_ctx: u32,
 }
 
 fn sprawdz_wersje(request: &PromptRequest) -> Option<PromptReply> {
@@ -275,7 +277,7 @@ fn sprawdz_wersje(request: &PromptRequest) -> Option<PromptReply> {
 
 /// Jedno zlecenie: bramka kontekstu, potem liczenie. Biegnie w osobnym
 /// zadaniu tokio, nigdy w pętli swarmu.
-async fn obsluz(b: &Backend, request: &PromptRequest) -> PromptReply {
+pub async fn obsluz(b: &Backend, request: &PromptRequest) -> PromptReply {
     if let Some(reply) = sprawdz_wersje(request) {
         return reply;
     }
@@ -333,7 +335,7 @@ async fn obsluz(b: &Backend, request: &PromptRequest) -> PromptReply {
 /// Liczy prompt przez API zgodne z OpenAI (`/v1/chat/completions`).
 ///
 /// **Mierzy TTFT i czas generowania osobno** — M2.7 wymaga rozbicia pomiaru.
-async fn policz(
+pub async fn policz(
     model_url: &str,
     model_hash: &str,
     runtime: &str,
@@ -436,6 +438,35 @@ async fn policz(
     // Pusta treść już wraca błędem powyżej (`pusta_tresc`) — tu `output` zawsze
     // ma coś do podpisania (tekst w trybie tekstowym, JSON wiadomości w czacie).
 
+    // M1: wiązanie tokenów promptu i wyjścia z limitem MAX_M1_TOKENS (tylko tryb tekstowy i niepusty nonce)
+    let m1_dane = if !req.chat && !req.nonce.trim().is_empty() {
+        let p_tok = crate::wspolne::tokenizuj_tekst(model_url, &req.prompt).await;
+        let o_tok = crate::wspolne::tokenizuj_tekst(model_url, &output).await;
+        match (p_tok, o_tok) {
+            (Some(p_ids), Some(o_ids))
+                if !p_ids.is_empty()
+                    && p_ids.len() <= crate::wspolne::MAX_M1_TOKENS
+                    && !o_ids.is_empty()
+                    && o_ids.len() <= crate::wspolne::MAX_M1_TOKENS =>
+            {
+                match crate::wspolne::domyslny_odcisk_tokenizera(model_hash) {
+                    Ok(tok_hash) => Some((tok_hash, p_ids, o_ids)),
+                    Err(e) => {
+                        eprintln!("[node] nie można wyliczyć domyślnego odcisku tokenizera dla {model_hash}: {e}");
+                        None
+                    }
+                }
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+
+    let m1_arg = m1_dane
+        .as_ref()
+        .map(|(th, p, o)| (th.as_str(), p.as_slice(), o.as_slice()));
+
     // Receipt PRZED przeniesieniem `output` — podpisujemy dokladnie ten tekst,
     // ktory zaraz odeslemy.
     let receipt = zbuduj_podpisany_receipt(
@@ -448,7 +479,22 @@ async fn policz(
         tokens_out,
         started_at_us,
         finished_at_us,
+        m1_arg,
     );
+
+    let receipt_ma_m1 = serde_json::from_str::<simon_core::receipt::Receipt>(&receipt)
+        .map(|r| r.wiazania.is_some())
+        .unwrap_or(false);
+
+    let (tokenizer_hash, prompt_token_ids, output_token_ids) = if receipt_ma_m1 {
+        if let Some((th, p, o)) = m1_dane {
+            (Some(th), Some(p), Some(o))
+        } else {
+            (None, None, None)
+        }
+    } else {
+        (None, None, None)
+    };
 
     PromptReply::Ok(PromptResponse {
         v: 1,
@@ -462,9 +508,9 @@ async fn policz(
         tokens_out,
         ttft_ms,
         gen_ms,
-        tokenizer_hash: None,
-        prompt_token_ids: None,
-        output_token_ids: None,
+        tokenizer_hash,
+        prompt_token_ids,
+        output_token_ids,
     })
 }
 
@@ -913,8 +959,9 @@ fn zbuduj_podpisany_receipt(
     tokens_out: u32,
     started_at_us: u64,
     finished_at_us: u64,
+    m1_dane: Option<(&str, &[u32], &[u32])>,
 ) -> String {
-    let receipt = Receipt {
+    let mut receipt = Receipt {
         job_id: req.job_id.clone(),
         node_id: klucz.public().to_hex(),
         model_hash: model_hash.to_string(),
@@ -934,6 +981,24 @@ fn zbuduj_podpisany_receipt(
         signature: None,
         wiazania: None,
     };
+
+    if let Some((tok_hash, p_ids, o_ids)) = m1_dane {
+        if let Ok(params_hash) = simon_core::receipt::SamplingCommitment::greedy().odcisk() {
+            let exec_profile = format!("{runtime}/{:?}", receipt.precision).to_lowercase();
+            match receipt.clone().z_wiazaniem_m1(
+                tok_hash.to_string(),
+                req.nonce.clone(),
+                p_ids,
+                o_ids,
+                params_hash,
+                0,
+                exec_profile,
+            ) {
+                Ok(r) => receipt = r,
+                Err(e) => eprintln!("[node] nie udało się dodać wiązań M1: {e}"),
+            }
+        }
+    }
 
     match receipt.sign(klucz) {
         Ok(podpisany) => serde_json::to_string(&podpisany)
@@ -1144,6 +1209,34 @@ mod testy_wspolbieznosci {
         tokio::spawn(async move { super::uruchom(&opcje).await });
         tokio::time::sleep(Duration::from_secs(1)).await;
 
+        async fn wyslij_i_czekaj(
+            swarm: &mut libp2p::Swarm<crate::wspolne::Zachowanie>,
+            peer: libp2p::PeerId,
+            request: PromptRequest,
+        ) -> Result<(PromptReply, u64), String> {
+            use futures::StreamExt;
+            use libp2p::request_response::{Event as RrEvent, Message as RrMessage};
+            use libp2p::swarm::SwarmEvent;
+            let start = std::time::Instant::now();
+            let req_id = swarm.behaviour_mut().prompt_rr.send_request(&peer, request);
+            loop {
+                match swarm.select_next_some().await {
+                    SwarmEvent::Behaviour(crate::wspolne::ZachowanieEvent::PromptRr(
+                        RrEvent::Message {
+                            message: RrMessage::Response {
+                                request_id,
+                                response,
+                            },
+                            ..
+                        },
+                    )) if request_id == req_id => {
+                        return Ok((response, start.elapsed().as_millis() as u64));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         let adres = format!("/ip4/127.0.0.1/tcp/{port}/p2p/{peer}");
         let start = Instant::now();
         let agenci: Vec<_> = (0..4)
@@ -1162,7 +1255,7 @@ mod testy_wspolbieznosci {
                         nonce: "n".into(),
                         chat: false,
                     };
-                    crate::agent::wyslij_i_czekaj(&mut swarm, peer, req).await
+                    wyslij_i_czekaj(&mut swarm, peer, req).await
                 })
             })
             .collect();
@@ -1276,13 +1369,73 @@ mod testy_receiptu {
         let started = 1_700_000_000_000_000;
         let finished = 1_700_000_000_500_000;
         let json_receipt = zbuduj_podpisany_receipt(
-            &klucz, "gemma-4", "llama.cpp/1", &req, "odpowiedz", 10, 5, started, finished,
+            &klucz, "gemma-4", "llama.cpp/1", &req, "odpowiedz", 10, 5, started, finished, None,
         );
         let r: Receipt = serde_json::from_str(&json_receipt).unwrap();
         assert_eq!(r.started_at_us, started);
         assert_eq!(r.finished_at_us, finished);
         assert!(r.started_at_us <= r.finished_at_us);
         assert!(r.verify_self().is_ok());
+    }
+
+    #[test]
+    fn test_zbuduj_podpisany_receipt_m1_i_fallback_m0() {
+        let klucz = Keypair::generate();
+        let req = PromptRequest {
+            v: 1,
+            order_id: "ord-m1".into(),
+            job_id: "job-m1".into(),
+            model_hash: "qwen-fp16".into(),
+            prompt: "witaj".into(),
+            max_tokens: 16,
+            max_ctx: 128,
+            nonce: "nonce-xyz".into(),
+            chat: false,
+        };
+        let started = 1_700_000_000_000_000;
+        let finished = 1_700_000_000_500_000;
+        let p_ids = [101, 202, 303];
+        let o_ids = [404, 505];
+        let tok_hash = "tokenizer-sha256";
+
+        // 1. Level 1: gdy dane M1 są przekazane, powstaje poprawny receipt poziomu 1
+        let json_m1 = zbuduj_podpisany_receipt(
+            &klucz,
+            "qwen-fp16",
+            "vllm/0.6.3",
+            &req,
+            "odpowiedz",
+            3,
+            2,
+            started,
+            finished,
+            Some((tok_hash, &p_ids, &o_ids)),
+        );
+        let r1: Receipt = serde_json::from_str(&json_m1).expect("parsowanie receiptu M1");
+        assert_eq!(r1.poziom(), 1);
+        assert!(r1.wiazania.is_some());
+        assert!(r1.verify_self().is_ok());
+        assert!(r1.zgodny_z_wyjsciem("odpowiedz"));
+        assert!(r1.zweryfikuj_m1(tok_hash, &req.nonce, &p_ids, &o_ids).is_ok());
+
+        // 2. Level 0 fallback: gdy brak danych M1 (None), receipt ma poziom 0
+        let json_m0 = zbuduj_podpisany_receipt(
+            &klucz,
+            "qwen-fp16",
+            "vllm/0.6.3",
+            &req,
+            "odpowiedz",
+            3,
+            2,
+            started,
+            finished,
+            None,
+        );
+        let r0: Receipt = serde_json::from_str(&json_m0).expect("parsowanie receiptu M0");
+        assert_eq!(r0.poziom(), 0);
+        assert!(r0.wiazania.is_none());
+        assert!(r0.verify_self().is_ok());
+        assert!(r0.zgodny_z_wyjsciem("odpowiedz"));
     }
 
     #[test]

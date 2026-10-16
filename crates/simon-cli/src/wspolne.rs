@@ -141,7 +141,6 @@ pub fn wypisz_adresy(swarm: &libp2p::Swarm<Zachowanie>, rola: &str) {
 pub const MAX_M1_TOKENS: usize = 65_536;
 
 /// Wyciąga listę identyfikatorów tokenów (tablicę u32) z JSON-owej odpowiedzi `/tokenize`.
-#[allow(dead_code)]
 pub fn wyciagnij_id_tokenow(v: &serde_json::Value) -> Option<Vec<u32>> {
     let arr = v.get("tokens").and_then(|t| t.as_array())?;
     if arr.is_empty() || arr.len() > MAX_M1_TOKENS {
@@ -157,7 +156,6 @@ pub fn wyciagnij_id_tokenow(v: &serde_json::Value) -> Option<Vec<u32>> {
 /// Wyprowadza bazowy URL `{baza}/tokenize` z `model_url` (obcinając `/v1/...` lub `/api/...`),
 /// wysyła żądanie POST z ciałem `{"prompt": tekst, "content": tekst}` (timeout 2s)
 /// i parsuje odpowiedź za pomocą `wyciagnij_id_tokenow`.
-#[allow(dead_code)]
 pub async fn tokenizuj_tekst(model_url: &str, tekst: &str) -> Option<Vec<u32>> {
     let trimmed = model_url.trim_end_matches('/');
     let baza = if let Some(idx) = trimmed.find("/v1") {
@@ -194,7 +192,6 @@ pub async fn tokenizuj_tekst(model_url: &str, tekst: &str) -> Option<Vec<u32>> {
 }
 
 /// Oblicza domyślny odcisk tokenizera dla podanego hasza/nazwy modelu.
-#[allow(dead_code)]
 pub fn domyslny_odcisk_tokenizera(model_hash: &str) -> Result<String, simon_core::SimonError> {
     Ok(simon_core::receipt::odcisk_tokenizera(model_hash.as_bytes()))
 }
