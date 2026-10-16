@@ -36,6 +36,11 @@ impl Capability {
     }
 }
 
+/// Separator domeny dla podpisu rejestracji węzła (dowód posiadania klucza).
+pub const DOMENA_NODE_REGISTER: &str = "SIMON/NODE-REGISTER/v1";
+/// Separator domeny dla vouchera operatora dopuszczającego węzeł do sieci.
+pub const DOMENA_NODE_VOUCHER: &str = "SIMON/NODE-VOUCH/v1";
+
 /// Rejestracja node'a. `pubkey` deklarowany RAZ — tożsamość node'a = ten klucz (D15).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisterMsg {
@@ -45,6 +50,10 @@ pub struct RegisterMsg {
     pub region: String,
     /// Wariant C: klucz publiczny wchodzi do rejestracji.
     pub pubkey: PublicKey,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<simon_core::Signature>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voucher_signature: Option<simon_core::Signature>,
 }
 
 impl RegisterMsg {
@@ -55,7 +64,63 @@ impl RegisterMsg {
             capability,
             region: "unknown".to_string(),
             pubkey,
+            signature: None,
+            voucher_signature: None,
         }
+    }
+
+    /// Oblicza deterministyczny odcisk wiadomości rejestracji (domena DOMENA_NODE_REGISTER).
+    pub fn digest(&self) -> Result<String, SimonError> {
+        simon_core::content_digest(&serde_json::json!({
+            "domena": DOMENA_NODE_REGISTER,
+            "node_id": self.node_id,
+            "protocol": self.protocol,
+            "declared": self.capability.declared,
+            "region": self.region,
+            "pubkey": self.pubkey,
+        }))
+    }
+
+    /// Oblicza deterministyczny odcisk vouchera operatora (domena DOMENA_NODE_VOUCHER).
+    pub fn voucher_digest(&self) -> Result<String, SimonError> {
+        simon_core::content_digest(&serde_json::json!({
+            "domena": DOMENA_NODE_VOUCHER,
+            "node_id": self.node_id,
+            "protocol": self.protocol,
+            "pubkey": self.pubkey,
+        }))
+    }
+
+    /// Podpisuje rejestrację kluczem prywatnym węzła (dowód posiadania klucza).
+    pub fn sign(mut self, node_key: &simon_core::Keypair) -> Result<Self, SimonError> {
+        self.pubkey = node_key.public();
+        let digest = self.digest()?;
+        self.signature = Some(node_key.sign_digest(&digest));
+        Ok(self)
+    }
+
+    /// Dołącza podpis vouchera operatora.
+    pub fn with_voucher(mut self, operator_key: &simon_core::Keypair) -> Result<Self, SimonError> {
+        let digest = self.voucher_digest()?;
+        self.voucher_signature = Some(operator_key.sign_digest(&digest));
+        Ok(self)
+    }
+
+    /// Weryfikuje podpis węzła pod jego deklarowanym kluczem publicznym.
+    pub fn verify_self(&self) -> Result<(), SimonError> {
+        let sig = self.signature.as_ref().ok_or(SimonError::BadSignature)?;
+        let digest = self.digest()?;
+        self.pubkey.verify_digest(&digest, sig)
+    }
+
+    /// Weryfikuje podpis vouchera operatora pod podanym kluczem publicznym operatora.
+    pub fn verify_voucher(&self, operator_pubkey: &PublicKey) -> Result<(), SimonError> {
+        let sig = self
+            .voucher_signature
+            .as_ref()
+            .ok_or(SimonError::BadSignature)?;
+        let digest = self.voucher_digest()?;
+        operator_pubkey.verify_digest(&digest, sig)
     }
 }
 
@@ -71,7 +136,15 @@ pub struct JobResult {
     pub output: Option<serde_json::Value>,
     pub receipt: Option<Receipt>,
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<simon_core::Signature>,
 }
+
+/// Alias dla podpisanego wyniku zadania na Gossipsub (`SIMON/JOB-RESULT/v1`).
+pub type SignedJobResult = JobResult;
+
+/// Separator domeny dla podpisu wyniku zadania.
+pub const DOMENA_JOB_RESULT: &str = "SIMON/JOB-RESULT/v1";
 
 impl JobResult {
     /// Sukces z podpisanym receiptem.
@@ -88,6 +161,7 @@ impl JobResult {
             output: Some(output),
             receipt: Some(receipt),
             error: None,
+            signature: None,
         }
     }
 
@@ -104,7 +178,35 @@ impl JobResult {
             output: None,
             receipt: None,
             error: Some(error.into()),
+            signature: None,
         }
+    }
+
+    /// Oblicza deterministyczny odcisk wyniku zadania (domena DOMENA_JOB_RESULT).
+    pub fn digest(&self) -> Result<String, SimonError> {
+        let receipt_digest = self.receipt.as_ref().and_then(|r| r.digest().ok());
+        simon_core::content_digest(&serde_json::json!({
+            "domena": DOMENA_JOB_RESULT,
+            "job_id": self.job_id,
+            "node_id": self.node_id,
+            "ok": self.ok,
+            "error": self.error,
+            "receipt_digest": receipt_digest,
+        }))
+    }
+
+    /// Podpisuje wynik kluczem węzła.
+    pub fn sign(mut self, keypair: &simon_core::Keypair) -> Result<Self, SimonError> {
+        let digest = self.digest()?;
+        self.signature = Some(keypair.sign_digest(&digest));
+        Ok(self)
+    }
+
+    /// Weryfikuje podpis wyniku pod zarejestrowanym kluczem publicznym węzła.
+    pub fn verify_from_node(&self, registered_pubkey: &PublicKey) -> Result<(), SimonError> {
+        let sig = self.signature.as_ref().ok_or(SimonError::BadSignature)?;
+        let digest = self.digest()?;
+        registered_pubkey.verify_digest(&digest, sig)
     }
 }
 
@@ -137,6 +239,30 @@ impl Registry {
         self.nodes.insert(msg.node_id.clone(), msg.clone());
         self.states.insert(msg.node_id, NodeState::Registered);
         true
+    }
+
+    /// Rejestruje węzeł po sprawdzeniu wersji protokołu, braku duplikatu,
+    /// poprawności podpisu własnego węzła oraz opcjonalnie podpisu vouchera operatora.
+    pub fn register_verified(
+        &mut self,
+        msg: RegisterMsg,
+        operator_voucher_key: Option<&PublicKey>,
+    ) -> Result<(), SimonError> {
+        if msg.protocol != PROTOCOL_VERSION {
+            return Err(SimonError::Crypto("niezgodna wersja protokołu".into()));
+        }
+        if self.nodes.contains_key(&msg.node_id) {
+            return Err(SimonError::Crypto(
+                "węzeł o tym id jest już zarejestrowany".into(),
+            ));
+        }
+        msg.verify_self()?;
+        if let Some(op) = operator_voucher_key {
+            msg.verify_voucher(op)?;
+        }
+        self.nodes.insert(msg.node_id.clone(), msg.clone());
+        self.states.insert(msg.node_id, NodeState::Registered);
+        Ok(())
     }
 
     /// C (2026-09-17): kandydaci dopasowani po MODELU i LIMICIE KONTEKSTU.
@@ -230,6 +356,21 @@ impl Registry {
         }
 
         self.assigned.remove(&result.job_id);
+        Ok(())
+    }
+
+    /// Weryfikuje, czy wynik pochodzi od przypisanego węzła i jest prawidłowo podpisany jego kluczem.
+    pub fn verify_result_from_assigned_node(&self, result: &JobResult) -> Result<(), SimonError> {
+        if self.assigned.get(&result.job_id) != Some(&result.node_id) {
+            return Err(SimonError::ReceiptMismatch(
+                "wynik od node'a, któremu nie przydzielono joba".into(),
+            ));
+        }
+        let registered = self
+            .nodes
+            .get(&result.node_id)
+            .ok_or(SimonError::UnregisteredKey)?;
+        result.verify_from_node(&registered.pubkey)?;
         Ok(())
     }
 
@@ -441,5 +582,215 @@ mod tests {
         let wybrany = reg.wybierz_kandydata_vrf("model-t", 1024, "job-t", 1010);
         assert!(wybrany.is_some());
         assert_eq!(wybrany.unwrap().0, "node-fresh");
+    }
+
+    #[test]
+    fn test_signed_job_result_success_and_failure() {
+        let node_key = Keypair::generate();
+        let wrong_key = Keypair::generate();
+
+        // 1. Podpisana porażka
+        let fail = JobResult::failure("job-1", "node-1", "CUDA out of memory")
+            .sign(&node_key)
+            .expect("sign failure");
+        assert!(fail.signature.is_some());
+        assert!(fail.verify_from_node(&node_key.public()).is_ok());
+        assert!(matches!(
+            fail.verify_from_node(&wrong_key.public()),
+            Err(SimonError::BadSignature)
+        ));
+
+        // 2. Niepodpisana porażka odrzucona
+        let unsigned_fail = JobResult::failure("job-1", "node-1", "CUDA out of memory");
+        assert!(matches!(
+            unsigned_fail.verify_from_node(&node_key.public()),
+            Err(SimonError::BadSignature)
+        ));
+
+        // 3. Podpisany sukces
+        let receipt = Receipt {
+            job_id: "job-1".to_string(),
+            node_id: "node-1".to_string(),
+            model_hash: "sha256:model".to_string(),
+            runtime: "vllm".to_string(),
+            precision: simon_core::receipt::Precision::Bf16,
+            activation_hash: "act".to_string(),
+            output_digest: "sha256:out".to_string(),
+            prompt_tokens: 10,
+            completion_tokens: 20,
+            started_at_us: 1000,
+            finished_at_us: 2000,
+            signer: node_key.public(),
+            signature: None,
+            wiazania: None,
+        }
+        .sign(&node_key)
+        .expect("sign receipt");
+
+        let succ = JobResult::success("job-1", "node-1", serde_json::json!({"text": "ok"}), receipt)
+            .sign(&node_key)
+            .expect("sign success");
+        assert!(succ.verify_from_node(&node_key.public()).is_ok());
+
+        // 4. Podmiana pól unieważnia podpis
+        let mut tampered_job = fail.clone();
+        tampered_job.job_id = "job-tampered".to_string();
+        assert!(matches!(
+            tampered_job.verify_from_node(&node_key.public()),
+            Err(SimonError::BadSignature)
+        ));
+
+        let mut tampered_node = fail.clone();
+        tampered_node.node_id = "node-tampered".to_string();
+        assert!(matches!(
+            tampered_node.verify_from_node(&node_key.public()),
+            Err(SimonError::BadSignature)
+        ));
+
+        let mut tampered_err = fail.clone();
+        tampered_err.error = Some("different error".to_string());
+        assert!(matches!(
+            tampered_err.verify_from_node(&node_key.public()),
+            Err(SimonError::BadSignature)
+        ));
+
+        let mut tampered_ok = fail;
+        tampered_ok.ok = true;
+        assert!(matches!(
+            tampered_ok.verify_from_node(&node_key.public()),
+            Err(SimonError::BadSignature)
+        ));
+    }
+
+    #[test]
+    fn test_registry_verify_result_from_assigned_node() {
+        let mut reg = Registry::new();
+        let node_key = Keypair::generate();
+        let cap = Capability {
+            declared: serde_json::json!({"model_hash": "model-1"}),
+            attested: Some(serde_json::json!({"model_hash": "model-1"})),
+        };
+        assert!(reg.register(RegisterMsg::new("node-1", node_key.public(), cap)));
+        assert!(reg.assign("job-1", "node-1"));
+
+        // Ważna podpisana porażka od przypisanego węzła
+        let valid_res = JobResult::failure("job-1", "node-1", "OOM")
+            .sign(&node_key)
+            .unwrap();
+        assert!(reg.verify_result_from_assigned_node(&valid_res).is_ok());
+
+        // Wynik dla nieprzypisanego joba
+        let unassigned_res = JobResult::failure("job-unassigned", "node-1", "OOM")
+            .sign(&node_key)
+            .unwrap();
+        assert!(matches!(
+            reg.verify_result_from_assigned_node(&unassigned_res),
+            Err(SimonError::ReceiptMismatch(_))
+        ));
+
+        // Wynik od innego węzła niż przypisany
+        let wrong_node_key = Keypair::generate();
+        let cap2 = Capability {
+            declared: serde_json::json!({"model_hash": "model-1"}),
+            attested: Some(serde_json::json!({"model_hash": "model-1"})),
+        };
+        assert!(reg.register(RegisterMsg::new("node-2", wrong_node_key.public(), cap2)));
+        let wrong_node_res = JobResult::failure("job-1", "node-2", "OOM")
+            .sign(&wrong_node_key)
+            .unwrap();
+        assert!(matches!(
+            reg.verify_result_from_assigned_node(&wrong_node_res),
+            Err(SimonError::ReceiptMismatch(_))
+        ));
+
+        // Niezarejestrowany węzeł
+        let unregistered_key = Keypair::generate();
+        reg.assigned.insert("job-ghost".to_string(), "ghost-node".to_string());
+        let ghost_res = JobResult::failure("job-ghost", "ghost-node", "OOM")
+            .sign(&unregistered_key)
+            .unwrap();
+        assert!(matches!(
+            reg.verify_result_from_assigned_node(&ghost_res),
+            Err(SimonError::UnregisteredKey)
+        ));
+    }
+
+    #[test]
+    fn test_register_msg_proof_of_possession_and_spoofing() {
+        let victim_key = Keypair::generate();
+        let attacker_key = Keypair::generate();
+        let cap = Capability {
+            declared: serde_json::json!({"model_hash": "model-victim"}),
+            attested: None,
+        };
+
+        // 1. Poprawny podpis własnym kluczem
+        let honest_msg = RegisterMsg::new("victim-node", victim_key.public(), cap.clone())
+            .sign(&victim_key)
+            .expect("honest node can sign its registration");
+        assert!(honest_msg.verify_self().is_ok());
+
+        // 2. Atakujący próbuje zarejestrować klucz ofiary podpisując swoim kluczem prywatnym
+        let mut spoofed_msg = RegisterMsg::new("victim-node", victim_key.public(), cap)
+            .sign(&attacker_key)
+            .expect("attacker signs");
+        // Atakujący podmienia pubkey na ofiary, ale podpis pochodzi z attacker_key
+        spoofed_msg.pubkey = victim_key.public();
+        assert!(matches!(
+            spoofed_msg.verify_self(),
+            Err(SimonError::BadSignature)
+        ));
+
+        // 3. Rejestracja z niepodpisaną wiadomością odrzucona przez register_verified
+        let mut reg = Registry::new();
+        let unsigned = RegisterMsg::new("victim-node", victim_key.public(), Capability::default());
+        assert!(reg.register_verified(unsigned, None).is_err());
+    }
+
+    #[test]
+    fn test_sybil_flood_blocked_by_operator_voucher() {
+        let operator_key = Keypair::generate();
+        let mut reg = Registry::new();
+
+        // 50 węzłów Sybil z prawidłowymi podpisami własnymi (proof-of-possession),
+        // ale bez vouchera operatora
+        let mut blocked_sybils = 0;
+        for i in 0..50 {
+            let sybil_key = Keypair::generate();
+            let cap = Capability {
+                declared: serde_json::json!({"model_hash": "model-sybil"}),
+                attested: None,
+            };
+            let sybil_msg = RegisterMsg::new(format!("sybil-{i}"), sybil_key.public(), cap)
+                .sign(&sybil_key)
+                .expect("sybil self-sign");
+
+            let res = reg.register_verified(sybil_msg, Some(&operator_key.public()));
+            if res.is_err() {
+                blocked_sybils += 1;
+            }
+        }
+        assert_eq!(blocked_sybils, 50, "Wszystkie 50 węzłów Sybil bez vouchera musi zostać zablokowane!");
+        assert_eq!(reg.nodes.len(), 0);
+
+        // 2 autoryzowane węzły plant z voucherem operatora
+        for name in &["plant-node-1", "plant-node-2"] {
+            let plant_key = Keypair::generate();
+            let cap = Capability {
+                declared: serde_json::json!({"model_hash": "model-plant"}),
+                attested: None,
+            };
+            let plant_msg = RegisterMsg::new(*name, plant_key.public(), cap)
+                .sign(&plant_key)
+                .expect("plant self-sign")
+                .with_voucher(&operator_key)
+                .expect("plant operator voucher");
+
+            assert!(reg.register_verified(plant_msg, Some(&operator_key.public())).is_ok());
+        }
+
+        assert_eq!(reg.nodes.len(), 2, "Tylko 2 autoryzowane węzły z voucherem powinny wejść do rejestru");
+        assert!(reg.nodes.contains_key("plant-node-1"));
+        assert!(reg.nodes.contains_key("plant-node-2"));
     }
 }

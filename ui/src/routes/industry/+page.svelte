@@ -4,6 +4,7 @@
   import { verifyReceipt } from '$lib/verify';
   import type { Verdict } from '$lib/receipt';
   import run from '$lib/industry-run.json';
+  import { plantNode } from '$lib/plant-nodes';
 
   // A stored run (tools/simon-industry): every ticket is a real SIMON job; its receipt and the exact
   // signed output are re-checked here by the same Rust verifier as the CLI (WebAssembly).
@@ -179,7 +180,6 @@
 
     const params = {
       action_code: actionCode,
-      checks: t.checks ?? [],
       failure_modes: t.failure_modes ?? [mode],
       part_id: partId,
       summary: t.summary ?? '',
@@ -208,7 +208,7 @@
         part_id: partId,
         urgency: params.urgency,
         failure_modes: params.failure_modes,
-        checks: params.checks
+        checks: t.checks ?? [] // shown for the technician; NOT part of the 5 hashed parameters
       }
     };
   }
@@ -362,6 +362,7 @@
 
         <div class="mt-3 text-neutral-400 text-[11px] space-y-1">
           <p class="break-all">Node Signer Key: <span class="text-neutral-300">{simReceipt?.signer ?? '–'}</span></p>
+          <p>Signer on plant node list: {#if plantNode(simReceipt?.signer)}<span class="text-valid">yes · {plantNode(simReceipt?.signer)}</span>{:else}<span class="text-amber-300">no · unknown node</span>{/if} <a class="underline text-neutral-400 hover:text-neutral-200" href="{base}/receipts">what a receipt proves</a></p>
           <p>Signature (Ed25519): <span class="text-neutral-300">{short(simReceipt?.signature)}</span></p>
           <p>Claimed Model (unverified): <span class="text-neutral-300">{simReceipt?.model_hash ?? '–'}</span></p>
         </div>
@@ -489,6 +490,8 @@
           </div>
           {#if !verdict[r.record]}<span>checking receipt…</span>
           {:else if verdict[r.record].ok}<span class="text-valid">RECEIPT VALID · signature + text</span>
+            {#if plantNode(r.receipt?.signer)}<span class="border border-valid/60 px-1.5 text-valid">plant-listed node: {plantNode(r.receipt?.signer)}</span>
+            {:else}<span class="border border-amber-400/60 px-1.5 text-amber-300" title="Valid signature from a key that is not on the plant's node list">unknown node</span>{/if}
           {:else}<span class="text-bad" title={verdict[r.record].why ?? ''}>RECEIPT REJECTED</span>{/if}
         </header>
         <h3 class="mt-2 font-bold text-neutral-100">{r.ticket?.title}</h3>
@@ -522,6 +525,8 @@
           </div>
           {#if !verdict[r.record]}<span>checking receipt…</span>
           {:else if verdict[r.record].ok}<span class="text-valid">RECEIPT VALID · signature + text</span>
+            {#if plantNode(r.receipt?.signer)}<span class="border border-valid/60 px-1.5 text-valid">plant-listed node: {plantNode(r.receipt?.signer)}</span>
+            {:else}<span class="border border-amber-400/60 px-1.5 text-amber-300" title="Valid signature from a key that is not on the plant's node list">unknown node</span>{/if}
           {:else}<span class="text-bad" title={verdict[r.record].why ?? ''}>RECEIPT REJECTED</span>{/if}
         </header>
         <p class="mt-2 mono text-xs text-bad">held: {r.problems?.join('; ')}</p>

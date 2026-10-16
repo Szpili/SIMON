@@ -127,6 +127,7 @@ fn complete_rejects_ok_without_receipt() {
         output: Some(serde_json::json!({})),
         receipt: None,
         error: None,
+        signature: None,
     };
     assert!(
         reg.complete(&res).is_err(),
@@ -146,6 +147,7 @@ fn complete_accepts_valid_signed_receipt() {
         output: Some(serde_json::json!({"logits": [0.1]})),
         receipt: Some(receipt),
         error: None,
+        signature: None,
     };
     assert!(reg.complete(&res).is_ok());
 }
@@ -167,6 +169,7 @@ fn complete_rejects_receipt_signed_by_foreign_key() {
         output: Some(serde_json::json!({})),
         receipt: Some(forged),
         error: None,
+        signature: None,
     };
     assert!(
         matches!(reg.complete(&res), Err(SimonError::UnregisteredKey)),
@@ -187,6 +190,7 @@ fn complete_rejects_forged_receipt_content() {
         output: Some(serde_json::json!({})),
         receipt: Some(receipt),
         error: None,
+        signature: None,
     };
     assert!(reg.complete(&res).is_err());
 }
@@ -203,6 +207,7 @@ fn complete_rejects_receipt_for_other_job() {
         output: Some(serde_json::json!({})),
         receipt: Some(receipt),
         error: None,
+        signature: None,
     };
     assert!(reg.complete(&res).is_err(), "bramka 3: zgodność job_id");
 }
@@ -218,6 +223,7 @@ fn complete_allows_failure_without_receipt() {
         output: None,
         receipt: None,
         error: Some("OOM".into()),
+        signature: None,
     };
     assert!(reg.complete(&res).is_ok(), "porażka nie wymaga receiptu");
 }
@@ -233,6 +239,7 @@ fn complete_rejects_result_from_unassigned_node() {
         output: Some(serde_json::json!({})),
         receipt: Some(receipt),
         error: None,
+        signature: None,
     };
     // Job nie został przydzielony.
     assert!(reg.complete(&res).is_err());

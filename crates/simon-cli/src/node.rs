@@ -107,7 +107,7 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
         }
     };
     println!("[node] node_id={}", klucz.public().to_hex());
-    // Rejestracja: to, co node realnie ma (nie to, co mu kazano wpisać).
+    // Rejestracja: to, co node realnie ma (nie to, co mu kazano wpisać), podpisane kluczem node'a.
     let rejestracja = simon_node::RegisterMsg::new(
         klucz.public().to_hex(),
         klucz.public(),
@@ -122,7 +122,9 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
                 "max_ctx": max_ctx,
             })),
         },
-    );
+    )
+    .sign(&klucz)
+    .map_err(|e| format!("nie mogę podpisać rejestracji: {e}"))?;
     if let Ok(bajty) = serde_json::to_vec(&rejestracja) {
         match swarm.behaviour_mut().gossipsub.publish(
             libp2p::gossipsub::IdentTopic::new(
@@ -146,6 +148,12 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
     // więc głębsza kolejka i tak skończyłaby się timeoutem u klienta.
     let przyjecia = Arc::new(Semaphore::new(opcje.max_jobs * KOLEJKA_NA_SLOT));
     let (gotowe_tx, mut gotowe_rx) = tokio::sync::mpsc::unbounded_channel();
+    // DoS z wnętrza sieci (model zagrożeń „firma w VPN”): jeden peer nie może zająć całej kolejki,
+    // a powtórzone zlecenie (ten sam peer + job_id) nie liczy się drugi raz na GPU.
+    let mut kubelki: std::collections::HashMap<libp2p::PeerId, simon_core::protokol::Kubelek> =
+        std::collections::HashMap::new();
+    let mut ostatnie_joby: std::collections::VecDeque<(libp2p::PeerId, String)> =
+        std::collections::VecDeque::new();
     let backend = Arc::new(Backend {
         model_url,
         model: model_deklarowany,
@@ -187,6 +195,17 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
                         request.max_ctx
                     );
                     if let Some(reply) = sprawdz_wersje(&request) {
+                        let _ = swarm.behaviour_mut().prompt_rr.send_response(channel, reply);
+                        continue;
+                    }
+                    if let Some(reply) = limit_peera(
+                        &mut kubelki,
+                        &mut ostatnie_joby,
+                        peer,
+                        &request,
+                        opcje.rate_per_peer,
+                        teraz_us(),
+                    ) {
                         let _ = swarm.behaviour_mut().prompt_rr.send_response(channel, reply);
                         continue;
                     }
@@ -235,12 +254,12 @@ const KOLEJKA_NA_SLOT: usize = 4;
 const WERSJA_PROMPTU: u16 = 1;
 
 /// Co zadanie musi wiedzieć o backendzie — współdzielone między zadaniami.
-struct Backend {
-    model_url: String,
-    model: String,
-    runtime: String,
-    klucz: Keypair,
-    max_ctx: u32,
+pub struct Backend {
+    pub model_url: String,
+    pub model: String,
+    pub runtime: String,
+    pub klucz: Keypair,
+    pub max_ctx: u32,
 }
 
 fn sprawdz_wersje(request: &PromptRequest) -> Option<PromptReply> {
@@ -258,7 +277,7 @@ fn sprawdz_wersje(request: &PromptRequest) -> Option<PromptReply> {
 
 /// Jedno zlecenie: bramka kontekstu, potem liczenie. Biegnie w osobnym
 /// zadaniu tokio, nigdy w pętli swarmu.
-async fn obsluz(b: &Backend, request: &PromptRequest) -> PromptReply {
+pub async fn obsluz(b: &Backend, request: &PromptRequest) -> PromptReply {
     if let Some(reply) = sprawdz_wersje(request) {
         return reply;
     }
@@ -316,7 +335,7 @@ async fn obsluz(b: &Backend, request: &PromptRequest) -> PromptReply {
 /// Liczy prompt przez API zgodne z OpenAI (`/v1/chat/completions`).
 ///
 /// **Mierzy TTFT i czas generowania osobno** — M2.7 wymaga rozbicia pomiaru.
-async fn policz(
+pub async fn policz(
     model_url: &str,
     model_hash: &str,
     runtime: &str,
@@ -419,6 +438,35 @@ async fn policz(
     // Pusta treść już wraca błędem powyżej (`pusta_tresc`) — tu `output` zawsze
     // ma coś do podpisania (tekst w trybie tekstowym, JSON wiadomości w czacie).
 
+    // M1: wiązanie tokenów promptu i wyjścia z limitem MAX_M1_TOKENS (tylko tryb tekstowy i niepusty nonce)
+    let m1_dane = if !req.chat && !req.nonce.trim().is_empty() {
+        let p_tok = crate::wspolne::tokenizuj_tekst(model_url, &req.prompt).await;
+        let o_tok = crate::wspolne::tokenizuj_tekst(model_url, &output).await;
+        match (p_tok, o_tok) {
+            (Some(p_ids), Some(o_ids))
+                if !p_ids.is_empty()
+                    && p_ids.len() <= crate::wspolne::MAX_M1_TOKENS
+                    && !o_ids.is_empty()
+                    && o_ids.len() <= crate::wspolne::MAX_M1_TOKENS =>
+            {
+                match crate::wspolne::domyslny_odcisk_tokenizera(model_hash) {
+                    Ok(tok_hash) => Some((tok_hash, p_ids, o_ids)),
+                    Err(e) => {
+                        eprintln!("[node] nie można wyliczyć domyślnego odcisku tokenizera dla {model_hash}: {e}");
+                        None
+                    }
+                }
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+
+    let m1_arg = m1_dane
+        .as_ref()
+        .map(|(th, p, o)| (th.as_str(), p.as_slice(), o.as_slice()));
+
     // Receipt PRZED przeniesieniem `output` — podpisujemy dokladnie ten tekst,
     // ktory zaraz odeslemy.
     let receipt = zbuduj_podpisany_receipt(
@@ -431,7 +479,22 @@ async fn policz(
         tokens_out,
         started_at_us,
         finished_at_us,
+        m1_arg,
     );
+
+    let receipt_ma_m1 = serde_json::from_str::<simon_core::receipt::Receipt>(&receipt)
+        .map(|r| r.wiazania.is_some())
+        .unwrap_or(false);
+
+    let (tokenizer_hash, prompt_token_ids, output_token_ids) = if receipt_ma_m1 {
+        if let Some((th, p, o)) = m1_dane {
+            (Some(th), Some(p), Some(o))
+        } else {
+            (None, None, None)
+        }
+    } else {
+        (None, None, None)
+    };
 
     PromptReply::Ok(PromptResponse {
         v: 1,
@@ -445,9 +508,9 @@ async fn policz(
         tokens_out,
         ttft_ms,
         gen_ms,
-        tokenizer_hash: None,
-        prompt_token_ids: None,
-        output_token_ids: None,
+        tokenizer_hash,
+        prompt_token_ids,
+        output_token_ids,
     })
 }
 
@@ -768,6 +831,44 @@ async fn odczytaj_realny_ctx(model_url: &str, prompt: &str) -> Option<u32> {
     }
 }
 
+fn teraz_us() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_micros() as u64).unwrap_or(0)
+}
+
+/// Pamięć ostatnich (peer, job_id) do odrzucania powtórek.
+const PAMIEC_JOBOW: usize = 4096;
+
+/// Limit per peer + odrzucenie powtórzonego zlecenia. `Some(błąd)` = nie przyjmować.
+/// ponytail: kubełki tylko rosną z liczbą RÓŻNYCH peerów; przy >10k czyścimy całość (sieć firmowa ma ich kilka).
+fn limit_peera(
+    kubelki: &mut std::collections::HashMap<libp2p::PeerId, simon_core::protokol::Kubelek>,
+    ostatnie: &mut std::collections::VecDeque<(libp2p::PeerId, String)>,
+    peer: libp2p::PeerId,
+    req: &PromptRequest,
+    rate: f64,
+    teraz: u64,
+) -> Option<PromptReply> {
+    if ostatnie.iter().any(|(p, j)| *p == peer && *j == req.job_id) {
+        return Some(blad(req, "powtorzony_job", "ten job_id od tego peera już był — powtórka nie jest liczona drugi raz"));
+    }
+    if rate > 0.0 {
+        if kubelki.len() > 10_000 {
+            kubelki.clear();
+        }
+        let k = kubelki
+            .entry(peer)
+            .or_insert_with(|| simon_core::protokol::Kubelek::nowy(rate * 4.0, rate, teraz));
+        if k.zezwol(teraz).is_err() {
+            return Some(blad(req, "rate_limit", &format!("limit {rate} zleceń/s od jednego peera — zwolnij")));
+        }
+    }
+    ostatnie.push_back((peer, req.job_id.clone()));
+    if ostatnie.len() > PAMIEC_JOBOW {
+        ostatnie.pop_front();
+    }
+    None
+}
+
 /// Precyzja z nazwy modelu (`model_hash` deklaruje operator, więc to i tak jego deklaracja).
 /// Podpisany receipt nie może zgadywać, więc reguła jest zachowawcza:
 /// - całe tokeny nazwy (`gemma-bf16-iq4_xs` -> `gemma`,`bf16`,`iq4`,`xs`), nigdy podciągi z hashy;
@@ -858,8 +959,9 @@ fn zbuduj_podpisany_receipt(
     tokens_out: u32,
     started_at_us: u64,
     finished_at_us: u64,
+    m1_dane: Option<(&str, &[u32], &[u32])>,
 ) -> String {
-    let receipt = Receipt {
+    let mut receipt = Receipt {
         job_id: req.job_id.clone(),
         node_id: klucz.public().to_hex(),
         model_hash: model_hash.to_string(),
@@ -879,6 +981,24 @@ fn zbuduj_podpisany_receipt(
         signature: None,
         wiazania: None,
     };
+
+    if let Some((tok_hash, p_ids, o_ids)) = m1_dane {
+        if let Ok(params_hash) = simon_core::receipt::SamplingCommitment::greedy().odcisk() {
+            let exec_profile = format!("{runtime}/{:?}", receipt.precision).to_lowercase();
+            match receipt.clone().z_wiazaniem_m1(
+                tok_hash.to_string(),
+                req.nonce.clone(),
+                p_ids,
+                o_ids,
+                params_hash,
+                0,
+                exec_profile,
+            ) {
+                Ok(r) => receipt = r,
+                Err(e) => eprintln!("[node] nie udało się dodać wiązań M1: {e}"),
+            }
+        }
+    }
 
     match receipt.sign(klucz) {
         Ok(podpisany) => serde_json::to_string(&podpisany)
@@ -1089,6 +1209,34 @@ mod testy_wspolbieznosci {
         tokio::spawn(async move { super::uruchom(&opcje).await });
         tokio::time::sleep(Duration::from_secs(1)).await;
 
+        async fn wyslij_i_czekaj(
+            swarm: &mut libp2p::Swarm<crate::wspolne::Zachowanie>,
+            peer: libp2p::PeerId,
+            request: PromptRequest,
+        ) -> Result<(PromptReply, u64), String> {
+            use futures::StreamExt;
+            use libp2p::request_response::{Event as RrEvent, Message as RrMessage};
+            use libp2p::swarm::SwarmEvent;
+            let start = std::time::Instant::now();
+            let req_id = swarm.behaviour_mut().prompt_rr.send_request(&peer, request);
+            loop {
+                match swarm.select_next_some().await {
+                    SwarmEvent::Behaviour(crate::wspolne::ZachowanieEvent::PromptRr(
+                        RrEvent::Message {
+                            message: RrMessage::Response {
+                                request_id,
+                                response,
+                            },
+                            ..
+                        },
+                    )) if request_id == req_id => {
+                        return Ok((response, start.elapsed().as_millis() as u64));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         let adres = format!("/ip4/127.0.0.1/tcp/{port}/p2p/{peer}");
         let start = Instant::now();
         let agenci: Vec<_> = (0..4)
@@ -1107,7 +1255,7 @@ mod testy_wspolbieznosci {
                         nonce: "n".into(),
                         chat: false,
                     };
-                    crate::agent::wyslij_i_czekaj(&mut swarm, peer, req).await
+                    wyslij_i_czekaj(&mut swarm, peer, req).await
                 })
             })
             .collect();
@@ -1221,13 +1369,103 @@ mod testy_receiptu {
         let started = 1_700_000_000_000_000;
         let finished = 1_700_000_000_500_000;
         let json_receipt = zbuduj_podpisany_receipt(
-            &klucz, "gemma-4", "llama.cpp/1", &req, "odpowiedz", 10, 5, started, finished,
+            &klucz, "gemma-4", "llama.cpp/1", &req, "odpowiedz", 10, 5, started, finished, None,
         );
         let r: Receipt = serde_json::from_str(&json_receipt).unwrap();
         assert_eq!(r.started_at_us, started);
         assert_eq!(r.finished_at_us, finished);
         assert!(r.started_at_us <= r.finished_at_us);
         assert!(r.verify_self().is_ok());
+    }
+
+    #[test]
+    fn test_zbuduj_podpisany_receipt_m1_i_fallback_m0() {
+        let klucz = Keypair::generate();
+        let req = PromptRequest {
+            v: 1,
+            order_id: "ord-m1".into(),
+            job_id: "job-m1".into(),
+            model_hash: "qwen-fp16".into(),
+            prompt: "witaj".into(),
+            max_tokens: 16,
+            max_ctx: 128,
+            nonce: "nonce-xyz".into(),
+            chat: false,
+        };
+        let started = 1_700_000_000_000_000;
+        let finished = 1_700_000_000_500_000;
+        let p_ids = [101, 202, 303];
+        let o_ids = [404, 505];
+        let tok_hash = "tokenizer-sha256";
+
+        // 1. Level 1: gdy dane M1 są przekazane, powstaje poprawny receipt poziomu 1
+        let json_m1 = zbuduj_podpisany_receipt(
+            &klucz,
+            "qwen-fp16",
+            "vllm/0.6.3",
+            &req,
+            "odpowiedz",
+            3,
+            2,
+            started,
+            finished,
+            Some((tok_hash, &p_ids, &o_ids)),
+        );
+        let r1: Receipt = serde_json::from_str(&json_m1).expect("parsowanie receiptu M1");
+        assert_eq!(r1.poziom(), 1);
+        assert!(r1.wiazania.is_some());
+        assert!(r1.verify_self().is_ok());
+        assert!(r1.zgodny_z_wyjsciem("odpowiedz"));
+        assert!(r1.zweryfikuj_m1(tok_hash, &req.nonce, &p_ids, &o_ids).is_ok());
+
+        // 2. Level 0 fallback: gdy brak danych M1 (None), receipt ma poziom 0
+        let json_m0 = zbuduj_podpisany_receipt(
+            &klucz,
+            "qwen-fp16",
+            "vllm/0.6.3",
+            &req,
+            "odpowiedz",
+            3,
+            2,
+            started,
+            finished,
+            None,
+        );
+        let r0: Receipt = serde_json::from_str(&json_m0).expect("parsowanie receiptu M0");
+        assert_eq!(r0.poziom(), 0);
+        assert!(r0.wiazania.is_none());
+        assert!(r0.verify_self().is_ok());
+        assert!(r0.zgodny_z_wyjsciem("odpowiedz"));
+    }
+
+    #[test]
+    fn limit_peera_odrzuca_powtorke_i_nadmiar() {
+        use std::collections::{HashMap, VecDeque};
+        let (mut k, mut o) = (HashMap::new(), VecDeque::new());
+        let peer = libp2p::PeerId::random();
+        let inny = libp2p::PeerId::random();
+        let req = |job: &str| PromptRequest {
+            v: 1, order_id: "o".into(), job_id: job.into(), model_hash: "m".into(), prompt: "p".into(),
+            max_tokens: 1, max_ctx: 8, nonce: "n".into(), chat: false,
+        };
+        let kod = |r: Option<PromptReply>| match r { Some(PromptReply::Blad(e)) => Some(e.kod), _ => None };
+        // ten sam job od tego samego peera drugi raz = powtórka
+        assert_eq!(kod(limit_peera(&mut k, &mut o, peer, &req("j1"), 1.0, 0)), None);
+        assert_eq!(kod(limit_peera(&mut k, &mut o, peer, &req("j1"), 1.0, 0)).as_deref(), Some("powtorzony_job"));
+        // kubełek: rate 1/s, zapas 4 -> j1 + 3 kolejne przechodzą, piąty w tej samej chwili nie
+        for j in ["j2", "j3", "j4"] {
+            assert_eq!(kod(limit_peera(&mut k, &mut o, peer, &req(j), 1.0, 0)), None, "{j}");
+        }
+        assert_eq!(kod(limit_peera(&mut k, &mut o, peer, &req("j5"), 1.0, 0)).as_deref(), Some("rate_limit"));
+        // inny peer ma własny kubełek
+        assert_eq!(kod(limit_peera(&mut k, &mut o, inny, &req("j5"), 1.0, 0)), None);
+        // po 2 s peer odzyskuje miejsce
+        assert_eq!(kod(limit_peera(&mut k, &mut o, peer, &req("j6"), 1.0, 2_000_000)), None);
+        // 0 = bez limitu
+        let (mut k2, mut o2) = (HashMap::new(), VecDeque::new());
+        for i in 0..100 {
+            assert_eq!(kod(limit_peera(&mut k2, &mut o2, peer, &req(&format!("x{i}")), 0.0, 0)), None);
+        }
     }
 
     #[test]

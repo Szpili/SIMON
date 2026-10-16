@@ -64,29 +64,11 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
             SwarmEvent::Behaviour(ZachowanieEvent::Gossipsub(GsEvent::Message {
                 message, ..
             })) => {
-                // C-gate: rejestracja node'a — zapisujemy, co realnie oferuje.
+                // C-gate: rejestracja node'a — zapisujemy, co realnie oferuje (wymagany ważny podpis własny).
                 if message.topic == topic_rejestracji.hash() {
                     match serde_json::from_slice::<RegisterMsg>(&message.data) {
                         Ok(msg) => {
-                            let model = msg
-                                .capability
-                                .declared
-                                .get("model_hash")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("?")
-                                .to_string();
-                            let ctx = msg
-                                .capability
-                                .declared
-                                .get("max_ctx")
-                                .and_then(|v| v.as_u64())
-                                .unwrap_or(0);
-                            if rejestr.register(msg.clone()) {
-                                println!(
-                                    "[coord] NODE zarejestrowany: {} model={model} max_ctx={ctx}",
-                                    msg.node_id
-                                );
-                            }
+                            let _ = obsluz_rejestracje(&mut rejestr, msg, None);
                         }
                         Err(e) => eprintln!("[coord] zła rejestracja: {e}"),
                     }
@@ -126,12 +108,42 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
     }
 }
 
+pub fn obsluz_rejestracje(
+    rejestr: &mut Registry,
+    msg: RegisterMsg,
+    operator_voucher_key: Option<&simon_core::PublicKey>,
+) -> bool {
+    let model = msg
+        .capability
+        .declared
+        .get("model_hash")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?")
+        .to_string();
+    let ctx = msg
+        .capability
+        .declared
+        .get("max_ctx")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let node_id = msg.node_id.clone();
+
+    match rejestr.register_verified(msg, operator_voucher_key) {
+        Ok(()) => {
+            println!("[coord] NODE zarejestrowany: {node_id} model={model} max_ctx={ctx}");
+            true
+        }
+        Err(e) => {
+            eprintln!("[coord] REJESTRACJA ODRZUCONA ({e}) node={node_id}");
+            false
+        }
+    }
+}
+
 pub fn obsluz_wynik(rejestr: &mut Registry, res: JobResult) {
     // JobResult przychodzi z gossipsub od DOWOLNEGO peera, a node_id są publiczne (topic rejestracji).
     // Bez tej bramki każdy mógł jednym komunikatem zdegradować cudzy węzeł (porażka albo sfałszowany
     // „sukces” na nieprzydzielony job). Wynik liczy się tylko dla joba przydzielonego TEMU węzłowi.
-    // ponytail: porażka nie jest podpisana, więc ktoś, kto zna świeżą parę (job_id, node_id), nadal może
-    // zgłosić jej porażkę; pełna naprawa = JobResult podpisany kluczem node'a także przy porażce.
     if rejestr.assigned.get(&res.job_id) != Some(&res.node_id) {
         println!(
             "[coord] WYNIK ZIGNOROWANY: job={} nie jest przydzielony node={}",
@@ -139,6 +151,24 @@ pub fn obsluz_wynik(rejestr: &mut Registry, res: JobResult) {
         );
         return;
     }
+
+    // Next #1 & #3: Wynik (sukces i porażka) musi być podpisany kluczem przypisanego węzła.
+    let Some(registered) = rejestr.nodes.get(&res.node_id) else {
+        println!(
+            "[coord] WYNIK ODRZUCONY (nieznany węzeł) node={} job={}",
+            res.node_id, res.job_id
+        );
+        return;
+    };
+
+    if let Err(e) = res.verify_from_node(&registered.pubkey) {
+        println!(
+            "[coord] WYNIK ODRZUCONY (brak ważnego podpisu węzła: {e}) node={} job={}",
+            res.node_id, res.job_id
+        );
+        return;
+    }
+
     let output_digest_pusty = res
         .receipt
         .as_ref()
@@ -151,6 +181,7 @@ pub fn obsluz_wynik(rejestr: &mut Registry, res: JobResult) {
             res.node_id, res.job_id, res.ok, output_digest_pusty
         );
         let _ = rejestr.mark_degraded(&res.node_id);
+        let _ = rejestr.complete_job(&res.job_id); // porażka kończy przydział — job nie wisi w `assigned`
     } else {
         match rejestr.complete(&res) {
             Ok(()) => {
@@ -277,7 +308,8 @@ mod tests {
                 "max_ctx": max_ctx,
             })),
         };
-        assert!(reg.register(RegisterMsg::new(id, key.public(), cap)));
+        let msg = RegisterMsg::new(id, key.public(), cap).sign(&key).unwrap();
+        assert!(obsluz_rejestracje(reg, msg, None));
         key
     }
 
@@ -363,7 +395,9 @@ mod tests {
             "node-1",
             serde_json::json!({"text": "ok"}),
             receipt,
-        );
+        )
+        .sign(&node_key)
+        .unwrap();
         obsluz_wynik(&mut reg, job_res);
 
         // Job ukończony, rejestr odzyskał wolny stan
@@ -379,7 +413,7 @@ mod tests {
         let mut zuzyte = RejestrZuzytychAutoryzacji::default();
         let mut reg = Registry::new();
 
-        let _node_key = zarejestruj_node(&mut reg, "node-bad", "sha256:model2", 2048);
+        let node_key = zarejestruj_node(&mut reg, "node-bad", "sha256:model2", 2048);
 
         let teraz = 1000;
         let order = stworz_zlecenie("sha256:model2", &client_key, teraz);
@@ -388,8 +422,10 @@ mod tests {
         assert!(res.is_ok());
         let (accepted, _, _) = res.unwrap();
 
-        // Porażka wykonania
-        let fail_res = JobResult::failure(&accepted.job_id, "node-bad", "CUDA OOM");
+        // Porażka wykonania podpisana kluczem węzła
+        let fail_res = JobResult::failure(&accepted.job_id, "node-bad", "CUDA OOM")
+            .sign(&node_key)
+            .unwrap();
         obsluz_wynik(&mut reg, fail_res);
 
         assert_eq!(reg.states.get("node-bad"), Some(&NodeState::Degraded));
@@ -398,7 +434,7 @@ mod tests {
     #[test]
     fn obcy_wynik_nie_degraduje_wezla() {
         let mut reg = Registry::new();
-        zarejestruj_node(&mut reg, "ofiara", "sha256:model2", 2048);
+        let _ofiara_key = zarejestruj_node(&mut reg, "ofiara", "sha256:model2", 2048);
         // porażka dla joba, którego nikt nie przydzielił
         obsluz_wynik(&mut reg, JobResult::failure("job-nieistniejacy", "ofiara", "fake"));
         assert_ne!(reg.states.get("ofiara"), Some(&NodeState::Degraded));
@@ -408,14 +444,100 @@ mod tests {
         obsluz_wynik(&mut reg, fałszywy);
         assert_ne!(reg.states.get("ofiara"), Some(&NodeState::Degraded));
         // job przydzielony INNEMU węzłowi nie degraduje ofiary
-        zarejestruj_node(&mut reg, "inny", "sha256:model2", 2048);
+        let inny_key = zarejestruj_node(&mut reg, "inny", "sha256:model2", 2048);
         assert!(reg.assign("job-x", "inny"));
         obsluz_wynik(&mut reg, JobResult::failure("job-x", "ofiara", "fake"));
         assert_ne!(reg.states.get("ofiara"), Some(&NodeState::Degraded));
         assert_eq!(reg.assigned.get("job-x").map(String::as_str), Some("inny"));
-        // próba kontrolna: porażka od węzła, któremu job PRZYDZIELONO, nadal degraduje
-        obsluz_wynik(&mut reg, JobResult::failure("job-x", "inny", "OOM"));
+
+        // próba kontrolna: ważna podpisana porażka od węzła, któremu job PRZYDZIELONO, degraduje
+        let legit_fail = JobResult::failure("job-x", "inny", "OOM")
+            .sign(&inny_key)
+            .unwrap();
+        obsluz_wynik(&mut reg, legit_fail);
         assert_eq!(reg.states.get("inny"), Some(&NodeState::Degraded));
+        assert!(!reg.assigned.contains_key("job-x"), "porażka zwalnia przydział");
+    }
+
+    #[test]
+    fn niepodpisany_lub_obcy_blad_odrzucony() {
+        let mut reg = Registry::new();
+        let inny_key = zarejestruj_node(&mut reg, "inny", "sha256:model2", 2048);
+        assert!(reg.assign("job-x", "inny"));
+
+        // 1. Niepodpisana porażka dla (job-x, inny) jest odrzucana
+        obsluz_wynik(&mut reg, JobResult::failure("job-x", "inny", "forged unsigned OOM"));
+        assert_ne!(reg.states.get("inny"), Some(&NodeState::Degraded));
+        assert_eq!(reg.assigned.get("job-x").map(String::as_str), Some("inny"));
+
+        // 2. Porażka dla (job-x, inny) podpisana obcym kluczem jest odrzucana
+        let attacker_key = Keypair::generate();
+        let forged_fail = JobResult::failure("job-x", "inny", "forged wrong key OOM")
+            .sign(&attacker_key)
+            .unwrap();
+        obsluz_wynik(&mut reg, forged_fail);
+        assert_ne!(reg.states.get("inny"), Some(&NodeState::Degraded));
+        assert_eq!(reg.assigned.get("job-x").map(String::as_str), Some("inny"));
+
+        // 3. Ważna podpisana porażka od przypisanego węzła zostaje przyjęta
+        let legit_fail = JobResult::failure("job-x", "inny", "OOM")
+            .sign(&inny_key)
+            .unwrap();
+        obsluz_wynik(&mut reg, legit_fail);
+        assert_eq!(reg.states.get("inny"), Some(&NodeState::Degraded));
+        assert!(!reg.assigned.contains_key("job-x"));
+    }
+
+    #[test]
+    fn sybil_bez_vouchera_odrzucony_w_trybie_voucher() {
+        let operator_key = Keypair::generate();
+        let mut reg = Registry::new();
+
+        // 1. Niepodpisana rejestracja odrzucona nawet bez wymaganego vouchera
+        let unsigned_key = Keypair::generate();
+        let unsigned_msg = RegisterMsg::new(
+            "unsigned-node",
+            unsigned_key.public(),
+            Capability::default(),
+        );
+        assert!(!obsluz_rejestracje(&mut reg, unsigned_msg, None));
+        assert!(reg.nodes.is_empty());
+
+        // 2. Węzły Sybil z podpisem własnym, ale bez vouchera operatora odrzucone w trybie voucher
+        for i in 0..50 {
+            let sybil_key = Keypair::generate();
+            let sybil_msg = RegisterMsg::new(
+                format!("sybil-{i}"),
+                sybil_key.public(),
+                Capability::default(),
+            )
+            .sign(&sybil_key)
+            .unwrap();
+            assert!(!obsluz_rejestracje(
+                &mut reg,
+                sybil_msg,
+                Some(&operator_key.public())
+            ));
+        }
+        assert!(reg.nodes.is_empty());
+
+        // 3. Węzeł z ważnym voucherem operatora przyjęty
+        let plant_key = Keypair::generate();
+        let plant_msg = RegisterMsg::new(
+            "plant-node-1",
+            plant_key.public(),
+            Capability::default(),
+        )
+        .sign(&plant_key)
+        .unwrap()
+        .with_voucher(&operator_key)
+        .unwrap();
+        assert!(obsluz_rejestracje(
+            &mut reg,
+            plant_msg,
+            Some(&operator_key.public())
+        ));
+        assert_eq!(reg.nodes.len(), 1);
     }
 
     #[test]

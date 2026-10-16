@@ -55,7 +55,7 @@ jobs:
         run: python3 tools/simon-api/check_failover.py
       - name: Samotesty narzedzi
         run: |
-          for m in "simon-industry rules" "simon-industry tickets" "simon-canary simon_canary" "simon-monitor simon_monitor"; do
+          for m in "simon-industry rules" "simon-industry tickets" "simon-industry agent_triage" "simon-canary simon_canary" "simon-monitor simon_monitor"; do
             set -- $m
             python3 -c "import sys; sys.path.insert(0, 'tools/$1'); import $2; $2.selfcheck(); print('$2 ok')"
           done

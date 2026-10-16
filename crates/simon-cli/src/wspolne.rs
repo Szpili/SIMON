@@ -137,19 +137,18 @@ pub fn wypisz_adresy(swarm: &libp2p::Swarm<Zachowanie>, rola: &str) {
     }
 }
 
+/// Maksymalna dopuszczalna liczba tokenów w wiązaniu M1 (ochrona przed DoS / wyczerpaniem pamięci).
+pub const MAX_M1_TOKENS: usize = 65_536;
+
 /// Wyciąga listę identyfikatorów tokenów (tablicę u32) z JSON-owej odpowiedzi `/tokenize`.
-#[allow(dead_code)]
 pub fn wyciagnij_id_tokenow(v: &serde_json::Value) -> Option<Vec<u32>> {
     let arr = v.get("tokens").and_then(|t| t.as_array())?;
-    let ids: Vec<u32> = arr
-        .iter()
-        .filter_map(|x| x.as_u64().and_then(|n| u32::try_from(n).ok()))
-        .collect();
-    if ids.is_empty() {
-        None
-    } else {
-        Some(ids)
+    if arr.is_empty() || arr.len() > MAX_M1_TOKENS {
+        return None;
     }
+    arr.iter()
+        .map(|x| x.as_u64().and_then(|n| u32::try_from(n).ok()))
+        .collect::<Option<Vec<u32>>>()
 }
 
 /// Woła endpoint `/tokenize` backendu LLM i zwraca identyfikatory tokenów.
@@ -157,7 +156,6 @@ pub fn wyciagnij_id_tokenow(v: &serde_json::Value) -> Option<Vec<u32>> {
 /// Wyprowadza bazowy URL `{baza}/tokenize` z `model_url` (obcinając `/v1/...` lub `/api/...`),
 /// wysyła żądanie POST z ciałem `{"prompt": tekst, "content": tekst}` (timeout 2s)
 /// i parsuje odpowiedź za pomocą `wyciagnij_id_tokenow`.
-#[allow(dead_code)]
 pub async fn tokenizuj_tekst(model_url: &str, tekst: &str) -> Option<Vec<u32>> {
     let trimmed = model_url.trim_end_matches('/');
     let baza = if let Some(idx) = trimmed.find("/v1") {
@@ -168,10 +166,19 @@ pub async fn tokenizuj_tekst(model_url: &str, tekst: &str) -> Option<Vec<u32>> {
         trimmed
     };
     let url = format!("{baza}/tokenize");
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(2))
-        .build()
-        .ok()?;
+    let mut builder = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2));
+    if let Ok(k) = std::env::var("SIMON_MODEL_API_KEY") {
+        if !k.is_empty() {
+            let mut h = reqwest::header::HeaderMap::new();
+            if let Ok(mut v) = reqwest::header::HeaderValue::from_str(&format!("Bearer {k}")) {
+                v.set_sensitive(true);
+                h.insert(reqwest::header::AUTHORIZATION, v);
+            }
+            builder = builder.default_headers(h);
+        }
+    }
+    let client = builder.build().ok()?;
     let payload = serde_json::json!({
         "prompt": tekst,
         "content": tekst,
@@ -185,7 +192,6 @@ pub async fn tokenizuj_tekst(model_url: &str, tekst: &str) -> Option<Vec<u32>> {
 }
 
 /// Oblicza domyślny odcisk tokenizera dla podanego hasza/nazwy modelu.
-#[allow(dead_code)]
 pub fn domyslny_odcisk_tokenizera(model_hash: &str) -> Result<String, simon_core::SimonError> {
     Ok(simon_core::receipt::odcisk_tokenizera(model_hash.as_bytes()))
 }
@@ -206,7 +212,13 @@ mod tests {
         assert_eq!(wyciagnij_id_tokenow(&v3), None);
 
         let v4 = serde_json::json!({"tokens": ["invalid", 42]});
-        assert_eq!(wyciagnij_id_tokenow(&v4), Some(vec![42]));
+        assert_eq!(wyciagnij_id_tokenow(&v4), None);
+
+        let v_max = serde_json::json!({"tokens": vec![1u32; MAX_M1_TOKENS]});
+        assert_eq!(wyciagnij_id_tokenow(&v_max), Some(vec![1u32; MAX_M1_TOKENS]));
+
+        let v_over = serde_json::json!({"tokens": vec![1u32; MAX_M1_TOKENS + 1]});
+        assert_eq!(wyciagnij_id_tokenow(&v_over), None);
     }
 
     #[test]

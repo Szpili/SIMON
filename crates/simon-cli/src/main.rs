@@ -32,6 +32,9 @@ OPCJE:
     --model-url <url>        [node] endpoint vLLM, np. http://127.0.0.1:18020
                              (klucz API backendu, np. AMD Token Factory:
                              zmienna SIMON_MODEL_API_KEY, nie argument)
+    --rate-per-peer <n>      [node] ile zleceń/s przyjmie od JEDNEGO peera (domyślnie 16,
+                             zapas 4 s); ponad to błąd `rate_limit`. 0 = bez limitu.
+                             Chroni kolejkę przed jednym hałaśliwym peerem w sieci firmowej.
     --max-jobs <n>           [node] ile promptów liczyć naraz (domyślnie 1;
                              ustaw na liczbę slotów backendu, np. -np
                              llama-server). Nadmiar czeka w kolejce
@@ -84,8 +87,9 @@ OPCJE:
     --audyt <plik>           [z --verify-receipt] M3: plik JSON
                              {kroki:[{indeks,node_token,topk:[[id,lp],..]}]} —
                              ocena containment top-k (polityka domyślna k=2).
-    --expect-signer <hex>    [z --verify-receipt] sprawdź, czy receipt podpisał TEN
-                             węzeł (oczekiwany klucz publiczny Ed25519 w hex).
+    --expect-signer <hex>    [agent i --verify-receipt] receipt musi podpisać TEN węzeł
+                             (klucz publiczny Ed25519 w hex). Bez tego podpis dowodzi
+                             tylko, że JAKIŚ klucz podpisał tekst — receipt niesie własny klucz.
     --verify-receipt <plik>  sprawdź receipt, który ktoś Ci podał (`-` = stdin).
                              Offline, bez sieci. Z --expect-job-id/--expect-model
                              sprawdza też, czy to receipt do TEGO zlecenia.
@@ -150,6 +154,8 @@ pub struct Opcje {
     pub max_tokens: u32,
     /// Ile promptów node liczy równocześnie (sloty backendu).
     pub max_jobs: usize,
+    /// [node] Limit zleceń na sekundę od JEDNEGO peera (kubełek, zapas 4 s); 0 = bez limitu.
+    pub rate_per_peer: f64,
     /// Tryb czatu: żądanie OpenAI (messages, tools) z pliku albo `-` (stdin).
     pub request_file: Option<String>,
     pub fee: u64,
@@ -209,6 +215,7 @@ impl Opcje {
         let mut prompt = None;
         let mut max_tokens = 128u32;
         let mut max_jobs = 1usize;
+        let mut rate_per_peer = 16.0f64;
         let mut request_file = None;
         let mut fee = 1u64;
         let mut key = None;
@@ -267,6 +274,13 @@ impl Opcje {
                         return Err("--max-jobs musi być > 0".to_string());
                     }
                 }
+                "--rate-per-peer" => {
+                    let v = wartosc(&mut i, "--rate-per-peer")?;
+                    rate_per_peer = v.parse().map_err(|_| format!("zły --rate-per-peer: {v}"))?;
+                    if !(rate_per_peer >= 0.0 && rate_per_peer.is_finite()) {
+                        return Err("--rate-per-peer musi być >= 0".to_string());
+                    }
+                }
                 "--fee" => {
                     let v = wartosc(&mut i, "--fee")?;
                     fee = v.parse().map_err(|_| format!("zły --fee: {v}"))?;
@@ -318,6 +332,7 @@ impl Opcje {
             prompt,
             max_tokens,
             max_jobs,
+            rate_per_peer,
             request_file,
             fee,
             key,
