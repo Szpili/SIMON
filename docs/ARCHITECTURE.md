@@ -97,15 +97,15 @@ Used by `simon --role coord` (`crates/simon-cli/src/coord.rs`) and `crates/simon
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Op as Plant Operator Key (--trusted-voucher)
+    participant Op as Plant Operator Key (library API only, no CLI flag yet)
     participant Node as simon --role node (node.rs)
     participant Gossip as libp2p Gossipsub (simon/v1/*)
     participant Coord as simon --role coord (coord.rs)
 
-    Note over Op,Node: Operator issues optional NodeVoucher (SIMON/NODE-VOUCH/v1) for enterprise admission
-    Node->>Gossip: Broadcast RegisterMsg (SIMON/NODE-REGISTER/v1) with node_pubkey, timestamp_us, signature & voucher
-    Gossip->>Coord: obsluz_rejestracje(dane)
-    Note over Coord: Verify Ed25519 proof-of-possession signature, if require-voucher verify voucher, register node
+    Note over Op,Node: Optional operator voucher_signature over (node_id, protocol, pubkey) under SIMON/NODE-VOUCH/v1
+    Node->>Gossip: Broadcast signed RegisterMsg (SIMON/NODE-REGISTER/v1) with node_id, pubkey, capability, signature
+    Gossip->>Coord: obsluz_rejestracje(msg, operator_key)
+    Note over Coord: register_verified rejects unsigned or wrong-key RegisterMsg, voucher checked only when an operator key is passed (live coord passes None)
 
     Note over Gossip,Coord: Client broadcasts JobOrder on simon/v1/job-order
     Gossip->>Coord: obsluz_zlecenie(dane)
@@ -156,7 +156,7 @@ All hashes use SHA-256 over canonical JSON (`content_digest(&serde_json::json!({
 |:---|:---|:---|
 | `SIMON/OUTPUT/v1` | `receipt.rs` | Canonical digest of job output (`job_id`, `output`) |
 | `SIMON/RECEIPT/v1` | `receipt.rs` | Canonical digest of full `Receipt` struct before Ed25519 signing |
-| `SIMON/TOKENIZER/v1` | `receipt.rs` | SHA-256 of tokenizer definition (`0x00 \|\| bytes`) |
+| `SIMON/TOKENIZER/v1` | `receipt.rs` | SHA-256 over tokenizer bytes (`0x00 \|\| bytes`); the live node currently hashes the model label (`domyslny_odcisk_tokenizera(model_hash)`), not the tokenizer file |
 | `SIMON/PROMPT/v1` | `receipt.rs` | Binding of `tokenizer_hash`, `client_nonce`, and `prompt_token_ids` |
 | `SIMON/CHAIN/v1` | `receipt.rs` | Sequential hash chain of `output_token_ids` |
 | `SIMON/SAMPLING/v1` | `receipt.rs` | Fixed-point integer commitments for temperature, top_p, seeds |
@@ -173,7 +173,9 @@ All hashes use SHA-256 over canonical JSON (`content_digest(&serde_json::json!({
 Without a hardware Trusted Execution Environment (TEE), SIMON explicitly acknowledges:
 1. **Execution is not proven:** A receipt cryptographically proves *who* signed *what* text and *what* token IDs were declared; it does not prove the model weights were actually executed on GPU.
 2. **Quantization substitution is not prevented:** Same-family quantization substitution (e.g. serving Q4 weights instead of declared Q8) is not separable by output analysis alone (`docs/VERIFIER-PILOT.md`).
-3. **Prompt injection is not prevented:** Capability ceilings (`Sufit`), operator grants (`Zezwolenie`), and input sanitization reduce the blast radius of injection, but do not prevent malicious instruction comprehension by LLMs.
+3. **Live M1 token IDs are a node declaration:** `node.rs` obtains `prompt_token_ids` and `output_token_ids` by re-tokenizing text through the backend `/tokenize`, so they bind the declared tokenization, not the sampled token stream, and `tokenizer_hash` binds a model label, not tokenizer bytes.
+4. **Voucher admission is library-level:** `Registry::register_verified(msg, Some(operator_key))` enforces vouchers and is unit-tested, but the live `simon --role coord` passes `None` (no CLI flag yet), so on the running coordinator only the node self-signature is enforced.
+5. **Prompt injection is not prevented:** Capability ceilings (`Sufit`), operator grants (`Zezwolenie`), and input sanitization reduce the blast radius of injection, but do not prevent malicious instruction comprehension by LLMs.
 
 ---
 

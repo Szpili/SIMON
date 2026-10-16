@@ -1121,9 +1121,9 @@ Wdrożono domknięcia protokołu i bezpieczeństwa zdefiniowane podczas audytu S
 2. **Podpisane wyniki zleceń na Gossipsub (`SignedJobResult`)**:
    - Wdrożono domenę `SIMON/JOB-RESULT/v1`: każdy `JobResult` (zarówno sukces jak i błąd) jest podpisywany kluczem Ed25519 przypisanego węzła.
    - Koordynator (`coord.rs`) weryfikuje podpis węzła przed degradacją (`mark_degraded`) lub zakończeniem zadania (`complete_job`). Test: `coord.rs::niepodpisany_lub_obcy_blad_odrzucony`.
-3. **Uwierzytelniona rejestracja węzłów i vouchery (`RegisterMsg` + `NodeVoucher`)**:
+3. **Uwierzytelniona rejestracja węzłów i vouchery (`RegisterMsg` + `voucher_signature`)**:
    - Wdrożono domeny `SIMON/NODE-REGISTER/v1` (podpis proof-of-possession klucza węzła) oraz `SIMON/NODE-VOUCH/v1` (voucher operatora sieci firmowej).
-   - Tryb `--require-voucher` w koordynatorze blokuje ataki Sybil w sieci wewnętrznej VPN. Test: `coord.rs::sybil_bez_vouchera_odrzucony_w_trybie_voucher`.
+   - Koordynator na żywo odrzuca niepodpisaną rejestrację. Voucher operatora egzekwuje `Registry::register_verified(msg, Some(klucz_operatora))` (test: `coord.rs::sybil_bez_vouchera_odrzucony_w_trybie_voucher`); flaga CLI przekazująca klucz operatora do `simon --role coord` jeszcze nie istnieje.
 4. **Pomiary wydajności i benchmark AMD MI300X**:
    - Wyniki w `docs/AMD-MI300X-RESULTS.md`: 64 równoległe strumienie przy ~2000 tok/s (1998,8 tok/s) na vLLM 0.27.1 (192/192 w limitach, 510/510 zweryfikowanych receiptów).
    - Potwierdzono brak nadmiarowych false-positives między architekturami NVIDIA RTX 3090 i AMD MI300X w teście M3.
