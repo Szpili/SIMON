@@ -1,0 +1,184 @@
+# Wash-Compute Detection: A Measurement-First Approach
+
+**Status:** Research proposal — no implementation yet
+**Author:** Yousef Sanjari (Joe)
+**Date:** 2026-10-11
+**Context:** SIMON — verifiable LLM inference on untrusted, heterogeneous hardware
+
+---
+
+## 1. The Problem
+
+SIMON's README states it plainly:
+
+> **Wash-compute resistance: unsolved**
+
+A receipt proves that a registered node signed an exact answer as the result of a job. It does **not** prove that the job was demanded by a real user, or that the computation was actually performed.
+
+An attacker can:
+
+1. Generate fake demand (submit jobs to itself)
+2. Sign receipts for arbitrary text
+3. Use multiple identities (Sybils) to amplify influence
+
+The core issue is that **demand and work are indistinguishable** when the same entity controls both sides. This is Douceur's Sybil problem applied to the demand side: free pseudonyms make "proof of demand" insufficient.
+
+### 1.1 Why Economics Alone Fails
+
+Every existing mechanism — burn fees, stake slashing, challenge-response, reputation gating — shares the same flaw: they try to make cheating **expensive**. That assumes the attacker is rational and cost-sensitive.
+
+But an attacker with a botnet, a cloud account, or a single motivated researcher doesn't care about your economic model. They care about **one thing: does the network notice?**
+
+Deterrence requires the attacker to be rational. Detection only requires the attacker to be wrong once.
+
+---
+
+## 2. Proposed Approach: Detection Over Deterrence
+
+Instead of trying to prove demand is real, **measure what real demand looks like** and flag deviations.
+
+### 2.1 The Hypothesis
+
+> Wash-compute is not stealthy. It is repetitive, self-similar, and often clustered in time. A probabilistic classifier trained on real demand patterns can distinguish it from honest activity.
+
+### 2.2 The Contribution
+
+This is not a new cryptographic mechanism. It is a **measurement study**:
+
+- The first empirical dataset of demand patterns against an LLM API
+- The first synthetic wash-compute attack against the same infrastructure
+- A classifier that distinguishes them with measurable precision and recall
+
+That is publishable. That is citable. That is what SIMON needs.
+
+---
+
+## 3. Data Collection Infrastructure
+
+### 3.1 The Instrumentation Point
+
+A Cloudflare Worker already sits between the client and DeepSeek's API. It proxies requests, keeps the key server-side, and enforces quotas. It is the natural instrumentation point.
+
+### 3.2 Fields to Log Per Request
+
+| Field | Purpose |
+|---|---|
+| `timestamp` | Time-of-day patterns, burst detection |
+| `requester_id` | IP hash or user ID (privacy-preserving) |
+| `prompt_hash` | Duplicate detection, prompt diversity |
+| `prompt_length` | Input size distribution |
+| `output_length` | Output size distribution |
+| `latency_ms` | Round-trip time |
+| `token_usage` | Cost accounting |
+| `error_code` | Failure patterns |
+
+### 3.3 Privacy Constraints
+
+- Requester IDs must be **hashed**, not stored in plaintext.
+- Prompts must be **hashed**, not logged.
+- Outputs must **not** be stored — only their length and hash.
+- The dataset must be compliant with GDPR (Poland/EU).
+
+---
+
+## 4. Synthetic Attack Generation
+
+To build a labeled dataset, we need negative examples. The same Worker can be used to simulate wash-compute behavior:
+
+| Attack Type | Simulation |
+|---|---|
+| **Self-demand** | Same ID submits rapid, repetitive jobs |
+| **Sybil demand** | Multiple IDs submitting identical prompts |
+| **Low-diversity** | Fixed prompt, varying only output length |
+| **Burst** | Spikes at predictable intervals |
+| **Churn** | New IDs appearing and disappearing rapidly |
+
+Each attack is logged alongside real traffic, labeled as `wash_compute: true`.
+
+---
+
+## 5. Classifier Design
+
+### 5.1 Features
+
+Derived from raw logs:
+
+- **Request rate** per ID (per minute, per hour)
+- **Prompt similarity** (cosine similarity across consecutive prompts from the same ID)
+- **Output entropy** (Shannon entropy of output distribution)
+- **Time-of-day concentration** (KL divergence from uniform)
+- **IP churn** (unique IPs per ID over time)
+- **Latency variance** (bots behave differently)
+
+### 5.2 Model
+
+- **XGBoost** binary classifier
+- Train/test split: 80/20
+- Stratified by attack type
+- Metrics: precision, recall, F1, false positive rate
+
+### 5.3 Output
+
+A **suspicion score** from 0 to 1. Not a verdict.
+
+The score is used to:
+
+- Prioritize manual review
+- Weight reputation scores
+- Flag receipts for re-audit (not slashing)
+
+---
+
+## 6. Limitations
+
+This study is honest about what it is **not**:
+
+- **The dataset is from one Worker.** Not from SIMON's actual network. It is a **proxy**, not the real thing.
+- **Synthetic attacks are synthetic.** Real attackers may use strategies that this study does not anticipate.
+- **One API key is not a network.** Real wash-compute happens across many nodes with diverse hardware and geography.
+- **Classifier performance is dataset-dependent.** The model will need retraining for any production deployment.
+- **No production validation.** This is a research proposal, not a deployed system.
+
+---
+
+## 7. Deliverables
+
+1. `docs/WASH-COMPUTE-DETECTION.md` — this document
+2. `worker/logging.js` — the instrumented Worker (or patch to existing)
+3. `datasets/` — anonymized, GDPR-compliant dataset (if publishable)
+4. `notebooks/wash_compute_classifier.ipynb` — training and evaluation
+5. A short write-up suitable for arXiv or a technical blog post
+
+---
+
+## 8. Why This Matters
+
+SIMON's README is already honest about what it proves and what it doesn't. This study extends that honesty into a new dimension:
+
+> **We cannot yet prevent wash-compute. But we can measure it, and measurement is the first step toward mitigation.**
+
+This is not a silver bullet. It is a **net**, not a sword.
+
+---
+
+## 9. Next Steps
+
+| Phase | Task | Effort |
+|---|---|---|
+| 1 | Instrument the Worker to log request metadata | 1 day |
+| 2 | Collect baseline data for 2 weeks | passive |
+| 3 | Build synthetic attack generator | 1 day |
+| 4 | Collect labeled attack data | 1 day |
+| 5 | Train XGBoost classifier | 1 day |
+| 6 | Write up findings | 2–3 days |
+| 7 | Publish and link from SIMON README | 1 hour |
+
+---
+
+## 10. Acknowledgements
+
+This proposal emerged from a research discussion on SIMON's wash-compute resistance gap. Thanks to the SIMON maintainers for the honest framing of the problem — the phrase *"Automatic slashing is not enabled, and we say so rather than shipping a threshold we cannot defend"* is what made this approach possible.
+
+---
+
+**Contact:** Yousef Sanjari · [github.com/Josephsjr96](https://github.com/Josephsjr96)
