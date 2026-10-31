@@ -4,7 +4,7 @@
 //! D81: krzywa służy WYŁĄCZNIE do podpisów — bezpieczeństwo łańcucha stoi
 //! na krypto + stake, nigdy na ilości policzonej inferencji.
 
-use ed25519_dalek::{Signature as DalekSignature, Signer, Verifier};
+use ed25519_dalek::{Signature as DalekSignature, Signer};
 #[cfg(not(target_arch = "wasm32"))]
 use rand::rngs::OsRng;
 
@@ -72,8 +72,18 @@ impl PublicKey {
     pub fn verify_digest(&self, digest_hex: &str, sig: &Signature) -> Result<(), SimonError> {
         let key = ed25519_dalek::VerifyingKey::from_bytes(&self.0)
             .map_err(|e| SimonError::Crypto(e.to_string()))?;
+        // Klucz małego rzędu daje „ważny” podpis bez klucza prywatnego: punkt tożsamościowy
+        // 01||00*31 z R = tożsamość i s = 0 przechodził `verify` dla każdej wiadomości,
+        // a 00..00 (rząd 4) przy stałym R dla ok. 1/4 odcisków, przy czym atakujący dobiera
+        // R albo treść (tests/slabe_klucze.rs przed poprawką: 256/256 i 67/256).
+        // `verify_strict` też odrzuca taki klucz; jawne `is_weak` to asekuracja.
+        if key.is_weak() {
+            return Err(SimonError::BadSignature);
+        }
         let s = DalekSignature::from_bytes(&sig.0);
-        key.verify(digest_hex.as_bytes(), &s)
+        // verify_strict = verify + odrzucenie R i klucza małego rzędu (niekanoniczne s i R
+        // odrzuca już zwykły verify w ed25519-dalek 2.x).
+        key.verify_strict(digest_hex.as_bytes(), &s)
             .map_err(|_| SimonError::BadSignature)
     }
 }

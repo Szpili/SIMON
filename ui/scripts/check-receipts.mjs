@@ -17,3 +17,14 @@ for (const r of run.records) {
 }
 console.log(`industry receipts verified by the committed wasm: ${n - bad}/${n}`);
 if (bad || !n) process.exit(1);
+
+// Negative control (2026-10-31): an identity-point "signature" (no private key) must be rejected.
+// Until then verify_digest accepted small-order keys; a stale wasm would bring that back unnoticed.
+const p = run.records.find((r) => r.receipt && r.signed_output);
+const forged = { ...p.receipt, signer: '01' + '00'.repeat(31), signature: '01' + '00'.repeat(63) };
+const vf = JSON.parse(weryfikuj(JSON.stringify(forged), p.signed_output, undefined, undefined));
+if (vf.ok || vf.podpis_ok) {
+  console.error('the committed wasm accepts an identity-point signature (small-order key)');
+  process.exit(1);
+}
+console.log('identity-point forgery rejected by the committed wasm');
