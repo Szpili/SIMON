@@ -232,6 +232,37 @@ its own verification. Fixed with a fresh receipt; **schema versioning remains as
 M5.1c** (`ReceiptV2` is to carry `schema`, and the old format is to get the
 status `LEGACY_OUTPUT_BOUND`, not a silent content error).
 
+## 2026-10-31 — P0: a small-order public key "signed" any receipt
+
+**Behavior before the fix.** `PublicKey::verify_digest` called ed25519-dalek
+`verify`, which does not reject small-order public keys. A receipt with
+`signer = 01‖00…00` (the identity point) and a signature with R = identity and
+s = 0 verified for **every** digest, without any private key. The all-zero key
+(a point of order 4) passed about 1/4 of digests for a fixed R, and an attacker
+chooses R or the content.
+
+**Consequence.** Anyone could produce a receipt for arbitrary output that
+`--verify-receipt` and the WASM verifier on the page reported as signed: all
+15 `/industry` receipts with the signer and signature replaced by the identity
+point were accepted by the committed WASM, and the CLI printed `RECEIPT WAŻNY`.
+Verification with `--expect-signer` still rejected them, because the signer
+does not match. Receipts signed with real node keys were never affected and
+still verify.
+
+**Since when.** From the first public commit (2026-09-17) until 2026-10-31,
+after the hackathon submission; the submission state is tagged
+`submission-2026-10-17`.
+
+**Fix.**
+
+- `verify_digest` rejects `is_weak()` keys and uses `verify_strict`, which also
+  rejects a small-order R;
+- `crates/simon-core/tests/slabe_klucze.rs`: 256 digests per weak key must all
+  be rejected (before the fix 256/256 and 67/256 were accepted);
+- the committed WASM was rebuilt, and `ui/scripts/check-receipts.mjs` now also
+  requires that an identity-point signature is rejected, so a stale WASM cannot
+  bring the hole back unnoticed.
+
 ## Verification status — as of 2026-09-18
 
 ```

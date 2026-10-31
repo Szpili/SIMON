@@ -219,6 +219,36 @@ własnej weryfikacji. Naprawione świeżym receiptem; **wersjonowanie schematu
 zostaje jako M5.1c** (`ReceiptV2` ma nieść `schema`, a stary format ma dostać
 status `LEGACY_OUTPUT_BOUND`, nie cichy błąd treści).
 
+## 2026-10-31 — P0: klucz publiczny małego rzędu „podpisywał" dowolny receipt
+
+**Zachowanie przed poprawką.** `PublicKey::verify_digest` wołał `verify`
+z ed25519-dalek, który nie odrzuca kluczy publicznych małego rzędu. Receipt
+z `signer = 01‖00…00` (punkt tożsamościowy) i podpisem R = tożsamość, s = 0
+przechodził weryfikację dla **każdego** odcisku, bez żadnego klucza
+prywatnego. Klucz zerowy (punkt rzędu 4) przechodził dla około 1/4 odcisków
+przy stałym R, a atakujący dobiera R albo treść.
+
+**Konsekwencja.** Każdy mógł wystawić receipt na dowolny wynik, który
+`--verify-receipt` i weryfikator WASM na stronie uznawały za podpisany:
+wszystkie 15 receiptów `/industry` z signerem i podpisem podmienionymi na punkt
+tożsamościowy przeszło przez zacommitowany WASM, a CLI wypisywało
+`RECEIPT WAŻNY`. Weryfikacja z `--expect-signer` nadal je odrzucała, bo signer
+się nie zgadza. Receiptów podpisanych prawdziwymi kluczami węzłów to nie
+dotyczyło i dalej przechodzą.
+
+**Od kiedy.** Od pierwszego publicznego commita (2026-09-17) do 2026-10-31, po
+zgłoszeniu na hackathon; stan zgłoszenia ma tag `submission-2026-10-17`.
+
+**Poprawka.**
+
+- `verify_digest` odrzuca klucze z `is_weak()` i woła `verify_strict`, który
+  odrzuca też R małego rzędu;
+- `crates/simon-core/tests/slabe_klucze.rs`: 256 odcisków na każdy słaby klucz,
+  wszystkie muszą być odrzucone (przed poprawką przyjęte 256/256 i 67/256);
+- zacommitowany WASM przebudowany, a `ui/scripts/check-receipts.mjs` wymaga
+  teraz także odrzucenia podpisu punktem tożsamościowym, więc nieświeży WASM
+  nie przywróci dziury po cichu.
+
 ## Status weryfikacji — stan na 2026-09-18
 
 ```
