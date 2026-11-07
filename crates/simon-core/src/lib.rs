@@ -29,7 +29,9 @@ pub mod pomiar;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod rejestr;
 #[cfg(not(target_arch = "wasm32"))]
-pub mod tozsamosc;
+pub mod identity;
+#[cfg(not(target_arch = "wasm32"))]
+pub use identity as tozsamosc;
 pub mod receipt;
 
 pub use crypto::{Keypair, PublicKey, Signature};

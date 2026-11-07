@@ -92,9 +92,9 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
     // a metrycznik M5.2 nie potrafił przypisać pracy do nikogo.
     let sciezka_tozsamosci = match opcje.identity_file.as_deref() {
         Some(p) => std::path::PathBuf::from(p),
-        None => simon_core::tozsamosc::domyslna_sciezka().map_err(|e| e.to_string())?,
+        None => simon_core::identity::default_path().map_err(|e| e.to_string())?,
     };
-    let klucz = simon_core::tozsamosc::wczytaj_lub_zaloz(&sciezka_tozsamosci)
+    let klucz = simon_core::identity::load_or_create(&sciezka_tozsamosci)
         .map_err(|e| e.to_string())?;
     // Tylko klucz PUBLICZNY do logu. Sekret nie wychodzi z modułu tożsamości.
     eprintln!(
