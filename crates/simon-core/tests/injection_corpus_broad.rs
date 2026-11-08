@@ -48,8 +48,8 @@ fn sufit() -> CapabilityCeiling {
 
 fn pol() -> PolitykaWeb {
     PolitykaWeb {
-        dozwolone_hosty: vec!["api.example.com".into(), "en.wikipedia.org".into()],
-        max_bajtow: 1 << 20,
+        allowed_hosts: vec!["api.example.com".into(), "en.wikipedia.org".into()],
+        max_bytes: 1 << 20,
     }
 }
 fn ul(scheme: &str, host: &str, port: u16, m: &str, ui: bool) -> PolaUrl {
@@ -57,7 +57,7 @@ fn ul(scheme: &str, host: &str, port: u16, m: &str, ui: bool) -> PolaUrl {
         scheme: scheme.into(),
         host: host.into(),
         port,
-        metoda: m.into(),
+        method: m.into(),
         userinfo: ui,
     }
 }

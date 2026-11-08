@@ -14,25 +14,29 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-pub mod crypto;
 pub mod cap;
-pub mod limity;
-pub mod m3;
-pub mod protokol;
-pub mod przeplyw;
-pub mod web;
-pub mod obserwacja;
-pub mod pomiar;
-// `rejestr` (I/O plikowe) i `tozsamosc` (pliki klucza, HOME/LOCALAPPDATA,
-// std::process) sa host-only — nie istnieja na wasm32-unknown-unknown.
-// Weryfikacja receiptu ich nie potrzebuje, a bez tego WASM sie nie zbuduje.
-#[cfg(not(target_arch = "wasm32"))]
-pub mod rejestr;
+pub mod crypto;
+pub mod flow;
+pub use flow as przeplyw;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod identity;
 #[cfg(not(target_arch = "wasm32"))]
 pub use identity as tozsamosc;
+pub mod limits;
+pub use limits as limity;
+pub mod m3;
+pub mod measurement;
+pub use measurement as pomiar;
+pub mod observation;
+pub use observation as obserwacja;
+pub mod protocol;
+pub use protocol as protokol;
 pub mod receipt;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod registry;
+#[cfg(not(target_arch = "wasm32"))]
+pub use registry as rejestr;
+pub mod web;
 
 pub use crypto::{Keypair, PublicKey, Signature};
 pub use receipt::Receipt;

@@ -44,7 +44,7 @@ fn czy_wolno(
     if validate(s, akcja, wartosci).is_err() {
         return false;
     }
-    przeplyw_ok(zrodlo, Sink::ArgumentAkcji, deklasacje)
+    przeplyw_ok(zrodlo, Sink::ActionArgument, deklasacje)
 }
 
 #[test]
@@ -75,14 +75,14 @@ fn poprawna_wartosc_ale_z_niezaufanego_zrodla_jest_odrzucona() {
             "{zrodlo:?} nie może sterować adresatem bez deklasacji"
         );
         // jawna deklasacja operatora otwiera TYLKO ten przepływ
-        assert!(czy_wolno(&s, "send_email", &w, zrodlo, &[(zrodlo, Sink::ArgumentAkcji)]));
+        assert!(czy_wolno(&s, "send_email", &w, zrodlo, &[(zrodlo, Sink::ActionArgument)]));
     }
 }
 
 #[test]
 fn tool_result_injection_nie_steruje_akcja() {
-    // #2: wstrzyknięcie w wyniku narzędzia. ToolText → ArgumentAkcji zawsze deny.
-    assert!(!przeplyw_ok(Zaufanie::ToolText, Sink::ArgumentAkcji, &[]));
+    // #2: wstrzyknięcie w wyniku narzędzia. ToolText → ActionArgument zawsze deny.
+    assert!(!przeplyw_ok(Zaufanie::ToolText, Sink::ActionArgument, &[]));
     // log przyjmuje wszystko (to nie steruje akcją)
     assert!(przeplyw_ok(Zaufanie::ToolText, Sink::Log, &[]));
 }

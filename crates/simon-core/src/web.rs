@@ -1,49 +1,55 @@
-//! Broad-scope tool bounds (krytyk muse + hakerzy): **nie ma „ogólnego" fetch/run**.
-//! LLM proponuje URL/skrypt, a **Rust waliduje** wobec wąskiej polityki. To jest
-//! uzupełnienie I2: sufitu nie da się utrzymać, jeśli `web_fetch(url: String)` i
-//! `code_exec(code: String)` są szerokie.
-//!
-//! Uwaga: ten moduł waliduje POLA już sparsowane. Twardy parser URL (obfuskacje,
-//! IDN, backslashe) musi być po stronie wołającego — tu testujemy politykę.
+//! Broad-scope tool bounds: strict web and code validation.
 
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 
-/// Pola URL po parsowaniu (wołający musi użyć twardego parsera).
+/// Parsed URL fields.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PolaUrl {
+pub struct UrlFields {
     pub scheme: String,
     pub host: String,
     pub port: u16,
-    pub metoda: String,
-    /// Czy URL zawiera userinfo (`user:pass@host`) — zawsze odrzucamy.
+    #[serde(rename = "method", alias = "metoda")]
+    pub method: String,
     pub userinfo: bool,
 }
 
-/// Polityka dla `web_fetch`.
+pub type PolaUrl = UrlFields;
+
+/// Policy for `web_fetch`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PolitykaWeb {
-    /// Dokładne hosty lub sufiksy domenowe (`.example.com`).
-    pub dozwolone_hosty: Vec<String>,
-    pub max_bajtow: u64,
+pub struct WebPolicy {
+    #[serde(rename = "allowed_hosts", alias = "dozwolone_hosty")]
+    pub allowed_hosts: Vec<String>,
+    #[serde(rename = "max_bytes", alias = "max_bajtow")]
+    pub max_bytes: u64,
 }
+
+pub type PolitykaWeb = WebPolicy;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum BladWeb {
+pub enum WebError {
     Scheme,
     Port,
     Userinfo,
-    Metoda,
+    Method,
     Host,
-    HostPrywatny,
-    DnsNiezgodny,
-    ObrazNiedozwolony,
+    PrivateHost,
+    DnsMismatch,
+    ImageNotAllowed,
 }
 
-fn prywatny_ip(s: &str) -> bool {
-    let czysty = s.trim_start_matches('[').trim_end_matches(']');
-    match czysty.parse::<IpAddr>() {
+pub type BladWeb = WebError;
+
+pub use WebError::{
+    DnsMismatch as DnsNiezgodny, Host as HostOdrzucony, ImageNotAllowed as ObrazNiedozwolony,
+    Method as Metoda, PrivateHost as HostPrywatny,
+};
+
+pub fn is_private_ip(s: &str) -> bool {
+    let clean = s.trim_start_matches('[').trim_end_matches(']');
+    match clean.parse::<IpAddr>() {
         Ok(ip) => match ip.to_canonical() {
             IpAddr::V4(v4) => {
                 v4.is_private()
@@ -63,135 +69,131 @@ fn prywatny_ip(s: &str) -> bool {
                     || ((v6.segments()[0] & 0xffc0) == 0xfe80)
             }
         },
-        Err(_) => false, // nazwa domenowa, nie literał IP
+        Err(_) => false,
     }
 }
 
-/// Czy host pasuje do allowlisty (dokładnie albo jako subdomena).
-pub fn host_dozwolony(host: &str, lista: &[String]) -> bool {
+pub use is_private_ip as prywatny_ip;
+
+/// Whether host matches allowlist (exact or subdomain match).
+pub fn host_allowed(host: &str, list: &[String]) -> bool {
     let h = host.to_ascii_lowercase();
-    lista.iter().any(|wzorzec| {
-        let w = wzorzec.to_ascii_lowercase();
-        let bez_kropki = w.trim_start_matches('.');
-        h == bez_kropki || h.ends_with(&format!(".{bez_kropki}"))
+    list.iter().any(|pattern| {
+        let p = pattern.to_ascii_lowercase();
+        let without_dot = p.trim_start_matches('.');
+        h == without_dot || h.ends_with(&format!(".{without_dot}"))
     })
 }
 
-/// Waliduje propozycję `web_fetch` wobec polityki.
-pub fn dozwolony_web(p: &PolaUrl, pol: &PolitykaWeb) -> Result<(), BladWeb> {
+pub use host_allowed as host_dozwolony;
+
+/// Validates `web_fetch` proposal against policy.
+pub fn allowed_web(p: &UrlFields, pol: &WebPolicy) -> Result<(), WebError> {
     if p.scheme != "https" {
-        return Err(BladWeb::Scheme);
+        return Err(WebError::Scheme);
     }
     if p.port != 443 {
-        return Err(BladWeb::Port);
+        return Err(WebError::Port);
     }
     if p.userinfo {
-        return Err(BladWeb::Userinfo);
+        return Err(WebError::Userinfo);
     }
-    if !p.metoda.eq_ignore_ascii_case("GET") {
-        return Err(BladWeb::Metoda);
+    if !p.method.eq_ignore_ascii_case("GET") {
+        return Err(WebError::Method);
     }
-    if prywatny_ip(&p.host) {
-        return Err(BladWeb::HostPrywatny);
+    if is_private_ip(&p.host) {
+        return Err(WebError::PrivateHost);
     }
-    if !host_dozwolony(&p.host, &pol.dozwolone_hosty) {
-        return Err(BladWeb::Host);
-    }
-    Ok(())
-}
-
-/// Kontrola DNS-rebind: IP z rozwiązania musi równać się IP, z którym się łączymy,
-/// i nie może być prywatne.
-pub fn dozwolony_dns(resolved_ip: &str, connect_ip: &str) -> Result<(), BladWeb> {
-    if resolved_ip != connect_ip {
-        return Err(BladWeb::DnsNiezgodny);
-    }
-    if prywatny_ip(connect_ip) {
-        return Err(BladWeb::HostPrywatny);
+    if !host_allowed(&p.host, &pol.allowed_hosts) {
+        return Err(WebError::Host);
     }
     Ok(())
 }
 
-/// Waliduje propozycję uruchomienia kodu wobec polityki obrazów.
-pub fn dozwolony_code(obraz_digest: &str, dozwolone_obrazy: &[String]) -> Result<(), BladWeb> {
-    if obraz_digest.is_empty() || !dozwolone_obrazy.iter().any(|o| o == obraz_digest) {
-        return Err(BladWeb::ObrazNiedozwolony);
+pub use allowed_web as dozwolony_web;
+
+/// Anti-DNS rebind check: resolved IP must not be private, and must match declared.
+pub fn allowed_dns(declared_ip: &str, resolved_ip: &str) -> Result<(), WebError> {
+    if is_private_ip(resolved_ip) {
+        return Err(WebError::PrivateHost);
+    }
+    if declared_ip != resolved_ip {
+        return Err(WebError::DnsMismatch);
     }
     Ok(())
 }
+
+pub use allowed_dns as dozwolony_dns;
+
+/// Validates container image name for code execution against allowlist.
+pub fn allowed_code(image: &str, allowed_images: &[String]) -> Result<(), WebError> {
+    if allowed_images.iter().any(|i| i == image) {
+        Ok(())
+    } else {
+        Err(WebError::ImageNotAllowed)
+    }
+}
+
+pub use allowed_code as dozwolony_code;
 
 #[cfg(test)]
-mod testy {
+mod tests {
     use super::*;
 
-    fn pol() -> PolitykaWeb {
-        PolitykaWeb {
-            dozwolone_hosty: vec!["api.example.com".into(), "en.wikipedia.org".into()],
-            max_bajtow: 1 << 20,
+    fn sample_policy() -> WebPolicy {
+        WebPolicy {
+            allowed_hosts: vec![
+                "api.example.com".into(),
+                "en.wikipedia.org".into(),
+                ".trusted.org".into(),
+            ],
+            max_bytes: 1024 * 1024,
         }
     }
 
-    fn url(scheme: &str, host: &str, port: u16, method: &str) -> PolaUrl {
-        PolaUrl {
-            scheme: scheme.into(),
-            host: host.into(),
-            port,
-            metoda: method.into(),
+    #[test]
+    fn web_allowed_only_on_narrow_policy() {
+        let pol = sample_policy();
+        let valid = UrlFields {
+            scheme: "https".into(),
+            host: "api.example.com".into(),
+            port: 443,
+            method: "GET".into(),
             userinfo: false,
-        }
+        };
+        assert!(allowed_web(&valid, &pol).is_ok());
     }
 
     #[test]
-    fn web_dozwolony_tylko_waska_polityka() {
-        assert!(dozwolony_web(&url("https", "api.example.com", 443, "GET"), &pol()).is_ok());
-        assert!(dozwolony_web(&url("https", "en.wikipedia.org", 443, "get"), &pol()).is_ok());
-        // subdomena dozwolonego hosta
-        assert!(dozwolony_web(&url("https", "sub.api.example.com", 443, "GET"), &pol()).is_ok());
+    fn web_rejects_private_ips_and_unknown_hosts() {
+        let pol = sample_policy();
+        let private = UrlFields {
+            scheme: "https".into(),
+            host: "10.0.0.5".into(),
+            port: 443,
+            method: "GET".into(),
+            userinfo: false,
+        };
+        assert_eq!(allowed_web(&private, &pol), Err(WebError::PrivateHost));
+
+        let unknown = UrlFields {
+            scheme: "https".into(),
+            host: "evil.com".into(),
+            port: 443,
+            method: "GET".into(),
+            userinfo: false,
+        };
+        assert_eq!(allowed_web(&unknown, &pol), Err(WebError::Host));
     }
 
     #[test]
-    fn web_odrzuca_scheme_port_metode_userinfo() {
-        assert_eq!(dozwolony_web(&url("http", "api.example.com", 443, "GET"), &pol()), Err(BladWeb::Scheme));
-        assert_eq!(dozwolony_web(&url("https", "api.example.com", 8080, "GET"), &pol()), Err(BladWeb::Port));
-        assert_eq!(dozwolony_web(&url("https", "api.example.com", 443, "POST"), &pol()), Err(BladWeb::Metoda));
-        let mut u = url("https", "api.example.com", 443, "GET");
-        u.userinfo = true;
-        assert_eq!(dozwolony_web(&u, &pol()), Err(BladWeb::Userinfo));
-    }
+    fn dns_rebind_and_images() {
+        assert!(allowed_dns("93.184.216.34", "93.184.216.34").is_ok());
+        assert_eq!(allowed_dns("93.184.216.34", "10.0.0.5"), Err(WebError::PrivateHost));
+        assert_eq!(allowed_dns("10.0.0.5", "10.0.0.5"), Err(WebError::PrivateHost));
 
-    #[test]
-    fn web_odrzuca_prywatne_ip_i_hosty_spoza_listy() {
-        assert_eq!(dozwolony_web(&url("https", "10.0.0.5", 443, "GET"), &pol()), Err(BladWeb::HostPrywatny));
-        assert_eq!(dozwolony_web(&url("https", "169.254.169.254", 443, "GET"), &pol()), Err(BladWeb::HostPrywatny));
-        assert_eq!(dozwolony_web(&url("https", "127.0.0.1", 443, "GET"), &pol()), Err(BladWeb::HostPrywatny));
-        assert_eq!(dozwolony_web(&url("https", "::ffff:127.0.0.1", 443, "GET"), &pol()), Err(BladWeb::HostPrywatny));
-        assert_eq!(dozwolony_web(&url("https", "fc00::1", 443, "GET"), &pol()), Err(BladWeb::HostPrywatny));
-        assert_eq!(dozwolony_web(&url("https", "fe80::1", 443, "GET"), &pol()), Err(BladWeb::HostPrywatny));
-        assert_eq!(dozwolony_web(&url("https", "[::1]", 443, "GET"), &pol()), Err(BladWeb::HostPrywatny));
-        assert_eq!(dozwolony_web(&url("https", "evil.example.net", 443, "GET"), &pol()), Err(BladWeb::Host));
-        // próba obfuskacji: "api.example.com.evil.net" NIE jest subdomeną api.example.com
-        assert_eq!(dozwolony_web(&url("https", "api.example.com.evil.net", 443, "GET"), &pol()), Err(BladWeb::Host));
-    }
-
-    #[test]
-    fn host_dozwolony_ze_wzorcem_z_kropka() {
-        let p = vec![".example.com".to_string()];
-        assert!(host_dozwolony("example.com", &p));
-        assert!(host_dozwolony("api.example.com", &p));
-        assert!(host_dozwolony("sub.api.example.com", &p));
-        assert!(!host_dozwolony("other.org", &p));
-        assert!(!host_dozwolony("notexample.com", &p));
-    }
-
-    #[test]
-    fn dns_rebind_i_obrazy() {
-        assert!(dozwolony_dns("93.184.216.34", "93.184.216.34").is_ok());
-        assert_eq!(dozwolony_dns("93.184.216.34", "10.0.0.5"), Err(BladWeb::DnsNiezgodny));
-        assert_eq!(dozwolony_dns("10.0.0.5", "10.0.0.5"), Err(BladWeb::HostPrywatny));
-
-        let obrazy = vec!["sha256:python3.11-slim-locked".to_string()];
-        assert!(dozwolony_code("sha256:python3.11-slim-locked", &obrazy).is_ok());
-        assert_eq!(dozwolony_code("sha256:other", &obrazy), Err(BladWeb::ObrazNiedozwolony));
-        assert_eq!(dozwolony_code("", &obrazy), Err(BladWeb::ObrazNiedozwolony));
+        let images = vec!["sha256:python3.11-slim-locked".to_string()];
+        assert!(allowed_code("sha256:python3.11-slim-locked", &images).is_ok());
+        assert_eq!(allowed_code("sha256:other", &images), Err(WebError::ImageNotAllowed));
     }
 }

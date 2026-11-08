@@ -139,15 +139,15 @@ fn kontrola_przeplywow_ifc_wstrzykniete_dane_nie_steruja() {
     // Wstrzyknięty tekst pochodzi z niezaufanego źródła i nie może sterować akcją
     // ani kolejnym zleceniem bez deklasacji operatora.
     for zrodlo in [Zaufanie::PeerText, Zaufanie::RetrievedText, Zaufanie::ToolText, Zaufanie::ModelDerived] {
-        assert!(!przeplyw_ok(zrodlo, Sink::ArgumentAkcji, &[]), "{zrodlo:?} -> args");
-        assert!(!przeplyw_ok(zrodlo, Sink::InstrukcjaKolejnegoZlecenia, &[]), "{zrodlo:?} -> instr");
+        assert!(!przeplyw_ok(zrodlo, Sink::ActionArgument, &[]), "{zrodlo:?} -> args");
+        assert!(!przeplyw_ok(zrodlo, Sink::NextJobInstruction, &[]), "{zrodlo:?} -> instr");
         assert!(!przeplyw_ok(zrodlo, Sink::SystemPrompt, &[]), "{zrodlo:?} -> system");
     }
-    assert!(przeplyw_ok(Zaufanie::Operator, Sink::ArgumentAkcji, &[]));
+    assert!(przeplyw_ok(Zaufanie::Operator, Sink::ActionArgument, &[]));
     // deklasacja otwiera tylko wskazaną parę
-    let dekl = vec![(Zaufanie::RetrievedText, Sink::ArgumentAkcji)];
-    assert!(przeplyw_ok(Zaufanie::RetrievedText, Sink::ArgumentAkcji, &dekl));
-    assert!(!przeplyw_ok(Zaufanie::PeerText, Sink::ArgumentAkcji, &dekl));
+    let dekl = vec![(Zaufanie::RetrievedText, Sink::ActionArgument)];
+    assert!(przeplyw_ok(Zaufanie::RetrievedText, Sink::ActionArgument, &dekl));
+    assert!(!przeplyw_ok(Zaufanie::PeerText, Sink::ActionArgument, &dekl));
 }
 
 #[test]

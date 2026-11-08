@@ -8,7 +8,6 @@
 //! tożsamości modelu ani poufności wobec executora.
 
 use simon_core::crypto::Keypair;
-use simon_core::protokol::{BladProtokolu, OknoNonce};
 use simon_core::receipt::{odcisk_parametrow, odcisk_wyjscia, Precision, Receipt};
 
 fn bazowy_podpisany() -> (Receipt, Keypair) {
@@ -212,7 +211,7 @@ fn grant_double_use_expired_zly_parametr() {
 
 #[test]
 fn replay_nonce_odrzucony() {
-    let mut o = OknoNonce::nowy(16);
-    assert!(o.przyjmij(1000).is_ok());
-    assert_eq!(o.przyjmij(1000), Err(BladProtokolu::NoncePowtorzony));
+    let mut o = simon_core::protocol::NonceWindow::new(16);
+    assert!(o.accept(1000).is_ok());
+    assert_eq!(o.accept(1000), Err(simon_core::protocol::ProtocolError::ReplayNonce));
 }
