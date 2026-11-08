@@ -36,10 +36,12 @@ impl Capability {
     }
 }
 
-/// Separator domeny dla podpisu rejestracji węzła (dowód posiadania klucza).
-pub const DOMENA_NODE_REGISTER: &str = "SIMON/NODE-REGISTER/v1";
-/// Separator domeny dla vouchera operatora dopuszczającego węzeł do sieci.
-pub const DOMENA_NODE_VOUCHER: &str = "SIMON/NODE-VOUCH/v1";
+/// Domain separator for node registration proof of possession.
+pub const NODE_REGISTER_DOMAIN: &str = "SIMON/NODE-REGISTER/v1";
+pub const DOMENA_NODE_REGISTER: &str = NODE_REGISTER_DOMAIN;
+/// Domain separator for operator voucher admitting a node into the network.
+pub const NODE_VOUCHER_DOMAIN: &str = "SIMON/NODE-VOUCH/v1";
+pub const DOMENA_NODE_VOUCHER: &str = NODE_VOUCHER_DOMAIN;
 
 /// Rejestracja node'a. `pubkey` deklarowany RAZ — tożsamość node'a = ten klucz (D15).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -143,8 +145,9 @@ pub struct JobResult {
 /// Alias dla podpisanego wyniku zadania na Gossipsub (`SIMON/JOB-RESULT/v1`).
 pub type SignedJobResult = JobResult;
 
-/// Separator domeny dla podpisu wyniku zadania.
-pub const DOMENA_JOB_RESULT: &str = "SIMON/JOB-RESULT/v1";
+/// Domain separator for job result signatures.
+pub const JOB_RESULT_DOMAIN: &str = "SIMON/JOB-RESULT/v1";
+pub const DOMENA_JOB_RESULT: &str = JOB_RESULT_DOMAIN;
 
 impl JobResult {
     /// Sukces z podpisanym receiptem.
@@ -275,7 +278,8 @@ impl Registry {
     /// `wymagany_ctx = 0` znaczy „nie sprawdzaj kontekstu".
     /// Pusta lista = jawna odmowa (nikt nie ma modelu / zmieści kontekstu),
     /// a NIE cichy wybór losowego node'a.
-    pub fn kandydaci_dla_modelu(&self, model_hash: &str, wymagany_ctx: u32) -> Vec<String> {
+    /// Candidates matching model and context limit.
+    pub fn candidates_for_model(&self, model_hash: &str, required_ctx: u32) -> Vec<String> {
         let mut out: Vec<String> = self
             .nodes
             .values()
@@ -285,14 +289,14 @@ impl Registry {
                 d.get("model_hash").and_then(|v| v.as_str()) == Some(model_hash)
             })
             .filter(|n| {
-                wymagany_ctx == 0 || {
+                required_ctx == 0 || {
                     let limit = n
                         .capability
                         .declared
                         .get("max_ctx")
                         .and_then(|v| v.as_u64())
                         .unwrap_or(0);
-                    limit == 0 || wymagany_ctx <= limit as u32
+                    limit == 0 || required_ctx <= limit as u32
                 }
             })
             .filter(|n| {
@@ -303,8 +307,13 @@ impl Registry {
             })
             .map(|n| n.node_id.clone())
             .collect();
-        out.sort(); // deterministycznie — losowanie robi warstwa wyżej
+        out.sort();
         out
+    }
+
+    /// Compatibility alias for `candidates_for_model`.
+    pub fn kandydaci_dla_modelu(&self, model_hash: &str, required_ctx: u32) -> Vec<String> {
+        self.candidates_for_model(model_hash, required_ctx)
     }
 
     pub fn assign(&mut self, job_id: &str, node_id: &str) -> bool {
@@ -430,56 +439,62 @@ impl Registry {
         self.assigned.remove(job_id)
     }
 
-    /// Deterministyczny wybór kandydata za pomocą VRF seed.
-    ///
-    /// 1. Filtruje kandydatów po modelu i limicie kontekstu (oraz timeout_s jeśli ustawiony).
-    /// 2. Liczy deterministyczny seed: `content_digest(&("SIMON/VRF/v1", &(model_hash, job_id)))`.
-    /// 3. Wybiera kandydata o najmniejszym leksykograficznie hashu wyboru:
-    ///    `content_digest(&("SIMON/VRF-PICK/v1", &(&vrf_seed, cand)))`.
-    pub fn wybierz_kandydata_vrf(
+    /// Deterministic candidate selection via VRF seed.
+    pub fn select_candidate_vrf(
         &self,
         model_hash: &str,
-        wymagany_ctx: u32,
+        required_ctx: u32,
         job_id: &str,
-        teraz_s: u64,
+        now_s: u64,
     ) -> Option<(String, String)> {
-        let kandydaci = self.kandydaci_dla_modelu(model_hash, wymagany_ctx);
-        let kandydaci: Vec<String> = if let Some(timeout) = self.timeout_s {
-            kandydaci
+        let candidates = self.candidates_for_model(model_hash, required_ctx);
+        let candidates: Vec<String> = if let Some(timeout) = self.timeout_s {
+            candidates
                 .into_iter()
                 .filter(|cand| {
                     if let Some(last) = self.last_seen.get(cand) {
-                        teraz_s.saturating_sub(*last) <= timeout
+                        now_s.saturating_sub(*last) <= timeout
                     } else {
                         true
                     }
                 })
                 .collect()
         } else {
-            kandydaci
+            candidates
         };
 
-        if kandydaci.is_empty() {
+        if candidates.is_empty() {
             return None;
         }
 
         let vrf_seed = simon_core::content_digest(&("SIMON/VRF/v1", &(model_hash, job_id))).ok()?;
 
-        let mut najlepszy: Option<(String, String)> = None;
-        for cand in kandydaci {
+        let mut best: Option<(String, String)> = None;
+        for cand in candidates {
             let pick_digest =
                 simon_core::content_digest(&("SIMON/VRF-PICK/v1", &(&vrf_seed, &cand))).ok()?;
-            match &najlepszy {
-                None => najlepszy = Some((cand, pick_digest)),
+            match &best {
+                None => best = Some((cand, pick_digest)),
                 Some((_, best_digest)) => {
                     if &pick_digest < best_digest {
-                        najlepszy = Some((cand, pick_digest));
+                        best = Some((cand, pick_digest));
                     }
                 }
             }
         }
 
-        najlepszy.map(|(node_id, _)| (node_id, vrf_seed))
+        best.map(|(node_id, _)| (node_id, vrf_seed))
+    }
+
+    /// Compatibility alias for `select_candidate_vrf`.
+    pub fn wybierz_kandydata_vrf(
+        &self,
+        model_hash: &str,
+        required_ctx: u32,
+        job_id: &str,
+        now_s: u64,
+    ) -> Option<(String, String)> {
+        self.select_candidate_vrf(model_hash, required_ctx, job_id, now_s)
     }
 }
 

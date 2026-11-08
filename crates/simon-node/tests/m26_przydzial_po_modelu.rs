@@ -37,16 +37,17 @@ fn m26_zlecenie_trafia_tylko_na_node_z_modelem() {
     rejestr.register(node_z_modelem("node-qwen", "qwen3.8-27b", 36864));
 
     // Zlecenie prosi o bielik-awq: kandydaci MUSZĄ być odfiltrowani PO MODELU.
-    let kandydaci = rejestr.kandydaci_dla_modelu("bielik-awq", 0);
+    let kandydaci = rejestr.candidates_for_model("bielik-awq", 0);
     assert_eq!(kandydaci, vec!["node-bielik".to_string()],
         "zlecenie na bielik-awq NIE MOŻE trafić na node z qwen");
+    assert_eq!(rejestr.kandydaci_dla_modelu("bielik-awq", 0), kandydaci);
 
     // Zlecenie prosi o qwen: tylko qwen.
-    let kandydaci = rejestr.kandydaci_dla_modelu("qwen3.8-27b", 0);
+    let kandydaci = rejestr.candidates_for_model("qwen3.8-27b", 0);
     assert_eq!(kandydaci, vec!["node-qwen".to_string()]);
 
     // Model, którego nikt nie ma: pusta lista = jawna odmowa, nie cichy wybór.
-    let kandydaci = rejestr.kandydaci_dla_modelu("llama-70b", 0);
+    let kandydaci = rejestr.candidates_for_model("llama-70b", 0);
     assert!(kandydaci.is_empty(), "brak node'a z modelem = pusta lista, nie losowanie");
 }
 
@@ -57,11 +58,11 @@ fn m26_zlecenie_trafia_tylko_gdzie_zmiesci_sie_kontekst() {
     rejestr.register(node_z_modelem("node-duzy", "bielik-awq", 36864));
 
     // Zlecenie 20k tokenów: node z 8k limitu ODPADA.
-    let kandydaci = rejestr.kandydaci_dla_modelu("bielik-awq", 20_000);
+    let kandydaci = rejestr.candidates_for_model("bielik-awq", 20_000);
     assert_eq!(kandydaci, vec!["node-duzy".to_string()],
         "zlecenie 20k NIE MOŻE trafić na node z limitem 8k");
 
     // Zlecenie 5k: oba pasują.
-    let kandydaci = rejestr.kandydaci_dla_modelu("bielik-awq", 5_000);
+    let kandydaci = rejestr.candidates_for_model("bielik-awq", 5_000);
     assert_eq!(kandydaci.len(), 2, "w limicie obu node'ów");
 }

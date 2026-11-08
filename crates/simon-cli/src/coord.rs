@@ -224,10 +224,10 @@ pub fn przetworz_zlecenie(
     // Szacujemy wymagany kontekst: min 512 tokenów z fallbackiem do 0
     let mut wymagany_ctx = 512;
     let mut wybrany =
-        rejestr.wybierz_kandydata_vrf(&order.model_hash, wymagany_ctx, &job_id, teraz);
+        rejestr.select_candidate_vrf(&order.model_hash, wymagany_ctx, &job_id, teraz);
     if wybrany.is_none() {
         wymagany_ctx = 0;
-        wybrany = rejestr.wybierz_kandydata_vrf(&order.model_hash, wymagany_ctx, &job_id, teraz);
+        wybrany = rejestr.select_candidate_vrf(&order.model_hash, wymagany_ctx, &job_id, teraz);
     }
 
     let (wybrany_node, vrf_seed) = wybrany
