@@ -197,7 +197,7 @@ async fn test_e2e_scenariusz_1_uczciwy_przeplyw_m1() {
 
     let resp = match reply {
         PromptReply::Ok(r) => r,
-        PromptReply::Blad(e) => panic!("nieoczekiwany błąd node'a: {e:?}"),
+        PromptReply::Error(e) => panic!("nieoczekiwany błąd node'a: {e:?}"),
     };
 
     assert_eq!(resp.output, "42 to odpowiedz");
@@ -248,7 +248,7 @@ async fn test_e2e_scenariusz_2_zmanipulowane_tokeny_wyjscia_odrzucone() {
 
     let resp = match reply {
         PromptReply::Ok(r) => r,
-        PromptReply::Blad(e) => panic!("błąd node'a: {e:?}"),
+        PromptReply::Error(e) => panic!("błąd node'a: {e:?}"),
     };
 
     let r: Receipt = serde_json::from_str(&resp.receipt).expect("parsowanie receiptu");
@@ -293,7 +293,7 @@ async fn test_e2e_scenariusz_3_zly_client_nonce_odrzucony() {
 
     let resp = match reply {
         PromptReply::Ok(r) => r,
-        PromptReply::Blad(e) => panic!("błąd node'a: {e:?}"),
+        PromptReply::Error(e) => panic!("błąd node'a: {e:?}"),
     };
 
     let r: Receipt = serde_json::from_str(&resp.receipt).expect("parsowanie receiptu");
@@ -337,7 +337,7 @@ async fn test_e2e_scenariusz_4_fallback_do_m0_gdy_tokenize_niedostepny_lub_ponad
 
         let resp = match reply {
             PromptReply::Ok(r) => r,
-            PromptReply::Blad(e) => panic!("błąd node'a przy braku /tokenize: {e:?}"),
+            PromptReply::Error(e) => panic!("błąd node'a przy braku /tokenize: {e:?}"),
         };
 
         assert_eq!(resp.tokenizer_hash, None);
@@ -365,7 +365,7 @@ async fn test_e2e_scenariusz_4_fallback_do_m0_gdy_tokenize_niedostepny_lub_ponad
 
         let resp = match reply {
             PromptReply::Ok(r) => r,
-            PromptReply::Blad(e) => panic!("błąd node'a przy overcap: {e:?}"),
+            PromptReply::Error(e) => panic!("błąd node'a przy overcap: {e:?}"),
         };
 
         assert_eq!(resp.tokenizer_hash, None);
@@ -393,7 +393,7 @@ async fn test_e2e_scenariusz_4_fallback_do_m0_gdy_tokenize_niedostepny_lub_ponad
 
         let resp = match reply {
             PromptReply::Ok(r) => r,
-            PromptReply::Blad(e) => panic!("błąd node'a przy niepoprawnych tokenach: {e:?}"),
+            PromptReply::Error(e) => panic!("błąd node'a przy niepoprawnych tokenach: {e:?}"),
         };
 
         assert_eq!(resp.tokenizer_hash, None);
@@ -424,7 +424,7 @@ async fn test_e2e_scenariusz_4_fallback_do_m0_gdy_tokenize_niedostepny_lub_ponad
 
         let resp = match reply {
             PromptReply::Ok(r) => r,
-            PromptReply::Blad(e) => panic!("błąd node'a w trybie czatu: {e:?}"),
+            PromptReply::Error(e) => panic!("błąd node'a w trybie czatu: {e:?}"),
         };
 
         assert_eq!(resp.tokenizer_hash, None);

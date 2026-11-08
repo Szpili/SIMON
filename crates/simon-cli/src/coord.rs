@@ -329,12 +329,12 @@ mod tests {
             fee_think: order.fee_think,
             timeout_secs: order.timeout_secs,
             nonce: order.nonce.clone(),
-            wazne_do: teraz + 300,
+            valid_until: teraz + 300,
             user_pubkey: client_key.public().to_hex(),
             signature: None,
         }
         .sign(client_key);
-        order.autoryzacja = Some(aut);
+        order.authorization = Some(aut);
         order
     }
 

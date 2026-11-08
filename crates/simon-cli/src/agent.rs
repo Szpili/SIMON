@@ -417,8 +417,8 @@ async fn wyslij_kawalek_z_retry(
         let (order, request) = zbuduj_zlecenie(model, &tekst, fee, max_tokens, klucz, false)?;
         let (reply, _ms) = wyslij_i_czekaj(swarm, peer, request).await?;
         match reply {
-            PromptReply::Blad(e) if e.kod == "ctx_ponad_limit" && glebokosc_zostala > 0 => {
-                if let Some(realny) = e.realny_ctx {
+            PromptReply::Error(e) if e.code == "ctx_ponad_limit" && glebokosc_zostala > 0 => {
+                if let Some(realny) = e.actual_ctx {
                     let empiryczny = tekst.chars().count() as f64 / realny.max(1) as f64;
                     if empiryczny < *znak_na_tok {
                         eprintln!(
@@ -433,11 +433,11 @@ async fn wyslij_kawalek_z_retry(
                 eprintln!(
                     "[agent] kawałek {i}/{n}: fragment {dl} znaków odrzucony ({}), dzielę na pół \
                      ({glebokosc_zostala} prób zostało)",
-                    e.opis
+                    e.description
                 );
                 let polowa = dl / 2;
                 if polowa == 0 {
-                    return Err(format!("kawałek {i}/{n} nie da się dalej podzielić, a nadal jest za duży: {}", e.opis));
+                    return Err(format!("kawałek {i}/{n} nie da się dalej podzielić, a nadal jest za duży: {}", e.description));
                 }
                 let znaki: Vec<char> = fragment.chars().collect();
                 let (a, b) = znaki.split_at(polowa);
@@ -501,12 +501,12 @@ fn zbuduj_zlecenie(
         fee_think: order.fee_think,
         timeout_secs: order.timeout_secs,
         nonce: order.nonce.clone(),
-        wazne_do: teraz + 600,
+        valid_until: teraz + 600,
         user_pubkey: klucz.public().to_hex(),
         signature: None,
     }
     .sign(klucz);
-    order.autoryzacja = Some(autoryzacja);
+    order.authorization = Some(autoryzacja);
 
     order
         .zweryfikuj_autoryzacje(teraz)
@@ -586,7 +586,7 @@ fn wyodrebnij_output(
     oczekiwany_signer: Option<&str>,
 ) -> Result<String, String> {
     match reply {
-        PromptReply::Blad(e) => Err(format!("node zwrócił błąd {}: {}", e.kod, e.opis)),
+        PromptReply::Error(e) => Err(format!("node zwrócił błąd {}: {}", e.code, e.description)),
         PromptReply::Ok(r) => {
             let m1_info = match (&r.tokenizer_hash, &r.prompt_token_ids, &r.output_token_ids) {
                 // nonce z NASZEGO zlecenia, nie z receiptu — inaczej wiązanie nonce niczego nie sprawdza
@@ -617,12 +617,12 @@ fn obsluz_odpowiedz(
     oczekiwany_signer: Option<&str>,
 ) -> Result<(), String> {
     match reply {
-        PromptReply::Blad(e) => {
+        PromptReply::Error(e) => {
             if json {
-                println!("{}", serde_json::json!({"ok": false, "kod": e.kod, "opis": e.opis}));
+                println!("{}", serde_json::json!({"ok": false, "code": e.code, "description": e.description, "kod": e.code, "opis": e.description}));
             }
-            eprintln!("[agent] BŁĄD node'a {}: {}", e.kod, e.opis);
-            Err(format!("node zwrócił błąd: {}", e.kod))
+            eprintln!("[agent] BŁĄD node'a {}: {}", e.code, e.description);
+            Err(format!("node zwrócił błąd: {}", e.code))
         }
         PromptReply::Ok(r) => {
             let rec = serde_json::from_str::<Receipt>(&r.receipt).ok();

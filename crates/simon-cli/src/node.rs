@@ -1025,12 +1025,12 @@ fn blad_ctx(
     limit_ctx: Option<u32>,
 ) -> PromptReply {
     eprintln!("[node] BŁĄD {kod}: {opis}");
-    PromptReply::Blad(PromptError {
+    PromptReply::Error(PromptError {
         v: 1,
         order_id: req.order_id.clone(),
-        kod: kod.to_string(),
-        opis: opis.to_string(),
-        realny_ctx,
+        code: kod.to_string(),
+        description: opis.to_string(),
+        actual_ctx: realny_ctx,
         limit_ctx,
     })
 }
@@ -1155,15 +1155,15 @@ mod testy_wspolbieznosci {
                 let reply = tokio::time::timeout(Duration::from_secs(1), super::obsluz(&backend, &req))
                     .await
                     .expect("odrzucenie wersji nie czeka na backend");
-                let PromptReply::Blad(err) = reply else {
+                let PromptReply::Error(err) = reply else {
                     panic!("oczekiwano błędu wersji");
                 };
-                assert_eq!(err.kod, "wersja");
+                assert_eq!(err.code, "wersja");
                 assert_eq!(err.order_id, req.order_id);
                 assert_eq!(err.v, 1);
-                assert_eq!(err.realny_ctx, None);
+                assert_eq!(err.actual_ctx, None);
                 assert_eq!(err.limit_ctx, None);
-                assert!(err.opis.contains(&v.to_string()));
+                assert!(err.description.contains(&v.to_string()));
             }
         }
         assert!(tokio::time::timeout(Duration::from_millis(50), listener.accept())
@@ -1448,7 +1448,7 @@ mod testy_receiptu {
             v: 1, order_id: "o".into(), job_id: job.into(), model_hash: "m".into(), prompt: "p".into(),
             max_tokens: 1, max_ctx: 8, nonce: "n".into(), chat: false,
         };
-        let kod = |r: Option<PromptReply>| match r { Some(PromptReply::Blad(e)) => Some(e.kod), _ => None };
+        let kod = |r: Option<PromptReply>| match r { Some(PromptReply::Error(e)) => Some(e.code), _ => None };
         // ten sam job od tego samego peera drugi raz = powtórka
         assert_eq!(kod(limit_peera(&mut k, &mut o, peer, &req("j1"), 1.0, 0)), None);
         assert_eq!(kod(limit_peera(&mut k, &mut o, peer, &req("j1"), 1.0, 0)).as_deref(), Some("powtorzony_job"));

@@ -11,15 +11,15 @@ use simon_harness::request_response::{PromptError, PromptReply, PromptRequest};
 /// Kopia bramki z node.rs — sprawdzamy regułę, nie I/O.
 fn bramka(request: &PromptRequest, max_ctx: u32) -> Option<PromptReply> {
     if max_ctx > 0 && request.max_ctx > max_ctx {
-        Some(PromptReply::Blad(PromptError {
+        Some(PromptReply::Error(PromptError {
             v: 1,
             order_id: request.order_id.clone(),
-            kod: "ctx_ponad_limit".to_string(),
-            opis: format!(
+            code: "ctx_ponad_limit".to_string(),
+            description: format!(
                 "zlecenie żąda {} tokenów kontekstu, ten node ma limit {}",
                 request.max_ctx, max_ctx
             ),
-            realny_ctx: Some(request.max_ctx),
+            actual_ctx: Some(request.max_ctx),
             limit_ctx: Some(max_ctx),
         }))
     } else {
@@ -45,8 +45,8 @@ fn req(ctx: u32) -> PromptRequest {
 fn m26_zlecenie_ponad_limit_odrzucone() {
     // Bielik na Franko ma 8192. Zlecenie żąda 32000.
     match bramka(&req(32_000), 8_192) {
-        Some(PromptReply::Blad(e)) => {
-            assert_eq!(e.kod, "ctx_ponad_limit", "kontrolowany kod błędu");
+        Some(PromptReply::Error(e)) => {
+            assert_eq!(e.code, "ctx_ponad_limit", "kontrolowany kod błędu");
         }
         _ => panic!("zlecenie ponad limit MUSI być odrzucone"),
     }
