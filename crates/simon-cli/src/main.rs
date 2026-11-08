@@ -1,140 +1,85 @@
 #![allow(clippy::doc_overindented_list_items, clippy::unwrap_or_default)]
-//! SIMON — binarka: `simon --role agent|coord|node` (M1.2).
+//! SIMON - CLI binary: `simon --role agent|coord|node` (M1.2).
 //!
-//! Trzy role:
-//! - `node`  — subskrybuje kanał promptu, liczy modelem i zwraca wynik + receipt
-//! - `agent` — rozgłasza zlecenie, wybiera przyjęcie, wysyła prompt kanałem
-//!   punkt-punkt, weryfikuje receipt lokalnie
-//! - `coord` — przyjmuje zlecenia (podpisane, M0.1) i rozgłasza `OrderAccepted`
+//! Three roles:
+//! - `node`  - subscribes to prompt channel, executes model, returns result + receipt
+//! - `agent` - broadcasts order, selects acceptance, sends prompt via p2p, verifies receipt
+//! - `coord` - accepts orders and broadcasts `OrderAccepted`
 
 use std::process::ExitCode;
 
 mod agent;
+mod common;
 mod coord;
 mod mapreduce;
 mod node;
-mod wspolne;
 
 const USAGE: &str = r#"
-SIMON — rozproszona inferencja (M1)
+SIMON — distributed inference (M1)
 
-UŻYCIE:
-    simon --role <agent|coord|node> [OPCJE]
+USAGE:
+    simon --role <agent|coord|node> [OPTIONS]
 
-ROLE:
-    node     liczy modele dla sieci (worker)
-    agent    zleca pracę (klient / harness)
-    coord    przyjmuje zlecenia i rozgłasza przyjęcie
+ROLES:
+    node     computes models for the network (worker)
+    agent    orders work (client / harness)
+    coord    accepts orders and broadcasts acceptance
 
-OPCJE:
-    --listen <multiaddr>     nasłuch, np. /ip4/0.0.0.0/tcp/9001
-    --bootstrap <multiaddr>  peer startowy (inny niż własny adres)
-    --model-url <url>        [node] endpoint vLLM, np. http://127.0.0.1:18020
-                             (klucz API backendu, np. AMD Token Factory:
-                             zmienna SIMON_MODEL_API_KEY, nie argument)
-    --rate-per-peer <n>      [node] ile zleceń/s przyjmie od JEDNEGO peera (domyślnie 16,
-                             zapas 4 s); ponad to błąd `rate_limit`. 0 = bez limitu.
-                             Chroni kolejkę przed jednym hałaśliwym peerem w sieci firmowej.
-    --max-jobs <n>           [node] ile promptów liczyć naraz (domyślnie 1;
-                             ustaw na liczbę slotów backendu, np. -np
-                             llama-server). Nadmiar czeka w kolejce
-                             (4 na slot), ponad nią node odpowiada
-                             błędem `node_zajety`
-    --model-hash <hash>      [node] deklarowany model / [agent] model, o który prosisz
-    --prompt <tekst|->       [agent] prompt do policzenia; w trybie --file
-                             to PYTANIE/instrukcja stosowana do każdego kawałka.
-                             `-` = stdin, więc treść nie trafia do `ps`/
-                             `/proc/<pid>/cmdline` (CWE-214, audyt Filipa)
-    --request-file <plik|->  [agent] tryb czatu: żądanie OpenAI z `messages`
-                             (i opcjonalnie `tools`, `tool_choice`,
-                             `temperature`, `top_p`, `stop`); `-` = stdin,
-                             więc treść nie trafia do `ps`. Wynik to JSON
-                             wiadomości (content, tool_calls, finish_reason)
-    --file <ścieżka>         [agent] M3.x: plik większy niż limit node'a —
-                             włącza chunkowanie + map-reduce (sekwencyjnie,
-                             hierarchiczna redukcja). Patrz PRZYKŁADY.
-    --chunk-tokens <n>       [agent] budżet tokenów na kawałek w --file
-                             (domyślnie 4000; konserwatywny margines wg
-                             najgęstszego zmierzonego materiału, base64)
-    --map-max-tokens <n>     [agent] limit wyjścia NA KAWAŁEK w --file
-                             (domyślnie 200 — trzyma reduce w ryzach)
-    --then-bootstrap <addr>  [agent] B2: łańcuch — po zweryfikowaniu wyniku
-                             ETAPU A, wyślij --then-prompt + wynik A (jako
-                             DANE) do TEGO node'a (może inny model/karta)
-    --then-model-hash <m>    [agent] model żądany na etapie B (domyślnie
-                             jak --model-hash)
-    --then-prompt <tekst>    [agent] instrukcja etapu B (co zrobić z
-                             wynikiem etapu A)
-    --max-tokens <n>         [agent] limit tokenów (domyślnie 128; w trybie
-                             --file dotyczy rund redukcji, nie kawałków map)
-    --fee <n>                [agent] opłata THINK (domyślnie 1)
-    --json                   [agent] jeden obiekt JSON na stdout (wynik,
-                             pomiar, surowy receipt, werdykt weryfikacji)
-                             zamiast wydruku dla człowieka — dla demo/integracji
-    --identity-file <plik>   [agent] M5.2a: plik trwałej tożsamości klienta.
-                             Domyślnie katalog danych użytkownika. Sekretu NIE
-                             podaje się w wierszu poleceń — byłby w `ps`.
-    --rejestr <plik>         [agent] M5.2: dopisz wykonaną pracę do lokalnego
-                             metrycznika (JSON Lines). NIE portfel, NIE saldo —
-                             surowe liczniki, czasy mierzone u klienta i poziom
-                             weryfikacji. Wykrywa powtórzenie receiptu.
-    --expect-output <plik>   [z --verify-receipt] sprawdź, czy receipt opisuje
-                             TĘ treść. Bez tego weryfikujesz podpis, ale nie to,
-                             czy dotyczy tekstu, który trzymasz w ręku.
-    --tokens <plik>          [z --verify-receipt] M1: plik JSON
-                             {tokenizer_hash, client_nonce, prompt_token_ids[],
-                             output_token_ids[]} — sprawdź wiązanie wejścia/stanu.
-    --audyt <plik>           [z --verify-receipt] M3: plik JSON
-                             {kroki:[{indeks,node_token,topk:[[id,lp],..]}]} —
-                             ocena containment top-k (polityka domyślna k=2).
-    --expect-signer <hex>    [agent i --verify-receipt] receipt musi podpisać TEN węzeł
-                             (klucz publiczny Ed25519 w hex). Bez tego podpis dowodzi
-                             tylko, że JAKIŚ klucz podpisał tekst — receipt niesie własny klucz.
-    --verify-receipt <plik>  sprawdź receipt, który ktoś Ci podał (`-` = stdin).
-                             Offline, bez sieci. Z --expect-job-id/--expect-model
-                             sprawdza też, czy to receipt do TEGO zlecenia.
+OPTIONS:
+    --listen <multiaddr>     listen address, e.g. /ip4/0.0.0.0/tcp/9001
+    --bootstrap <multiaddr>  bootstrap peer
+    --model-url <url>        [node] endpoint for vLLM, e.g. http://127.0.0.1:18020
+                             (API key via SIMON_MODEL_API_KEY environment variable)
+    --rate-per-peer <n>      [node] orders/s accepted from a single peer (default 16);
+                             excess returns rate_limit error. 0 = unlimited.
+    --max-jobs <n>           [node] concurrent prompts to process (default 1).
+                             Excess queued (4 per slot), beyond that returns node_busy.
+    --model-hash <hash>      [node] declared model / [agent] requested model
+    --prompt <text|->        [agent] prompt to compute; in --file mode this is the
+                             query/instruction applied to each chunk. '-' = stdin.
+    --request-file <file|->  [agent] chat mode: OpenAI request JSON with messages/tools;
+                             '-' = stdin.
+    --file <path>            [agent] M3.x: file exceeding node limit —
+                             enables chunking + map-reduce.
+    --chunk-tokens <n>       [agent] token budget per chunk in --file (default 4000)
+    --map-max-tokens <n>     [agent] output limit per chunk in --file (default 200)
+    --then-bootstrap <addr>  [agent] B2 chain: after verifying STAGE A output,
+                             send --then-prompt + A's output (as DATA) to this node
+    --then-model-hash <m>    [agent] model requested for stage B (default: same as --model-hash)
+    --then-prompt <text>     [agent] stage B instruction (what to do with stage A output)
+    --max-tokens <n>         [agent] token limit (default 128)
+    --fee <n>                [agent] THINK fee (default 1)
+    --json                   [agent] single JSON object on stdout (result, measurement,
+                             raw receipt, verification verdict)
+    --identity-file <file>   [agent] M5.2a: client persistent identity file.
+    --registry <file>        [agent] M5.2: append completed work to local work registry.
+    --expect-output <file>   [with --verify-receipt] verify receipt describes this content.
+    --tokens <file>          [with --verify-receipt] M1: JSON file with input/state binding.
+    --audyt <file>           [with --verify-receipt] M3: JSON file with execution audit.
+    --expect-signer <hex>    [agent and --verify-receipt] receipt must be signed by this node key.
+    --verify-receipt <file>  verify receipt offline ('-' = stdin).
 
-PODKOMENDA (alias na --verify-receipt):
-    simon verify <receipt> [--output <plik>] [--job-id <id>] [--model <m>] [--signer <hex>] [--json]
-                             to samo, czytelniej. `--output` = `--expect-output`,
-                             `--signer` = `--expect-signer`.
-    --key-file <plik>        [node] jak --key, ale ziarno czytane z pliku.
-                             UŻYWAJ TEGO we wdrożeniu: --key <hex> jest widoczny
-                             w `ps` dla każdego użytkownika maszyny.
-    --key <hex>              [node] trwały klucz Ed25519 (64 hex = 32 B seed).
-                             Bez tego node losuje klucz przy starcie i klient
-                             nie ma stałej tożsamości do weryfikacji receiptu.
-    -h, --help               ta pomoc
+SUBCOMMAND (alias for --verify-receipt):
+    simon verify <receipt> [--output <file>] [--job-id <id>] [--model <m>] [--signer <hex>] [--json]
+    --key-file <file>        [node] load key seed from file.
+    --key <hex>              [node] persistent Ed25519 key (64 hex = 32 B seed).
+    -h, --help               print help
 
-PRZYKŁADY:
-    # node na Szponie (vLLM na 18020)
+EXAMPLES:
+    # node with vLLM
     simon --role node --listen /ip4/0.0.0.0/tcp/9001 --model-url http://127.0.0.1:18020 --model-hash qwen3.8-27b
 
-    # node na Franku, podpięty do Szpona
-    simon --role node --listen /ip4/0.0.0.0/tcp/9002 --bootstrap /ip4/<IP_SZPONA>/tcp/9001 --model-url http://127.0.0.1:8000 --model-hash bielik-awq
+    # agent (client) connecting to node
+    simon --role agent --bootstrap /ip4/<IP_NODE>/tcp/9001 --prompt "compute 2+2"
 
-    # agent (klient) — łączy się z nodem
-    simon --role agent --bootstrap /ip4/<IP_NODA>/tcp/9001 --prompt "policz 2+2"
+    # offline verification
+    simon verify examples/receipt.json --output examples/response.txt
 
-    # agent, duży plik (M3.x map-reduce): pytanie stosowane do każdego kawałka
-    simon --role agent --bootstrap /ip4/<IP_NODA>/tcp/9001 \
-        --file duzy_dokument.txt --prompt "streść kluczowe fakty" \
-        --chunk-tokens 4000 --map-max-tokens 200
-
-    # agent, łańcuch B2: CODER (node 1) -> TESTER (node 2), bez ręcznego przeklejania
-    simon --role agent --bootstrap /ip4/<IP_CODER>/tcp/9001 \
-        --prompt "napisz funkcję sumującą dwie liczby w Rust" \
-        --then-bootstrap /ip4/<IP_TESTER>/tcp/9002 \
-        --then-prompt "znajdź przypadek brzegowy dla tej funkcji"
-
-    # weryfikacja cudzego receiptu offline (ta sama komenda co PODKOMENDA)
-    simon verify przyklady/receipt.json --output przyklady/odpowiedz.txt
-
-UWAGA (RULES #1): prompt idzie kanałem PUNKT-PUNKT (/simon/prompt/1),
-nigdy przez gossipsub. Gossipsubem idzie tylko zlecenie bez treści.
+NOTE (RULES #1): prompt travels over point-to-point channel (/simon/prompt/1),
+never gossipsub. Only metadata travels over gossipsub.
 "#;
 
-/// Rola procesu.
+/// Process role.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Rola {
     Agent,
@@ -142,7 +87,7 @@ pub enum Rola {
     Node,
 }
 
-/// Sparsowane argumenty.
+/// Parsed options.
 #[derive(Debug, Clone)]
 pub struct Opcje {
     pub rola: Rola,
@@ -152,56 +97,42 @@ pub struct Opcje {
     pub model_hash: Option<String>,
     pub prompt: Option<String>,
     pub max_tokens: u32,
-    /// Ile promptów node liczy równocześnie (sloty backendu).
+    /// Concurrent prompts to process.
     pub max_jobs: usize,
-    /// [node] Limit zleceń na sekundę od JEDNEGO peera (kubełek, zapas 4 s); 0 = bez limitu.
+    /// [node] Rate limit orders/s per peer (0 = unlimited).
     pub rate_per_peer: f64,
-    /// Tryb czatu: żądanie OpenAI (messages, tools) z pliku albo `-` (stdin).
+    /// Chat mode request file or '-' (stdin).
     pub request_file: Option<String>,
     pub fee: u64,
-    /// M2.5.1: trwały klucz node'a (hex, 32 B seed). Bez tego node losuje
-    /// klucz przy każdym starcie i klient nie ma stałej tożsamości do weryfikacji.
+    /// Persistent node key (hex, 32 B seed).
     pub key: Option<String>,
-    /// M3.x: plik większy niż limit node'a — włącza chunkowanie + map-reduce.
+    /// File exceeding node limit - enables chunking + map-reduce.
     pub file: Option<String>,
     pub chunk_tokens: u32,
     pub map_max_tokens: u32,
-    /// B2: łańcuch agent→agent (przekazanie zweryfikowanego wyniku etapu A
-    /// jako danych wejściowych etapu B, do innego node'a/modelu).
+    /// B2 chain: pass verified stage A output to stage B.
     pub then_bootstrap: Vec<String>,
     pub then_model_hash: Option<String>,
     pub then_prompt: Option<String>,
-    /// Demo/integracja: jeden obiekt JSON na stdout zamiast tekstu dla czlowieka.
+    /// Single JSON output object.
     pub json: bool,
-    /// Sciezka do pliku z kluczem node'a. Wersja `--key <hex>` wystawia ziarno
-    /// w `ps` KAZDEMU uzytkownikowi maszyny (i w dzienniku systemd) — do
-    /// trwalego wdrozenia uzywaj pliku.
+    /// Path to node key file.
     pub key_file: Option<String>,
-    /// Weryfikacja cudzego receiptu — bez sieci, bez zaufania do kogokolwiek.
-    /// To jest cala teza projektu jako jedna komenda: dostales wynik i podpis,
-    /// sprawdzasz je sam. Wartosc: sciezka do pliku albo `-` (stdin).
+    /// Offline receipt verification path or '-' (stdin).
     pub verify_receipt: Option<String>,
     pub expect_job_id: Option<String>,
     pub expect_model: Option<String>,
-    /// Plik z odpowiedzia, ktora rzekomo opisuje receipt (`-` = stdin nie dziala,
-    /// bo stdin czyta receipt). Bez tego sprawdzasz podpis, ale NIE to, czy
-    /// dotyczy tekstu, ktory trzymasz.
+    /// File with expected output content.
     pub expect_output: Option<String>,
-    /// M5.2: plik lokalnego metrycznika pracy (JSON Lines, tylko dopisywanie).
-    /// NIE jest to portfel ani saldo — zapis, co się wydarzyło i do jakiego
-    /// poziomu zostało sprawdzone. Wykrywa też powtórzenie receiptu.
-    pub rejestr: Option<String>,
-    /// M5.2a: plik trwałej tożsamości klienta. Bez tego domyślny katalog danych
-    /// użytkownika. NIGDY nie przyjmujemy sekretu jako argumentu ani zmiennej
-    /// środowiskowej — byłby widoczny w `ps` i w historii powłoki.
+    /// M5.2: local work registry file (JSON Lines append-only).
+    pub registry: Option<String>,
+    /// M5.2a: client persistent identity file.
     pub identity_file: Option<String>,
-    /// M1: plik JSON z wiązaniem wejścia/stanu do sprawdzenia w receipcie:
-    /// `{tokenizer_hash, client_nonce, prompt_token_ids[], output_token_ids[]}`.
+    /// M1 token binding file.
     pub tokens: Option<String>,
-    /// M3: plik JSON z audytem wykonania: `{"kroki":[{indeks,node_token,topk:[[id,lp]..]}]}`.
-    /// Oceniany polityką containment (top-k + margines).
+    /// M3 execution audit file.
     pub audyt: Option<String>,
-    /// Oczekiwany klucz publiczny (hex) signera receiptu do weryfikacji offline.
+    /// Expected signer public key (hex).
     pub expect_signer: Option<String>,
 }
 
@@ -231,7 +162,7 @@ impl Opcje {
         let mut expect_job_id = None;
         let mut expect_model = None;
         let mut expect_output = None;
-        let mut rejestr = None;
+        let mut registry = None;
         let mut identity_file = None;
         let mut tokens = None;
         let mut audyt = None;
@@ -244,7 +175,7 @@ impl Opcje {
                 *i += 1;
                 args.get(*i)
                     .cloned()
-                    .ok_or_else(|| format!("brak wartości dla {nazwa}"))
+                    .ok_or_else(|| format!("missing value for {nazwa}"))
             };
             match arg {
                 "-h" | "--help" => return Err(USAGE.to_string()),
@@ -254,7 +185,7 @@ impl Opcje {
                         "agent" => Rola::Agent,
                         "coord" => Rola::Coord,
                         "node" => Rola::Node,
-                        inny => return Err(format!("nieznana rola: {inny}")),
+                        inny => return Err(format!("unknown role: {inny}")),
                     });
                 }
                 "--listen" => listen = Some(wartosc(&mut i, "--listen")?),
@@ -265,38 +196,38 @@ impl Opcje {
                 "--request-file" => request_file = Some(wartosc(&mut i, "--request-file")?),
                 "--max-tokens" => {
                     let v = wartosc(&mut i, "--max-tokens")?;
-                    max_tokens = v.parse().map_err(|_| format!("zły --max-tokens: {v}"))?;
+                    max_tokens = v.parse().map_err(|_| format!("invalid --max-tokens: {v}"))?;
                 }
                 "--max-jobs" => {
                     let v = wartosc(&mut i, "--max-jobs")?;
-                    max_jobs = v.parse().map_err(|_| format!("zły --max-jobs: {v}"))?;
+                    max_jobs = v.parse().map_err(|_| format!("invalid --max-jobs: {v}"))?;
                     if max_jobs == 0 {
-                        return Err("--max-jobs musi być > 0".to_string());
+                        return Err("--max-jobs must be > 0".to_string());
                     }
                 }
                 "--rate-per-peer" => {
                     let v = wartosc(&mut i, "--rate-per-peer")?;
-                    rate_per_peer = v.parse().map_err(|_| format!("zły --rate-per-peer: {v}"))?;
+                    rate_per_peer = v.parse().map_err(|_| format!("invalid --rate-per-peer: {v}"))?;
                     if !(rate_per_peer >= 0.0 && rate_per_peer.is_finite()) {
-                        return Err("--rate-per-peer musi być >= 0".to_string());
+                        return Err("--rate-per-peer must be >= 0".to_string());
                     }
                 }
                 "--fee" => {
                     let v = wartosc(&mut i, "--fee")?;
-                    fee = v.parse().map_err(|_| format!("zły --fee: {v}"))?;
+                    fee = v.parse().map_err(|_| format!("invalid --fee: {v}"))?;
                 }
                 "--key" => key = Some(wartosc(&mut i, "--key")?),
                 "--file" => file = Some(wartosc(&mut i, "--file")?),
                 "--chunk-tokens" => {
                     let v = wartosc(&mut i, "--chunk-tokens")?;
-                    chunk_tokens = v.parse().map_err(|_| format!("zły --chunk-tokens: {v}"))?;
+                    chunk_tokens = v.parse().map_err(|_| format!("invalid --chunk-tokens: {v}"))?;
                     if chunk_tokens == 0 {
-                        return Err("--chunk-tokens musi być > 0".to_string());
+                        return Err("--chunk-tokens must be > 0".to_string());
                     }
                 }
                 "--map-max-tokens" => {
                     let v = wartosc(&mut i, "--map-max-tokens")?;
-                    map_max_tokens = v.parse().map_err(|_| format!("zły --map-max-tokens: {v}"))?;
+                    map_max_tokens = v.parse().map_err(|_| format!("invalid --map-max-tokens: {v}"))?;
                 }
                 "--then-bootstrap" => then_bootstrap.push(wartosc(&mut i, "--then-bootstrap")?),
                 "--then-model-hash" => then_model_hash = Some(wartosc(&mut i, "--then-model-hash")?),
@@ -307,21 +238,21 @@ impl Opcje {
                 "--expect-job-id" => expect_job_id = Some(wartosc(&mut i, "--expect-job-id")?),
                 "--expect-model" => expect_model = Some(wartosc(&mut i, "--expect-model")?),
                 "--expect-output" => expect_output = Some(wartosc(&mut i, "--expect-output")?),
-                "--rejestr" => rejestr = Some(wartosc(&mut i, "--rejestr")?),
+                "--registry" => registry = Some(wartosc(&mut i, "--registry")?),
                 "--identity-file" => identity_file = Some(wartosc(&mut i, "--identity-file")?),
                 "--tokens" => tokens = Some(wartosc(&mut i, "--tokens")?),
                 "--audyt" => audyt = Some(wartosc(&mut i, "--audyt")?),
                 "--expect-signer" | "--signer" => expect_signer = Some(wartosc(&mut i, arg)?),
-                inny => return Err(format!("nieznany argument: {inny}")),
+                inny => return Err(format!("unknown argument: {inny}")),
             }
             i += 1;
         }
 
         let rola = match rola {
             Some(r) => r,
-            // --verify-receipt dziala offline, rola jest bez znaczenia
+            // --verify-receipt works offline, role is immaterial
             None if verify_receipt.is_some() => Rola::Agent,
-            None => return Err("brak --role (agent|coord|node)".into()),
+            None => return Err("missing --role (agent|coord|node)".into()),
         };
         Ok(Self {
             rola,
@@ -348,7 +279,7 @@ impl Opcje {
             expect_job_id,
             expect_model,
             expect_output,
-            rejestr,
+            registry,
             identity_file,
             tokens,
             audyt,
@@ -365,10 +296,7 @@ struct PlikTokenow {
     output_token_ids: Vec<u32>,
 }
 
-/// `--verify-receipt`: sprawdza receipt, ktory ktos nam podal. Bez sieci,
-/// bez runtime, bez zaufania do zrodla. Kazda bramka raportowana OSOBNO —
-/// "nie przeszlo" bez wskazania KTOREJ bramki jest bezuzyteczne dla kogos,
-/// kto probuje zrozumiec, co go oszukalo.
+/// `--verify-receipt`: verifies a provided receipt offline.
 fn weryfikuj_offline(opcje: &Opcje, zrodlo: &str) -> ExitCode {
     use std::io::Read;
     let tekst = if zrodlo == "-" {
@@ -376,7 +304,7 @@ fn weryfikuj_offline(opcje: &Opcje, zrodlo: &str) -> ExitCode {
         match std::io::stdin().read_to_string(&mut b) {
             Ok(_) => b,
             Err(e) => {
-                eprintln!("BŁĄD: nie mogę czytać stdin: {e}");
+                eprintln!("ERROR: cannot read stdin: {e}");
                 return ExitCode::FAILURE;
             }
         }
@@ -384,7 +312,7 @@ fn weryfikuj_offline(opcje: &Opcje, zrodlo: &str) -> ExitCode {
         match std::fs::read_to_string(zrodlo) {
             Ok(t) => t,
             Err(e) => {
-                eprintln!("BŁĄD: nie mogę czytać {zrodlo}: {e}");
+                eprintln!("ERROR: cannot read {zrodlo}: {e}");
                 return ExitCode::FAILURE;
             }
         }
@@ -395,21 +323,20 @@ fn weryfikuj_offline(opcje: &Opcje, zrodlo: &str) -> ExitCode {
         Err(e) => {
             if opcje.json {
                 println!("{}", serde_json::json!({
-                    "ok": false, "parsuje_sie": false, "powod": e.to_string()}));
+                    "ok": false, "parses": false, "parsuje_sie": false, "reason": e.to_string(), "powod": e.to_string()}));
             } else {
-                eprintln!("NIEPOPRAWNY: to nie jest receipt ({e})");
+                eprintln!("INVALID: not a receipt ({e})");
             }
             return ExitCode::FAILURE;
         }
     };
 
     let podpis_ok = r.verify_self().is_ok();
-    // Czy receipt opisuje TEN tekst — bramka, ktorej brakowalo do 2026-09-18.
     let tresc_ok = match opcje.expect_output.as_deref() {
         Some(sciezka) => match std::fs::read_to_string(sciezka) {
-            Ok(t) => Some(r.zgodny_z_wyjsciem(&t)),
+            Ok(t) => Some(r.matches_output(&t)),
             Err(e) => {
-                eprintln!("BŁĄD: nie mogę czytać --expect-output {sciezka}: {e}");
+                eprintln!("ERROR: cannot read --expect-output {sciezka}: {e}");
                 return ExitCode::FAILURE;
             }
         },
@@ -422,7 +349,7 @@ fn weryfikuj_offline(opcje: &Opcje, zrodlo: &str) -> ExitCode {
             let zgadza_sie = r.signer.to_hex().eq_ignore_ascii_case(hex_pk.trim());
             if !zgadza_sie && !opcje.json {
                 eprintln!(
-                    "BŁĄD: signer receiptu ({}) nie zgadza się z oczekiwanym ({})",
+                    "ERROR: receipt signer ({}) does not match expected ({})",
                     r.signer.to_hex(),
                     hex_pk.trim()
                 );
@@ -432,25 +359,25 @@ fn weryfikuj_offline(opcje: &Opcje, zrodlo: &str) -> ExitCode {
         None => None,
     };
 
-    // M1: opcjonalne wiązanie wejścia/stanu (tokeny po stronie klienta).
+    // M1: optional input/state token binding.
     let m1_wynik = match opcje.tokens.as_deref() {
         Some(sciezka) => {
             let tekst = match std::fs::read_to_string(sciezka) {
                 Ok(t) => t,
                 Err(e) => {
-                    eprintln!("BŁĄD: nie mogę czytać --tokens {sciezka}: {e}");
+                    eprintln!("ERROR: cannot read --tokens {sciezka}: {e}");
                     return ExitCode::FAILURE;
                 }
             };
             match serde_json::from_str::<PlikTokenow>(&tekst) {
-                Ok(p) => Some(r.zweryfikuj_m1(
+                Ok(p) => Some(r.verify_m1(
                     &p.tokenizer_hash,
                     &p.client_nonce,
                     &p.prompt_token_ids,
                     &p.output_token_ids,
                 )),
                 Err(e) => {
-                    eprintln!("BŁĄD: zły format --tokens {sciezka}: {e}");
+                    eprintln!("ERROR: invalid format --tokens {sciezka}: {e}");
                     return ExitCode::FAILURE;
                 }
             }
@@ -459,20 +386,20 @@ fn weryfikuj_offline(opcje: &Opcje, zrodlo: &str) -> ExitCode {
     };
     let m1_ok = m1_wynik.as_ref().map(|w| w.is_ok());
 
-    // M3: opcjonalny audyt containment (top-k + margines).
+    // M3: optional containment execution audit.
     let m3_wynik = match opcje.audyt.as_deref() {
         Some(sciezka) => {
             let tekst = match std::fs::read_to_string(sciezka) {
                 Ok(t) => t,
                 Err(e) => {
-                    eprintln!("BŁĄD: nie mogę czytać --audyt {sciezka}: {e}");
+                    eprintln!("ERROR: cannot read --audyt {sciezka}: {e}");
                     return ExitCode::FAILURE;
                 }
             };
-            match simon_core::m3::ocena_json(&tekst, &simon_core::m3::Polityka::default()) {
+            match simon_core::m3::evaluate_json(&tekst, &simon_core::m3::M3Policy::default()) {
                 Ok(w) => Some(w),
                 Err(e) => {
-                    eprintln!("BŁĄD: zły format --audyt {sciezka}: {e}");
+                    eprintln!("ERROR: invalid format --audyt {sciezka}: {e}");
                     return ExitCode::FAILURE;
                 }
             }
@@ -492,13 +419,16 @@ fn weryfikuj_offline(opcje: &Opcje, zrodlo: &str) -> ExitCode {
     if opcje.json {
         println!("{}", serde_json::json!({
             "ok": ok,
+            "parses": true,
             "parsuje_sie": true,
+            "signature_ok": podpis_ok,
             "podpis_ok": podpis_ok,
             "job_id_ok": job_ok,
             "model_ok": model_ok,
             "signer_ok": signer_ok,
+            "content_ok": tresc_ok,
             "tresc_ok": tresc_ok,
-            "poziom": r.poziom(),
+            "level": r.level(),
             "m1_ok": m1_ok,
             "m3_ok": m3_ok,
             "prompt_tokens": r.prompt_tokens,
@@ -510,45 +440,42 @@ fn weryfikuj_offline(opcje: &Opcje, zrodlo: &str) -> ExitCode {
             "signer": r.signer,
         }));
     } else {
-        println!("podpis Ed25519 : {}", if podpis_ok { "OK" } else { "ZŁY" });
-        if let Some(v) = job_ok { println!("job_id         : {}", if v { "zgodny" } else { "NIEZGODNY" }); }
-        if let Some(v) = model_ok { println!("model_hash     : {}", if v { "zgodny" } else { "NIEZGODNY" }); }
-        if let Some(v) = signer_ok { println!("signer         : {}", if v { "zgodny" } else { "NIEZGODNY — inny klucz node'a niż oczekiwany" }); }
-        if let Some(v) = tresc_ok { println!("treść wyniku   : {}", if v { "zgodna z odciskiem" } else { "NIEZGODNA — to nie jest ten wynik" }); }
+        println!("Ed25519 signature : {}", if podpis_ok { "OK" } else { "INVALID" });
+        if let Some(v) = job_ok { println!("job_id           : {}", if v { "matches" } else { "MISMATCH" }); }
+        if let Some(v) = model_ok { println!("model_hash       : {}", if v { "matches" } else { "MISMATCH" }); }
+        if let Some(v) = signer_ok { println!("signer           : {}", if v { "matches" } else { "MISMATCH — different node key than expected" }); }
+        if let Some(v) = tresc_ok { println!("output content   : {}", if v { "matches digest" } else { "MISMATCH — content does not match" }); }
         if let Some(w) = m1_wynik.as_ref() {
             match w {
-                Ok(()) => println!("wiązanie M1    : OK (tokenizer + nonce + prompt + wyjście)"),
-                Err(e) => println!("wiązanie M1    : ZŁE — {e}"),
+                Ok(()) => println!("M1 binding       : OK (tokenizer + nonce + prompt + output)"),
+                Err(e) => println!("M1 binding       : FAILED — {e}"),
             }
         }
         if let Some(w) = m3_wynik.as_ref() {
             println!(
-                "audyt M3       : {} (kroków={}, w top-k={}, poza={}, najgorszy rank={}, margines={:.4})",
-                if w.ok { "OK" } else { "ODRZUCONY" },
-                w.krokow, w.w_topk, w.poza_topk, w.najgorszy_rank, w.najgorszy_margin
+                "M3 audit         : {} (steps={}, in top-k={}, outside={}, worst rank={}, margin={:.4})",
+                if w.ok { "OK" } else { "REJECTED" },
+                w.steps, w.in_topk, w.outside_topk, w.worst_rank, w.worst_margin
             );
-            if let Some(p) = &w.powod {
-                println!("                 {p}");
+            if let Some(p) = &w.reason {
+                println!("                   {p}");
             }
         }
-        let pz = r.poziom();
-        println!("poziom dowodu  : {pz}");
+        let pz = r.level();
+        println!("proof level      : {pz}");
         if pz == 0 {
             println!(
-                "UWAGA          : poziom 0 = tylko autorstwo/podpis; BRAK wiązania wejścia/stanu (M1).\n                 \
-                 Nie przedstawiać jako weryfikacji wykonania (docs/THREAT-MODEL.md)."
+                "NOTE             : level 0 = authorship/signature only; NO input/state binding (M1).\n                   \
+                 Do not present as execution verification (docs/THREAT-MODEL.md)."
             );
         }
-        println!("node           : {}", r.node_id);
-        println!("werdykt        : {}", if ok { "RECEIPT WAŻNY" } else { "ODRZUCONY" });
+        println!("node             : {}", r.node_id);
+        println!("verdict          : {}", if ok { "RECEIPT VALID" } else { "REJECTED" });
     }
     if ok { ExitCode::SUCCESS } else { ExitCode::FAILURE }
 }
 
-/// `simon verify <receipt> [--output f] [--job-id id] [--model m] [--json]`
-/// rozwija się do flag `--verify-receipt` / `--expect-*` — ta sama ścieżka, ten
-/// sam kod (`weryfikuj_offline`), zero drugiej implementacji. Każdy inny
-/// argument (w tym nieznany) idzie jak jest; parser go zgłosi.
+/// Expands `simon verify` subcommand into `--verify-receipt` / `--expect-*` flags.
 fn rozwin_podkomende(args: Vec<String>) -> Vec<String> {
     if args.first().map(String::as_str) != Some("verify") {
         return args;
@@ -558,7 +485,7 @@ fn rozwin_podkomende(args: Vec<String>) -> Vec<String> {
     let mut i = 1;
     while i < args.len() {
         let a = args[i].clone();
-        // Flaga z wartością: `cel` to nazwa po przejściu, `args[i+1]` to wartość.
+        // Flag with value: `cel` is destination flag, `args[i+1]` is value.
         let z_wartoscia = |out: &mut Vec<String>, cel: &str, i: &mut usize| {
             out.push(cel.to_string());
             if let Some(v) = args.get(*i + 1) {
@@ -577,7 +504,7 @@ fn rozwin_podkomende(args: Vec<String>) -> Vec<String> {
                 if receipt.is_none() {
                     receipt = Some(a);
                 } else {
-                    out.push(a); // nadmiarowy pozycyjny — parser zgłosi
+                    out.push(a); // extra positional arg
                 }
             }
             _ => out.push(a),
@@ -591,7 +518,6 @@ fn rozwin_podkomende(args: Vec<String>) -> Vec<String> {
             final_args.push("--verify-receipt".into());
             final_args.push(r);
         }
-        // `simon verify` bez pliku i bez --help: niech parser powie, czego brak.
         None if !out.iter().any(|s| s == "--help") => {
             final_args.push("--verify-receipt".into());
         }
@@ -601,24 +527,22 @@ fn rozwin_podkomende(args: Vec<String>) -> Vec<String> {
     final_args
 }
 
-/// `simon audyt <plik.json> [--poziom N]` — ocenia sam audyt M3 (containment top-k),
-/// bez receiptu. Dla verifier-loop: inferencję robi strona zewnętrzna (llama.cpp),
-/// a decyzję (Pass/SoftFail/HardFail) liczy Rust. `--poziom` = poziom receiptu (dom. 1).
+/// Evaluates M3 containment audit without receipt.
 fn audyt_podkomenda(args: &[String]) -> ExitCode {
     let mut plik: Option<&str> = None;
-    let mut poziom: u8 = 1;
+    let mut level: u8 = 1;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
-            "--poziom" => {
+            "--level" => {
                 i += 1;
-                poziom = args.get(i).and_then(|s| s.parse().ok()).unwrap_or(1);
+                level = args.get(i).and_then(|s| s.parse().ok()).unwrap_or(1);
             }
             "-h" | "--help" => {
                 println!(
-                    "simon audyt <plik.json> [--poziom N]\n  \
-                     ocenia audyt M3 (kroki: node_token vs top-k) polityką k=2/margin 0,25;\n  \
-                     decyzja: Pass / SoftFail (bez slasha) / HardFail / BrakPodstaw"
+                    "simon audit <file.json> [--level N]\n  \
+                     evaluates M3 audit (steps: node_token vs top-k) with k=2/margin 0.25 policy;\n  \
+                     decision: Pass / SoftFail / HardFail / NoGrounds"
                 );
                 return ExitCode::SUCCESS;
             }
@@ -627,46 +551,42 @@ fn audyt_podkomenda(args: &[String]) -> ExitCode {
         i += 1;
     }
     let Some(sciezka) = plik else {
-        eprintln!("BŁĄD: podaj plik audytu: simon audyt <plik.json>");
+        eprintln!("ERROR: provide audit file: simon audit <file.json>");
         return ExitCode::FAILURE;
     };
     let tekst = match std::fs::read_to_string(sciezka) {
         Ok(t) => t,
         Err(e) => {
-            eprintln!("BŁĄD: nie mogę czytać {sciezka}: {e}");
+            eprintln!("ERROR: cannot read {sciezka}: {e}");
             return ExitCode::FAILURE;
         }
     };
-    match simon_core::m3::ocena_json(&tekst, &simon_core::m3::Polityka::default()) {
+    match simon_core::m3::evaluate_json(&tekst, &simon_core::m3::M3Policy::default()) {
         Ok(w) => {
-            let d = simon_core::m3::decyzja(&w, poziom, &simon_core::m3::Progi::default());
+            let d = simon_core::m3::decide(&w, level, &simon_core::m3::M3Thresholds::default());
             println!(
-                "audyt      : kroków={} w top-k={} poza-top-k={} najgorszy rank={} margines={:.4}",
-                w.krokow, w.w_topk, w.poza_topk, w.najgorszy_rank, w.najgorszy_margin
+                "audit      : steps={} in top-k={} outside-top-k={} worst rank={} margin={:.4}",
+                w.steps, w.in_topk, w.outside_topk, w.worst_rank, w.worst_margin
             );
-            println!("werdykt M3 : {}", if w.ok { "OK" } else { "NIE" });
-            println!("decyzja    : {d:?} (poziom receiptu {poziom})");
-            if let Some(p) = &w.powod {
-                println!("powód      : {p}");
+            println!("verdict M3 : {}", if w.ok { "OK" } else { "FAIL" });
+            println!("decision   : {d:?} (receipt level {level})");
+            if let Some(p) = &w.reason {
+                println!("reason     : {p}");
             }
-            if matches!(d, simon_core::m3::Decyzja::HardFail) {
+            if matches!(d, simon_core::m3::Decision::HardFail) {
                 ExitCode::FAILURE
             } else {
                 ExitCode::SUCCESS
             }
         }
         Err(e) => {
-            eprintln!("BŁĄD: zły audyt: {e}");
+            eprintln!("ERROR: invalid audit: {e}");
             ExitCode::FAILURE
         }
     }
 }
 
-/// `simon guard [--url U] [--stdin] "tekst"` — brama wejścia (guard CPU na loopbacku).
-/// POST `{text}` → `{ryzyko, pii, sekret, kategorie, ms_*}`. Wyjście != 0 gdy `ryzyko`.
-/// To jest wpięcie guarda w harness po stronie klienta (pre-send); ten sam wzorzec
-/// działa dla node'a (pre-compute). UWAGA: guard widzi treść (RULES #1) i NIE łapie
-/// prompt injection — patrz `docs/THREAT-MODEL.md`.
+/// `simon guard [--url U] [--stdin] "text"` - guard entrance gateway.
 fn guard_podkomenda(args: &[String]) -> ExitCode {
     let mut url = "http://127.0.0.1:19301/guard".to_string();
     let mut tekst: Option<String> = None;
@@ -682,7 +602,7 @@ fn guard_podkomenda(args: &[String]) -> ExitCode {
             }
             "--stdin" => ze_stdin = true,
             "-h" | "--help" => {
-                println!("simon guard [--url http://127.0.0.1:19301/guard] [--stdin] \"tekst\"");
+                println!("simon guard [--url http://127.0.0.1:19301/guard] [--stdin] \"text\"");
                 return ExitCode::SUCCESS;
             }
             inny => tekst = Some(inny.to_string()),
@@ -693,19 +613,19 @@ fn guard_podkomenda(args: &[String]) -> ExitCode {
         use std::io::Read;
         let mut s = String::new();
         if std::io::stdin().read_to_string(&mut s).is_err() {
-            eprintln!("BŁĄD: nie mogę czytać stdin");
+            eprintln!("ERROR: cannot read stdin");
             return ExitCode::FAILURE;
         }
         tekst = Some(s);
     }
     let Some(t) = tekst else {
-        eprintln!("BŁĄD: podaj tekst albo --stdin");
+        eprintln!("ERROR: provide text or --stdin");
         return ExitCode::FAILURE;
     };
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
-            eprintln!("BŁĄD: runtime: {e}");
+            eprintln!("ERROR: runtime: {e}");
             return ExitCode::FAILURE;
         }
     };
@@ -730,7 +650,7 @@ fn guard_podkomenda(args: &[String]) -> ExitCode {
                 }
             }
             Err(e) => {
-                eprintln!("BŁĄD: guard niedostępny pod {url} ({e})");
+                eprintln!("ERROR: guard unavailable at {url} ({e})");
                 ExitCode::FAILURE
             }
         }
@@ -749,18 +669,16 @@ fn main() -> ExitCode {
     let opcje = match Opcje::parse(&args) {
         Ok(o) => o,
         Err(msg) => {
-            // --help to nie błąd, tylko pomoc.
             if msg.starts_with('\n') {
                 println!("{msg}");
                 return ExitCode::SUCCESS;
             }
-            eprintln!("BŁĄD: {msg}\n{USAGE}");
+            eprintln!("ERROR: {msg}\n{USAGE}");
             return ExitCode::FAILURE;
         }
     };
 
-    // Weryfikacja cudzego receiptu jest offline — nie stawiamy runtime'u
-    // ani nie dotykamy sieci.
+    // Offline receipt verification without runtime or networking.
     if let Some(zrodlo) = opcje.verify_receipt.clone() {
         return weryfikuj_offline(&opcje, &zrodlo);
     }
@@ -768,23 +686,23 @@ fn main() -> ExitCode {
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
-            eprintln!("BŁĄD: nie mogę wystartować runtime: {e}");
+            eprintln!("ERROR: cannot start runtime: {e}");
             return ExitCode::FAILURE;
         }
     };
 
     let wynik = rt.block_on(async {
         match opcje.rola {
-            Rola::Node => node::uruchom(&opcje).await,
-            Rola::Agent => agent::uruchom(&opcje).await,
-            Rola::Coord => coord::uruchom(&opcje).await,
+            Rola::Node => node::run(&opcje).await,
+            Rola::Agent => agent::run(&opcje).await,
+            Rola::Coord => coord::run(&opcje).await,
         }
     });
 
     match wynik {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("BŁĄD: {e}");
+            eprintln!("ERROR: {e}");
             ExitCode::FAILURE
         }
     }
@@ -795,21 +713,17 @@ mod testy_opcji {
     use super::*;
 
     #[test]
-    fn prompt_myslnik_parsuje_sie_jak_kazda_inna_wartosc() {
-        // `--prompt -` to dla parsera zwykła wartość — stdin odczytuje agent.rs
-        // PRZED siecią (patrz agent::wczytaj_prompt_stdin), nie parser. Tu
-        // sprawdzamy tylko, że flaga przechodzi i `-` ląduje w opcje.prompt,
-        // a stary `--prompt <tekst>` (kompatybilność wstecz) działa jak wcześniej.
+    fn prompt_dash_parses_like_any_other_value() {
         let args: Vec<String> = ["--role", "agent", "--bootstrap", "/ip4/1.2.3.4/tcp/9001", "--prompt", "-"]
             .iter().map(|s| s.to_string()).collect();
-        let opcje = Opcje::parse(&args).expect("parsowanie nie powinno paść");
+        let opcje = Opcje::parse(&args).expect("parsing must succeed");
         assert_eq!(opcje.prompt, Some("-".to_string()));
 
         let args_tekst: Vec<String> = ["--role", "agent", "--bootstrap", "/ip4/1.2.3.4/tcp/9001",
-                                       "--prompt", "policz 2+2"]
+                                       "--prompt", "compute 2+2"]
             .iter().map(|s| s.to_string()).collect();
-        let opcje_tekst = Opcje::parse(&args_tekst).expect("parsowanie nie powinno paść");
-        assert_eq!(opcje_tekst.prompt, Some("policz 2+2".to_string()));
+        let opcje_tekst = Opcje::parse(&args_tekst).expect("parsing must succeed");
+        assert_eq!(opcje_tekst.prompt, Some("compute 2+2".to_string()));
     }
 }
 
@@ -864,12 +778,12 @@ mod testy_cli {
             activation_hash: "act".into(),
             prompt_tokens: 1,
             completion_tokens: 1,
-            output_digest: simon_core::receipt::odcisk_wyjscia("j1", "tekst").unwrap(),
+            output_digest: simon_core::receipt::output_digest_for("j1", "tekst").unwrap(),
             started_at_us: 100,
             finished_at_us: 200,
             signer: klucz1.public(),
             signature: None,
-            wiazania: None,
+            bindings: None,
         };
         let signed = r.sign(&klucz1).unwrap();
         let sciezka = std::env::temp_dir().join(format!(

@@ -1,9 +1,9 @@
-//! Rola `node` — worker: subskrybuje kanał promptu, liczy modelem, zwraca wynik + receipt.
+//! Role `node` - worker: subscribes to prompt channel, runs model, returns result + receipt.
 //!
-//! **M1.2:** node przyjmuje prompt kanałem PUNKT-PUNKT (`/simon/prompt/1`),
-//! nie przez gossipsub. Gossipsubem dostaje tylko zlecenia bez treści.
+//! **M1.2:** node receives prompt via point-to-point channel (`/simon/prompt/1`),
+//! not via gossipsub. Gossipsub carries only metadata without payload.
 
-use crate::wspolne::{wypisz_adresy, zbuduj_swarm, ZachowanieEvent};
+use crate::common::{build_swarm, print_listen_addrs, SwarmBehaviourEvent};
 use crate::Opcje;
 use futures::StreamExt;
 use libp2p::request_response::{Event as RrEvent, Message as RrMessage};
@@ -18,23 +18,20 @@ use tokio::sync::Semaphore;
 /// Domniemany endpoint modelu (vLLM/Ollama, API OpenAI).
 const DOMYSLNY_MODEL_URL: &str = "http://127.0.0.1:18020";
 
-pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
+pub async fn run(opcje: &Opcje) -> Result<(), String> {
     let listen = opcje
         .listen
         .clone()
         .map(|l| vec![l])
         .unwrap_or_else(|| vec!["/ip4/0.0.0.0/tcp/9001".to_string()]);
 
-    // Losowy peer_id per proces — Some(N) dawał WSZYSTKIM node'om ten sam
-    // peer_id, co rozjeżdża się przy odkrywaniu peerów (Kademlia/gossipsub)
-    // w sieci z więcej niż jednym node'em na maszynę (złapane 2026-09-17
-    // przy teście 2 równoczesnych agentów).
+    // Random peer_id per process to avoid collision across multiple nodes per host.
     // M2.5.1 + demo publiczne: ziarno musi byc znane PRZED budowa swarmu,
     // bo z niego wyprowadzamy takze trwaly peer_id.
     let z_pliku = match opcje.key_file.as_deref() {
         Some(p) => Some(
             std::fs::read_to_string(p)
-                .map_err(|e| format!("nie mogę czytać --key-file {p}: {e}"))?
+                .map_err(|e| format!("cannot read --key-file {p}: {e}"))?
                 .trim()
                 .to_string(),
         ),
@@ -42,17 +39,16 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
     };
     let ziarno: Option<[u8; 32]> = match z_pliku.as_deref().or(opcje.key.as_deref()) {
         Some(hexstr) => {
-            let raw = hex::decode(hexstr).map_err(|e| format!("zły --key (hex): {e}"))?;
+            let raw = hex::decode(hexstr).map_err(|e| format!("invalid --key (hex): {e}"))?;
             Some(raw.try_into()
-                .map_err(|_| "--key musi mieć 32 bajty (64 znaki hex)".to_string())?)
+                .map_err(|_| "--key must be 32 bytes (64 hex characters)".to_string())?)
         }
         None => None,
     };
-    let mut swarm = zbuduj_swarm(&listen, &opcje.bootstrap, ziarno)?;
-    wypisz_adresy(&swarm, "node");
+    let mut swarm = build_swarm(&listen, &opcje.bootstrap, ziarno)?;
+    print_listen_addrs(&swarm, "node");
 
-    // C-gate: node OGŁASZA się w sieci (model + max_ctx), żeby koordynator
-    // mógł filtrować przydział. Bez tego nikt nie wie, kto co serwuje.
+    // C-gate: node announces itself in network (model + max_ctx) for coordinator routing.
     let topic_rejestracji = libp2p::gossipsub::IdentTopic::new(
         simon_harness::client_protocol::TOPIC_NODE_REGISTER,
     );
@@ -70,44 +66,39 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
         .model_hash
         .clone()
         .unwrap_or_else(|| "nieznany".to_string());
-    // C: node odczytuje SWOJE fakty z vLLM, zamiast je konfigurować.
-    // vLLM jest źródłem prawdy o samym sobie — zero rozjazdu z rzeczywistością.
+    // C: node reads its own facts from vLLM instead of guessing.
     let (model_z_backendu, max_ctx) =
-        odczytaj_moje_fakty(&model_url, opcje.model_hash.as_deref()).await;
+        probe_backend_facts(&model_url, opcje.model_hash.as_deref()).await;
     if max_ctx == 0 {
-        eprintln!("[node] UWAGA: nie mogę odczytać max_model_len — nie będę odrzucał zleceń");
+        eprintln!("[node] WARNING: cannot read max_model_len - will not reject by context limit");
     } else {
         println!("[node] max_ctx (z /v1/models) = {max_ctx}");
     }
-    // C-gate: co node DEKLARUJE (idzie do rejestru → filtrowanie przydziału).
-    // `--model-hash` zostaje jako etykieta, ale prawda pochodzi z vLLM.
-    // Gdy backend potwierdził żądany model — ogłaszamy jego `id`. Gdy nie
-    // potwierdził, ogłaszamy to, co sami deklarujemy, ale MÓWIMY o tym głośno:
-    // cicha etykieta bez pokrycia jest gorsza niż brak etykiety.
+    // C-gate: node declared capability (sent to registry for routing).
+    // Confirmed model ID is announced if verified by backend.
     let model_deklarowany = match model_z_backendu {
         Some(m) => m,
         None => {
             eprintln!(
-                "[node] UWAGA: ogłaszam '{model_hash}' BEZ potwierdzenia od backendu"
+                "[node] WARNING: announcing '{model_hash}' WITHOUT backend confirmation"
             );
             model_hash.clone()
         }
     };
-    println!("[node] deklaruję: model={model_deklarowany} max_ctx={max_ctx}");
-    let runtime = wykryj_runtime(&model_url).await;
+    println!("[node] declaring: model={model_deklarowany} max_ctx={max_ctx}");
+    let runtime = detect_runtime(&model_url).await;
     println!("[node] model_url={model_url} model_hash={model_hash} runtime={runtime}");
 
-    // M2.5.1: tożsamość node'a. Bez trwałego klucza klient nie ma czego weryfikować —
-    // receipt podpisany losowym kluczem nie wiąże wyniku z konkretnym węzłem.
+    // M2.5.1: node identity. Keypair bounds output to a specific node.
     let klucz = match ziarno {
         Some(seed) => Keypair::from_seed(&seed),
         None => {
-            println!("[node] UWAGA: brak --key — klucz losowy, tożsamość (i peer_id) zmieni się po restarcie");
+            println!("[node] WARNING: missing --key - random key generated, identity will change upon restart");
             Keypair::generate()
         }
     };
     println!("[node] node_id={}", klucz.public().to_hex());
-    // Rejestracja: to, co node realnie ma (nie to, co mu kazano wpisać), podpisane kluczem node'a.
+    // Registration: actual node configuration signed with node key.
     let rejestracja = simon_node::RegisterMsg::new(
         klucz.public().to_hex(),
         klucz.public(),
@@ -116,7 +107,7 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
                 "model_hash": model_deklarowany,
                 "max_ctx": max_ctx,
             }),
-            // Atestacja przez koordynatora dochodzi w M2.5.3 (pomiar na dwóch kartach).
+            // Attestation by coordinator comes in M2.5.3 (dual-card measurement).
             attested: Some(serde_json::json!({
                 "model_hash": model_deklarowany,
                 "max_ctx": max_ctx,
@@ -124,7 +115,7 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
         },
     )
     .sign(&klucz)
-    .map_err(|e| format!("nie mogę podpisać rejestracji: {e}"))?;
+    .map_err(|e| format!("cannot sign registration: {e}"))?;
     if let Ok(bajty) = serde_json::to_vec(&rejestracja) {
         match swarm.behaviour_mut().gossipsub.publish(
             libp2p::gossipsub::IdentTopic::new(
@@ -132,25 +123,18 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
             ),
             bajty,
         ) {
-            Ok(_) => println!("[node] zarejestrowany: model={model_deklarowany} max_ctx={max_ctx}"),
-            Err(e) => eprintln!("[node] nie mogę się zarejestrować: {e}"),
+            Ok(_) => println!("[node] registered: model={model_deklarowany} max_ctx={max_ctx}"),
+            Err(e) => eprintln!("[node] registration failed: {e}"),
         }
     }
 
-    // Zadania liczymy POZA pętlą swarmu. Wcześniej `policz` był awaitowany
-    // tu, w pętli: przez cały czas generowania swarm nie był pollowany, więc
-    // połączenia, które przyszły w tym czasie, nie dostawały handlera, a ich
-    // prompty ginęły bez śladu (zmierzone 2026-10-11: 4 agenty, joby ~15 s,
-    // 2 prompty nigdy nie dotarły, agenci czekali do swojego timeoutu 300 s).
+    // Tasks are computed outside the swarm loop.
     let sloty = Arc::new(Semaphore::new(opcje.max_jobs));
-    // ponytail: stała kolejka na slot; konfigurowalna, gdy ktoś zmierzy, że 4 to źle.
-    // Zadania w kolejce czekają w ramach `REQUEST_TIMEOUT` protokołu (300 s),
-    // więc głębsza kolejka i tak skończyłaby się timeoutem u klienta.
+    // Fixed queue limit per slot; requests wait within protocol REQUEST_TIMEOUT (300s).
     let przyjecia = Arc::new(Semaphore::new(opcje.max_jobs * KOLEJKA_NA_SLOT));
     let (gotowe_tx, mut gotowe_rx) = tokio::sync::mpsc::unbounded_channel();
-    // DoS z wnętrza sieci (model zagrożeń „firma w VPN”): jeden peer nie może zająć całej kolejki,
-    // a powtórzone zlecenie (ten sam peer + job_id) nie liczy się drugi raz na GPU.
-    let mut kubelki: std::collections::HashMap<libp2p::PeerId, simon_core::protokol::Kubelek> =
+    // Rate limiting and duplicate job rejection per peer to prevent queue exhaustion.
+    let mut kubelki: std::collections::HashMap<libp2p::PeerId, simon_core::protocol::TokenBucket> =
         std::collections::HashMap::new();
     let mut ostatnie_joby: std::collections::VecDeque<(libp2p::PeerId, String)> =
         std::collections::VecDeque::new();
@@ -163,7 +147,7 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
     });
 
     println!(
-        "[node] czekam na prompty (punk-punkt, /simon/prompt/1), max_jobs={} kolejka={}...",
+        "[node] waiting for prompts (point-to-point, /simon/prompt/1), max_jobs={} queue={}...",
         opcje.max_jobs,
         opcje.max_jobs * KOLEJKA_NA_SLOT
     );
@@ -172,14 +156,14 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
         let zdarzenie = tokio::select! {
             Some((channel, reply)) = gotowe_rx.recv() => {
                 if let Err(e) = swarm.behaviour_mut().prompt_rr.send_response(channel, reply) {
-                    eprintln!("[node] nie mogę odesłać odpowiedzi (klient się rozłączył?): {e:?}");
+                    eprintln!("[node] cannot return response (client disconnected?): {e:?}");
                 }
                 continue;
             }
             z = swarm.select_next_some() => z,
         };
         match zdarzenie {
-            SwarmEvent::Behaviour(ZachowanieEvent::PromptRr(RrEvent::Message {
+            SwarmEvent::Behaviour(SwarmBehaviourEvent::PromptRr(RrEvent::Message {
                 peer,
                 message,
                 ..
@@ -188,7 +172,7 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
                     request, channel, ..
                 } => {
                     println!(
-                        "[node] prompt od {peer}: order={} job={} ({} znaków, max_ctx={})",
+                        "[node] prompt from {peer}: order={} job={} ({} chars, max_ctx={})",
                         request.order_id,
                         request.job_id,
                         request.prompt.len(),
@@ -198,7 +182,7 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
                         let _ = swarm.behaviour_mut().prompt_rr.send_response(channel, reply);
                         continue;
                     }
-                    if let Some(reply) = limit_peera(
+                    if let Some(reply) = check_peer_limits(
                         &mut kubelki,
                         &mut ostatnie_joby,
                         peer,
@@ -209,14 +193,13 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
                         let _ = swarm.behaviour_mut().prompt_rr.send_response(channel, reply);
                         continue;
                     }
-                    // Pozwolenie na przyjęcie żyje do końca zadania (także przy
-                    // panice), więc licznik nie przecieka.
+                    // Admission permit held until task completes to prevent leak on panic.
                     let Ok(przyjete) = przyjecia.clone().try_acquire_owned() else {
                         let reply = blad(
                             &request,
                             "node_zajety",
                             &format!(
-                                "node zajęty: {} zadań w toku lub w kolejce — spróbuj później",
+                                "node busy: {} jobs active or queued - retry later",
                                 opcje.max_jobs * KOLEJKA_NA_SLOT
                             ),
                         );
@@ -227,33 +210,32 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
                     tokio::spawn(async move {
                         let _przyjete = przyjete;
                         let _slot = sloty.acquire_owned().await.expect("semafor nigdy nie jest zamykany");
-                        let reply = obsluz(&b, &request).await;
+                        let reply = handle_request(&b, &request).await;
                         let _ = tx.send((channel, reply));
                     });
                 }
                 RrMessage::Response { .. } => {}
             },
             SwarmEvent::NewListenAddr { address, .. } => {
-                println!("[node] nasłuchuję: {address}");
+                println!("[node] listening on: {address}");
             }
             SwarmEvent::ConnectionEstablished { peer_id, .. } => {
-                println!("[node] połączony: {peer_id}");
+                println!("[node] connected: {peer_id}");
             }
             SwarmEvent::ConnectionClosed { peer_id, .. } => {
-                println!("[node] rozłączony: {peer_id}");
+                println!("[node] disconnected: {peer_id}");
             }
             _ => {}
         }
     }
 }
 
-/// Ile zadań może czekać w kolejce na jeden slot `--max-jobs`, zanim node
-/// odpowie `node_zajety`.
+/// Queue capacity per slot before returning node_busy.
 const KOLEJKA_NA_SLOT: usize = 4;
 
 const WERSJA_PROMPTU: u16 = 1;
 
-/// Co zadanie musi wiedzieć o backendzie — współdzielone między zadaniami.
+/// Shared backend state across tasks.
 pub struct Backend {
     pub model_url: String,
     pub model: String,
@@ -268,32 +250,25 @@ fn sprawdz_wersje(request: &PromptRequest) -> Option<PromptReply> {
             request,
             "wersja",
             &format!(
-                "nieobsługiwana wersja formatu {} (node obsługuje do {})",
+                "unsupported format version {} (node supports up to {})",
                 request.v, WERSJA_PROMPTU
             ),
         )
     })
 }
 
-/// Jedno zlecenie: bramka kontekstu, potem liczenie. Biegnie w osobnym
-/// zadaniu tokio, nigdy w pętli swarmu.
-pub async fn obsluz(b: &Backend, request: &PromptRequest) -> PromptReply {
+/// Single request handler: context gate, then compute completion. Runs in a separate
+/// tokio task, never on the swarm loop.
+pub async fn handle_request(b: &Backend, request: &PromptRequest) -> PromptReply {
     if let Some(reply) = sprawdz_wersje(request) {
         return reply;
     }
-    // C+1: agent deklaruje max_ctx przybliżeniem znakowym (~3,5 B/tok
-    // dla polskiej prozy) — przy JSON/base64 błąd sięga ~2,5× w obie
-    // strony (docs/KV-CACHE-spill-i-rozproszony-VRAM.md). Node MA
-    // prompt i vLLM pod ręką, więc pyta o prawdziwą liczbę tokenów
-    // zamiast ufać cudzemu szacunkowi. Gdy /tokenize nieosiągalny —
-    // spadamy na deklarację agenta (lepiej przepuścić niż zablokować
-    // wszystko przez chwilową awarię wywołania).
     let realny_ctx = odczytaj_realny_ctx(&b.model_url, &request.prompt).await;
     let ctx_do_bramki = match realny_ctx {
         Some(realny) => {
             if realny != request.max_ctx {
                 println!(
-                    "[node] /tokenize: {realny} tok. realnie vs {} deklarowane (błąd {:+.0}%)",
+                    "[node] /tokenize: {realny} tok. real vs {} declared (diff {:+.0}%)",
                     request.max_ctx,
                     (realny as f64 - request.max_ctx as f64)
                         / request.max_ctx.max(1) as f64
@@ -304,38 +279,34 @@ pub async fn obsluz(b: &Backend, request: &PromptRequest) -> PromptReply {
         }
         None => {
             eprintln!(
-                "[node] UWAGA: /tokenize nieosiągalny, wracam do deklaracji agenta ({} tok. wg znaków)",
+                "[node] WARNING: /tokenize unavailable, using agent declaration ({} tok.)",
                 request.max_ctx
             );
             request.max_ctx
         }
     };
-    // C: bramka limitu kontekstu. Za długie zlecenie odrzucamy
-    // KONTROLOWANYM błędem, zamiast pozwolić vLLM się wywalić.
     if b.max_ctx > 0 && ctx_do_bramki > b.max_ctx {
         eprintln!(
-            "[node] ODRZUCAM: zlecenie żąda {} tokenów ctx, mam limit {}",
+            "[node] REJECTED: request requires {} context tokens, node limit is {}",
             ctx_do_bramki, b.max_ctx
         );
         blad_ctx(
             request,
             "ctx_ponad_limit",
             &format!(
-                "zlecenie żąda {} tokenów kontekstu, ten node ma limit {} (model {})",
+                "request requires {} context tokens, node limit is {} (model {})",
                 ctx_do_bramki, b.max_ctx, b.model
             ),
             Some(ctx_do_bramki),
             Some(b.max_ctx),
         )
     } else {
-        policz(&b.model_url, &b.model, &b.runtime, &b.klucz, request).await
+        compute_completion(&b.model_url, &b.model, &b.runtime, &b.klucz, request).await
     }
 }
 
-/// Liczy prompt przez API zgodne z OpenAI (`/v1/chat/completions`).
-///
-/// **Mierzy TTFT i czas generowania osobno** — M2.7 wymaga rozbicia pomiaru.
-pub async fn policz(
+/// Computes prompt via OpenAI-compatible API (`/v1/chat/completions`).
+pub async fn compute_completion(
     model_url: &str,
     model_hash: &str,
     runtime: &str,
@@ -354,7 +325,7 @@ pub async fn policz(
         .build()
     {
         Ok(k) => k,
-        Err(e) => return blad(req, "client", &format!("nie mogę zbudować klienta HTTP: {e}")),
+        Err(e) => return blad(req, "client", &format!("cannot build HTTP client: {e}")),
     };
 
     let started_at_us = SystemTime::now()
@@ -368,7 +339,7 @@ pub async fn policz(
             return blad(
                 req,
                 "model_niedostepny",
-                &format!("{url}: {e} (czy vLLM działa?)"),
+                &format!("{url}: {e} (is backend running?)"),
             )
         }
     };
@@ -377,7 +348,7 @@ pub async fn policz(
     let status = odp.status();
     let tekst = match odp.text().await {
         Ok(t) => t,
-        Err(e) => return blad(req, "odczyt", &format!("nie mogę odczytać odpowiedzi: {e}")),
+        Err(e) => return blad(req, "odczyt", &format!("cannot read response: {e}")),
     };
 
     let finished_at_us = SystemTime::now()
@@ -396,19 +367,15 @@ pub async fn policz(
 
     let v: serde_json::Value = match serde_json::from_str(&tekst) {
         Ok(v) => v,
-        Err(e) => return blad(req, "json", &format!("zła odpowiedź modelu: {e}")),
+        Err(e) => return blad(req, "json", &format!("invalid model response: {e}")),
     };
 
-    let (output, tresc_pusta) = wyjscie(&v, req.chat);
+    let (output, tresc_pusta) = extract_output(&v, req.chat);
     if tresc_pusta {
-        // NAPRAWA (audyt red-team Filipa, CWE-200): tu był fallback na
-        // `reasoning`/`reasoning_content`, czyli wewnętrzne rozumowanie modelu
-        // podpisywane jako ODPOWIEDŹ klienta. Rozumowanie nie jest odpowiedzią —
-        // pusta treść wraca jako błąd, NIE jako podpisany receipt z czymś innym.
+        // Empty content returns as an error rather than signing internal reasoning.
         let finish = v["choices"][0]["finish_reason"].as_str().unwrap_or("nieznany");
         return blad(req, "pusta_tresc", &format!(
-            "model nie zwrócił treści odpowiedzi (finish_reason={finish}); limit tokenów mógł zostać \
-             zużyty na wewnętrzne rozumowanie (reasoning), które nie jest odpowiedzią"));
+            "model returned empty content (finish_reason={finish}); tokens may have been spent on reasoning"));
     }
 
     let tokens_out = v["usage"]["completion_tokens"].as_u64().unwrap_or(0) as u32;
@@ -431,28 +398,27 @@ pub async fn policz(
     let gen_ms = ttft_ms;
 
     println!(
-        "[node] policzone: {} tokenów ({} znaków wyjścia), czas backendu={gen_ms}ms (zmierzony, obejmuje prefill+decode)",
+        "[node] completed: {} tokens ({} output characters), backend_time={gen_ms}ms (measured, includes prefill+decode)",
         tokens_out,
         output.len()
     );
-    // Pusta treść już wraca błędem powyżej (`pusta_tresc`) — tu `output` zawsze
-    // ma coś do podpisania (tekst w trybie tekstowym, JSON wiadomości w czacie).
+    // Non-empty output is guaranteed here after empty content check above.
 
-    // M1: wiązanie tokenów promptu i wyjścia z limitem MAX_M1_TOKENS (tylko tryb tekstowy i niepusty nonce)
+    // M1: token binding for prompt and output up to MAX_M1_TOKENS (text mode with non-empty nonce)
     let m1_dane = if !req.chat && !req.nonce.trim().is_empty() {
-        let p_tok = crate::wspolne::tokenizuj_tekst(model_url, &req.prompt).await;
-        let o_tok = crate::wspolne::tokenizuj_tekst(model_url, &output).await;
+        let p_tok = crate::common::tokenize_text(model_url, &req.prompt).await;
+        let o_tok = crate::common::tokenize_text(model_url, &output).await;
         match (p_tok, o_tok) {
             (Some(p_ids), Some(o_ids))
                 if !p_ids.is_empty()
-                    && p_ids.len() <= crate::wspolne::MAX_M1_TOKENS
+                    && p_ids.len() <= crate::common::MAX_M1_TOKENS
                     && !o_ids.is_empty()
-                    && o_ids.len() <= crate::wspolne::MAX_M1_TOKENS =>
+                    && o_ids.len() <= crate::common::MAX_M1_TOKENS =>
             {
-                match crate::wspolne::domyslny_odcisk_tokenizera(model_hash) {
+                match crate::common::default_tokenizer_digest(model_hash) {
                     Ok(tok_hash) => Some((tok_hash, p_ids, o_ids)),
                     Err(e) => {
-                        eprintln!("[node] nie można wyliczyć domyślnego odcisku tokenizera dla {model_hash}: {e}");
+                        eprintln!("[node] cannot compute default tokenizer digest for {model_hash}: {e}");
                         None
                     }
                 }
@@ -467,9 +433,8 @@ pub async fn policz(
         .as_ref()
         .map(|(th, p, o)| (th.as_str(), p.as_slice(), o.as_slice()));
 
-    // Receipt PRZED przeniesieniem `output` — podpisujemy dokladnie ten tekst,
-    // ktory zaraz odeslemy.
-    let receipt = zbuduj_podpisany_receipt(
+    // Receipt BEFORE moving `output` — we sign exactly the text sent back.
+    let receipt = build_signed_receipt(
         klucz,
         model_hash,
         runtime,
@@ -483,7 +448,7 @@ pub async fn policz(
     );
 
     let receipt_ma_m1 = serde_json::from_str::<simon_core::receipt::Receipt>(&receipt)
-        .map(|r| r.wiazania.is_some())
+        .map(|r| r.bindings.is_some())
         .unwrap_or(false);
 
     let (tokenizer_hash, prompt_token_ids, output_token_ids) = if receipt_ma_m1 {
@@ -501,9 +466,8 @@ pub async fn policz(
         order_id: req.order_id.clone(),
         job_id: req.job_id.clone(),
         output,
-        // M2.5.1: PODPISANY receipt (Ed25519). Klient weryfikuje bramki:
-        // podpis ważny, `signer` == klucz node'a, job_id/model zgodne,
-        // ORAZ (od 2026-09-18) że odcisk pokrywa TĘ treść.
+        // M2.5.1: Signed receipt (Ed25519). Client verifies signature,
+        // signer identity, job_id/model consistency, and content binding.
         receipt,
         tokens_out,
         ttft_ms,
@@ -514,13 +478,10 @@ pub async fn policz(
     })
 }
 
-/// Pola żądania czatu, które node przekazuje backendowi. Biała lista: reszta
-/// (np. `stream`, `n`, `logprobs`) zmieniłaby kształt odpowiedzi albo koszt
-/// bez wiedzy node'a.
+/// Allowlisted chat request fields forwarded to backend.
 const POLA_CZATU: &[&str] = &["tools", "tool_choice", "parallel_tool_calls", "temperature", "top_p", "stop"];
 
-/// Ciało `/v1/chat/completions`. Tryb tekstowy: jeden prompt użytkownika.
-/// Tryb czatu: wiadomości i pola z białej listy z JSON-a, który klient podpisał.
+/// Request body for /v1/chat/completions. Supports text mode or structured chat mode.
 fn cialo_zapytania(model: &str, req: &PromptRequest) -> Result<serde_json::Value, String> {
     if !req.chat {
         return Ok(serde_json::json!({
@@ -550,22 +511,10 @@ fn cialo_zapytania(model: &str, req: &PromptRequest) -> Result<serde_json::Value
     Ok(body)
 }
 
-/// Co node podpisuje (`output`) + czy treść wynikowa jest PUSTA (sygnał dla
-/// wołającego: odpowiedz błędem, nie podpisanym receiptem).
+/// Signed output content and empty flag check.
 ///
-/// NAPRAWA (audyt red-team Filipa, CWE-200): tu był fallback `content` pusty
-/// -> `reasoning`/`reasoning_content` w trybie tekstowym, czyli WEWNĘTRZNE
-/// rozumowanie modelu (qwen3.8 i inne modele rozumujące potrafią zużyć cały
-/// budżet tokenów na rozumowanie) podpisywane jako ODPOWIEDŹ klienta. Receipt
-/// wiąże podpis z treścią — podpisanie reasoning jako `output` fałszywie
-/// przedstawia je jako sprawdzony wynik. Pusta treść wraca teraz jako błąd
-/// (`pusta_tresc` w `policz`), nigdy jako podstawiony tekst.
-///
-/// Tryb czatu: JSON wiadomości `{content, tool_calls?, finish_reason}`. Receipt
-/// wiąże więc nazwy i argumenty narzędzi, a `finish_reason` nie da udawać, że
-/// ucięte w połowie argumenty to kompletne wywołanie. Treść pusta + brak
-/// `tool_calls` jest tu też sygnalizowana jako pusta (patrz wyżej).
-fn wyjscie(v: &serde_json::Value, chat: bool) -> (String, bool) {
+/// Extracts completion output. Empty content without tool calls returns empty flag.
+pub fn extract_output(v: &serde_json::Value, chat: bool) -> (String, bool) {
     let msg = &v["choices"][0]["message"];
     let surowy = msg["content"].as_str().unwrap_or("");
     let narzedzia = msg
@@ -575,7 +524,7 @@ fn wyjscie(v: &serde_json::Value, chat: bool) -> (String, bool) {
         let tekst = surowy.trim().to_string();
         return (tekst.clone(), tekst.is_empty());
     }
-    // Czat: treść bajt w bajt jak od modelu (bez trim) — tylko ocena pustki po trim.
+    // Chat mode: raw model bytes without trim, check emptiness after trim.
     let tekst = if surowy.trim().is_empty() { String::new() } else { surowy.to_string() };
     let mut m = serde_json::Map::new();
     m.insert(
@@ -586,7 +535,7 @@ fn wyjscie(v: &serde_json::Value, chat: bool) -> (String, bool) {
             serde_json::Value::String(tekst.clone())
         },
     );
-    // Pusta treść + brak tool_calls = nic, co klient mógłby uznać za odpowiedź.
+    // Empty content and no tool calls means empty reply.
     let pusta = tekst.is_empty() && narzedzia.is_none();
     if let Some(t) = narzedzia {
         m.insert("tool_calls".into(), t.clone());
@@ -595,20 +544,8 @@ fn wyjscie(v: &serde_json::Value, chat: bool) -> (String, bool) {
     (serde_json::Value::Object(m).to_string(), pusta)
 }
 
-/// C: odczytuje od backendu DWA fakty o node: `id` modelu i `max_model_len`.
-///
-/// Node NIE konfiguruje tego ręcznie — backend jest źródłem prawdy o samym
-/// sobie. `id` zasila `Capability.declared` (filtr przydziału po modelu),
-/// `max_model_len` zasila bramkę kontekstu.
-///
-/// NAPRAWA (2026-09-18): wcześniej brano bezwarunkowo `data[0]`. Przy vLLM,
-/// który serwuje jeden model, to działało. Przy backendzie wielomodelowym
-/// (Ollama wystawiła sześć) node OGŁASZAŁ SIECI INNY MODEL, NIŻ FAKTYCZNIE
-/// LICZY — koordynator routowałby po czymś, czego node nie serwuje, a receipt
-/// niósłby jeszcze inną nazwę. Gdy `--model-hash` jest podany, szukamy TEGO
-/// modelu na liście; gdy go nie ma, to nie jest drobiazg do zalogowania, tylko
-/// powód, żeby nie wstawać.
-async fn odczytaj_moje_fakty(model_url: &str, zadany: Option<&str>) -> (Option<String>, u32) {
+/// Probes backend for two facts: model id and max_model_len.
+pub async fn probe_backend_facts(model_url: &str, zadany: Option<&str>) -> (Option<String>, u32) {
     let url = format!("{}/v1/models", model_url.trim_end_matches('/'));
     let klient = match klient_backendu()
         .timeout(Duration::from_secs(10))
@@ -631,9 +568,7 @@ async fn odczytaj_moje_fakty(model_url: &str, zadany: Option<&str>) -> (Option<S
     if max_ctx > 0 {
         return (id, max_ctx);
     }
-    // llama.cpp nie podaje `max_model_len` w /v1/models. Kontekst JEDNEGO slotu
-    // (`-c` podzielone przez `-np`) jest w /props. Bez tego bramka kontekstu była
-    // wyłączona i przepełnienie wracało dopiero z backendu (pilot LIDAR, 2026-10-14).
+    // llama.cpp does not report max_model_len in /v1/models; slot context is in /props.
     let props = format!("{}/props", model_url.trim_end_matches('/'));
     let n_ctx = match klient.get(&props).send().await {
         Ok(o) => o
@@ -649,8 +584,7 @@ async fn odczytaj_moje_fakty(model_url: &str, zadany: Option<&str>) -> (Option<S
 }
 
 /// Klient HTTP do backendu modelu. `SIMON_MODEL_API_KEY` (np. AMD Token Factory)
-/// idzie jako `Authorization: Bearer`. Ze zmiennej środowiskowej, nie z argumentu:
-/// argumenty procesu widać w `ps` dla każdego użytkownika maszyny.
+// Read bearer token from environment variable rather than CLI arguments.
 fn klient_backendu() -> reqwest::ClientBuilder {
     let b = reqwest::Client::builder();
     match std::env::var("SIMON_MODEL_API_KEY") {
@@ -666,22 +600,19 @@ fn klient_backendu() -> reqwest::ClientBuilder {
     }
 }
 
-/// Który wpis z `/v1/models` opisuje NAS. Wydzielone z zapytania sieciowego,
-/// żeby dało się to przetestować bez serwera — to jest miejsce, w którym node
-/// ostatnio ogłaszał cudzy model.
+/// Identifies matching model entry from /v1/models.
 fn wybierz_wpis(lista: &[serde_json::Value], zadany: Option<&str>) -> (Option<String>, u32) {
     let wpis = match zadany {
-        // Szukamy DOKŁADNIE tego modelu, o którym mówimy, że go serwujemy.
+        // Match exact model being served.
         Some(cel) => lista.iter().find(|m| m["id"].as_str() == Some(cel)),
-        // Bez `--model-hash`: `data[0]` jest jednoznaczne tylko przy jednym
-        // modelu. Przy kilku każdy wybór byłby zgadywaniem.
+        // Without `--model-hash`, data[0] is unambiguous only for a single model.
         None => match lista.len() {
             1 => lista.first(),
             _ => {
                 if lista.len() > 1 {
                     eprintln!(
                         "[node] UWAGA: backend serwuje {} modeli, a nie podano --model-hash \
-                         — nie zgaduję, który ogłosić",
+                         - ambiguous model configuration",
                         lista.len()
                     );
                 }
@@ -707,15 +638,8 @@ fn wybierz_wpis(lista: &[serde_json::Value], zadany: Option<&str>) -> (Option<St
     }
 }
 
-/// Jaki silnik NAPRAWDĘ liczy. Wcześniej receipt twierdził na sztywno
-/// `vllm-openai/1`, także gdy pod spodem stała Ollama (złapane 2026-09-18 na
-/// drugim węźle). Pole `runtime` decyduje o kwalifikacji do puli i o tym, czy
-/// dwa wyniki są w ogóle porównywalne — podpisana nieprawda w tym miejscu
-/// psuje dokładnie to, czemu SIMON ma zapobiegać.
-///
-/// Gdy nie umiemy rozstrzygnąć, wpisujemy `nieznany/1`. Uczciwe „nie wiem"
-/// jest mniej szkodliwe niż pewna zmyślona etykieta.
-async fn wykryj_runtime(model_url: &str) -> String {
+/// Detects backend engine runtime. Defaults to unknown/1 if undetermined.
+pub async fn detect_runtime(model_url: &str) -> String {
     let baza = model_url.trim_end_matches('/');
     let klient = match klient_backendu()
         .timeout(Duration::from_secs(5))
@@ -754,23 +678,18 @@ async fn wykryj_runtime(model_url: &str) -> String {
             }
         }
     }
-    eprintln!("[node] UWAGA: nie rozpoznaję silnika pod {baza} — receipt powie 'nieznany'");
+    eprintln!("[node] WARNING: unrecognized engine at {baza} - receipt runtime set to 'unknown'");
     "nieznany/1".to_string()
 }
 
-/// Pomocnik do wyciągania liczby tokenów z odpowiedzi endpointu `/tokenize`.
-/// Obsługuje format vLLM (`count: N`) oraz llama-server (`tokens: [...]`).
+/// Helper extracting token count from /tokenize endpoint.
 pub(crate) fn wyciagnij_liczbe_tokenow(v: &serde_json::Value) -> Option<u64> {
     v.get("count")
         .and_then(|c| c.as_u64())
         .or_else(|| v.get("tokens").and_then(|t| t.as_array()).map(|a| a.len() as u64))
 }
 
-/// C+1: prawdziwa liczba tokenów promptu przez `/tokenize` vLLM / llama-server
-/// (POST `{"prompt": ..., "content": ...}` -> `{"count": N}` lub `{"tokens": [...]}`).
-/// `None` gdy backend nieosiągalny lub odpowiedź nie ma pola tokenów — WOŁAJĄCY
-/// spada wtedy na deklarację agenta. Każda droga do `None` loguje PRZYCZYNĘ:
-/// cichy fallback bez logu maskowałby realny błąd parsowania jako "nieosiągalny".
+/// Queries prompt token count via /tokenize endpoint. Falls back to agent declaration on error.
 async fn odczytaj_realny_ctx(model_url: &str, prompt: &str) -> Option<u32> {
     let url = format!("{}/tokenize", model_url.trim_end_matches('/'));
     let klient = match klient_backendu()
@@ -779,7 +698,7 @@ async fn odczytaj_realny_ctx(model_url: &str, prompt: &str) -> Option<u32> {
     {
         Ok(k) => k,
         Err(e) => {
-            eprintln!("[node] /tokenize: nie mogę zbudować klienta HTTP: {e}");
+            eprintln!("[node] /tokenize: cannot build HTTP client: {e}");
             return None;
         }
     };
@@ -791,7 +710,7 @@ async fn odczytaj_realny_ctx(model_url: &str, prompt: &str) -> Option<u32> {
     {
         Ok(o) => o,
         Err(e) => {
-            eprintln!("[node] /tokenize: {url} nieosiągalny: {e}");
+            eprintln!("[node] /tokenize: {url} unreachable: {e}");
             return None;
         }
     };
@@ -807,25 +726,23 @@ async fn odczytaj_realny_ctx(model_url: &str, prompt: &str) -> Option<u32> {
     let v: serde_json::Value = match odp.json().await {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("[node] /tokenize: odpowiedź nie jest poprawnym JSON-em: {e}");
+            eprintln!("[node] /tokenize: response is not valid JSON: {e}");
             return None;
         }
     };
     match wyciagnij_liczbe_tokenow(&v) {
-        // Kontrola zakresu: `n as u32` przy n > u32::MAX po cichu obcina liczbę
-        // i przepuściłoby za długi prompt przez bramkę. Wolimy głośno spaść na
-        // deklarację agenta niż porównywać z obciętą wartością.
+        // Range check: n > u32::MAX is rejected to prevent truncation.
         Some(n) => match u32::try_from(n) {
             Ok(n) => Some(n),
             Err(_) => {
                 eprintln!(
-                    "[node] /tokenize: liczba tokenów {n} przekracza u32::MAX — nie ufam, wracam do deklaracji agenta"
+                    "[node] /tokenize: token count {n} exceeds u32::MAX - falling back to agent declaration"
                 );
                 None
             }
         },
         None => {
-            eprintln!("[node] /tokenize: odpowiedź bez pola `count` ani `tokens`: {v}");
+            eprintln!("[node] /tokenize: response without `count` or `tokens` field: {v}");
             None
         }
     }
@@ -835,13 +752,12 @@ fn teraz_us() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_micros() as u64).unwrap_or(0)
 }
 
-/// Pamięć ostatnich (peer, job_id) do odrzucania powtórek.
+/// Cache of recent (peer, job_id) pairs to reject replays.
 const PAMIEC_JOBOW: usize = 4096;
 
-/// Limit per peer + odrzucenie powtórzonego zlecenia. `Some(błąd)` = nie przyjmować.
-/// ponytail: kubełki tylko rosną z liczbą RÓŻNYCH peerów; przy >10k czyścimy całość (sieć firmowa ma ich kilka).
-fn limit_peera(
-    kubelki: &mut std::collections::HashMap<libp2p::PeerId, simon_core::protokol::Kubelek>,
+/// Per-peer rate limiting and replay rejection.
+pub fn check_peer_limits(
+    kubelki: &mut std::collections::HashMap<libp2p::PeerId, simon_core::protocol::TokenBucket>,
     ostatnie: &mut std::collections::VecDeque<(libp2p::PeerId, String)>,
     peer: libp2p::PeerId,
     req: &PromptRequest,
@@ -849,7 +765,7 @@ fn limit_peera(
     teraz: u64,
 ) -> Option<PromptReply> {
     if ostatnie.iter().any(|(p, j)| *p == peer && *j == req.job_id) {
-        return Some(blad(req, "powtorzony_job", "ten job_id od tego peera już był — powtórka nie jest liczona drugi raz"));
+        return Some(blad(req, "powtorzony_job", "duplicate job_id from peer - replay is not computed twice"));
     }
     if rate > 0.0 {
         if kubelki.len() > 10_000 {
@@ -857,9 +773,9 @@ fn limit_peera(
         }
         let k = kubelki
             .entry(peer)
-            .or_insert_with(|| simon_core::protokol::Kubelek::nowy(rate * 4.0, rate, teraz));
-        if k.zezwol(teraz).is_err() {
-            return Some(blad(req, "rate_limit", &format!("limit {rate} zleceń/s od jednego peera — zwolnij")));
+            .or_insert_with(|| simon_core::protocol::TokenBucket::new(rate * 4.0, rate, teraz));
+        if k.allow(teraz).is_err() {
+            return Some(blad(req, "rate_limit", &format!("rate limit {rate} requests/s per peer exceeded - slow down")));
         }
     }
     ostatnie.push_back((peer, req.job_id.clone()));
@@ -869,18 +785,11 @@ fn limit_peera(
     None
 }
 
-/// Precyzja z nazwy modelu (`model_hash` deklaruje operator, więc to i tak jego deklaracja).
-/// Podpisany receipt nie może zgadywać, więc reguła jest zachowawcza:
-/// - całe tokeny nazwy (`gemma-bf16-iq4_xs` -> `gemma`,`bf16`,`iq4`,`xs`), nigdy podciągi z hashy;
-/// - rodziny kwantyzacji po prefiksie: `q4…`/`iq4…` (GGUF), `w4a…`/`w8a…`, `fp8…`, `fp4`/`nvfp4`/`mxfp4`;
-/// - JAKIKOLWIEK znacznik kwantyzacji blokuje spadek do formatu bazowego (`bf16-iq4_xs` to nie bf16);
-/// - sprzeczne znaczniki albo szerokość spoza enuma (Q5, Q6…) -> `Unknown`;
-/// - AWQ/GPTQ to słaby znacznik (domyślnie int4), ustępuje jawnemu `8bit`/`int8`.
-pub(crate) fn wykryj_precyzje(model_hash: &str) -> Precision {
+/// Detects precision from model name tokens conservatively.
+pub(crate) fn detect_precision_from_model_name(model_hash: &str) -> Precision {
     let n = model_hash.to_ascii_lowercase();
     let tokeny: Vec<&str> = n.split(|c: char| !c.is_ascii_alphanumeric()).filter(|t| !t.is_empty()).collect();
-    // Bity z CAŁEGO tokenu GGUF: `q4`, `iq4`, zwarte `q4k`/`q4km` (q4_k_m dzieli się na q4,k,m).
-    // `q80`, `q4foo`, `q8deadbeef` to nie GGUF — nie wolno ich czytać po pierwszej cyfrze.
+    // GGUF token parsing for quantization bits.
     let bity_gguf = |t: &str| -> Option<u32> {
         let r = t.strip_prefix('i').unwrap_or(t).strip_prefix('q')?;
         let mut z = r.chars();
@@ -912,7 +821,7 @@ pub(crate) fn wykryj_precyzje(model_hash: &str) -> Precision {
             if matches!(*t, "awq" | "gptq") {
                 slaby_int4 = true;
             }
-            // ogólny znacznik kwantyzacji bez szerokości: blokuje format bazowy
+            // general quantization tag without explicit width
             if matches!(*t, "quant" | "quantized") {
                 nieobslugiwana = true;
             }
@@ -924,7 +833,7 @@ pub(crate) fn wykryj_precyzje(model_hash: &str) -> Precision {
             }
         }
     }
-    // AWQ/GPTQ (wagi całkowitoliczbowe) obok fp8/fp4 to sprzeczność; jawna szerokość int8/int4 ją rozstrzyga.
+    // AWQ/GPTQ integer weights alongside fp8/fp4 ambiguity resolution.
     let sprzeczny_slaby = slaby_int4 && jawne.iter().any(|p| matches!(p, Precision::Fp8 | Precision::Fp4));
     if nieobslugiwana || jawne.len() > 1 || sprzeczny_slaby {
         return Precision::Unknown;
@@ -944,12 +853,9 @@ pub(crate) fn wykryj_precyzje(model_hash: &str) -> Precision {
     }
 }
 
-/// M2.5.1: buduje receipt i PODPISUJE go kluczem node'a.
-///
-/// `activation_hash` jest na razie jawnym placeholderem — TopLoc wymaga
-/// hidden states z runnera (nie z API vLLM). Nie udajemy, że jest policzony.
+/// M2.5.1: builds receipt and SIGNS it with node key.
 #[allow(clippy::too_many_arguments)]
-fn zbuduj_podpisany_receipt(
+pub fn build_signed_receipt(
     klucz: &Keypair,
     model_hash: &str,
     runtime: &str,
@@ -966,26 +872,26 @@ fn zbuduj_podpisany_receipt(
         node_id: klucz.public().to_hex(),
         model_hash: model_hash.to_string(),
         runtime: runtime.to_string(),
-        precision: wykryj_precyzje(model_hash),
-        // M2.5.1b: do policzenia poza API vLLM (runner + hidden states).
+        precision: detect_precision_from_model_name(model_hash),
+        // M2.5.1b: to be computed outside vLLM API (runner + hidden states).
         activation_hash: "toploc:NIE_POLICZONY".to_string(),
         // Odcisk TRESCI, nie metadanych. Metadane (czasy) i tak sa podpisane,
         // bo wchodza do odcisku calego receiptu.
         prompt_tokens,
         completion_tokens: tokens_out,
-        output_digest: simon_core::receipt::odcisk_wyjscia(&req.job_id, output)
+        output_digest: simon_core::receipt::output_digest_for(&req.job_id, output)
             .unwrap_or_else(|_| "digest-blad".to_string()),
         started_at_us,
         finished_at_us,
         signer: klucz.public(),
         signature: None,
-        wiazania: None,
+        bindings: None,
     };
 
     if let Some((tok_hash, p_ids, o_ids)) = m1_dane {
-        if let Ok(params_hash) = simon_core::receipt::SamplingCommitment::greedy().odcisk() {
+        if let Ok(params_hash) = simon_core::receipt::SamplingCommitment::greedy().digest() {
             let exec_profile = format!("{runtime}/{:?}", receipt.precision).to_lowercase();
-            match receipt.clone().z_wiazaniem_m1(
+            match receipt.clone().with_m1_bindings(
                 tok_hash.to_string(),
                 req.nonce.clone(),
                 p_ids,
@@ -995,7 +901,7 @@ fn zbuduj_podpisany_receipt(
                 exec_profile,
             ) {
                 Ok(r) => receipt = r,
-                Err(e) => eprintln!("[node] nie udało się dodać wiązań M1: {e}"),
+                Err(e) => eprintln!("[node] failed to attach M1 bindings: {e}"),
             }
         }
     }
@@ -1004,7 +910,7 @@ fn zbuduj_podpisany_receipt(
         Ok(podpisany) => serde_json::to_string(&podpisany)
             .unwrap_or_else(|e| format!("{{\"blad\":\"serializacja: {e}\"}}")),
         Err(e) => {
-            eprintln!("[node] BŁĄD podpisu receiptu: {e}");
+            eprintln!("[node] receipt signature error: {e}");
             "{}".to_string()
         }
     }
@@ -1014,9 +920,7 @@ fn blad(req: &PromptRequest, kod: &str, opis: &str) -> PromptReply {
     blad_ctx(req, kod, opis, None, None)
 }
 
-/// Jak `blad`, ale dla `ctx_ponad_limit` dołącza STRUKTURALNE dane (nie do
-/// wyparsowania z tekstu) — wołający (np. przyszły map-reduce w agent.rs)
-/// dostaje realną liczbę tokenów i limit node'a bez zgadywania formatu `opis`.
+/// Constructs PromptReply::Error with structured context limit fields.
 fn blad_ctx(
     req: &PromptRequest,
     kod: &str,
@@ -1024,13 +928,13 @@ fn blad_ctx(
     realny_ctx: Option<u32>,
     limit_ctx: Option<u32>,
 ) -> PromptReply {
-    eprintln!("[node] BŁĄD {kod}: {opis}");
-    PromptReply::Blad(PromptError {
+    eprintln!("[node] ERROR {kod}: {opis}");
+    PromptReply::Error(PromptError {
         v: 1,
         order_id: req.order_id.clone(),
-        kod: kod.to_string(),
-        opis: opis.to_string(),
-        realny_ctx,
+        code: kod.to_string(),
+        description: opis.to_string(),
+        actual_ctx: realny_ctx,
         limit_ctx,
     })
 }
@@ -1051,16 +955,16 @@ mod testy_wyboru_modelu {
 
     #[test]
     fn bierze_zadany_model_a_nie_pierwszy_z_brzegu() {
-        // Regresja 2026-09-18: node ogłaszał `data[0]`, czyli CUDZY model.
+        // Regression 2026-09-18: ensure advertised model matches exactly.
         let (id, ctx) = wybierz_wpis(&lista(), Some("bielik:Q4"));
         assert_eq!(id.as_deref(), Some("bielik:Q4"));
-        assert_eq!(ctx, 8192, "max_ctx ma pochodzić z TEGO wpisu, nie z pierwszego");
+        assert_eq!(ctx, 8192, "max_ctx must originate from matching model entry");
     }
 
     #[test]
     fn brak_zadanego_modelu_to_nie_jest_cichy_fallback() {
         let (id, ctx) = wybierz_wpis(&lista(), Some("model-ktorego-nie-ma"));
-        assert!(id.is_none(), "nie wolno ogłosić modelu, którego backend nie ma");
+        assert!(id.is_none(), "must not advertise model absent from backend");
         assert_eq!(ctx, 0);
     }
 
@@ -1075,21 +979,20 @@ mod testy_wyboru_modelu {
     #[test]
     fn kilka_modeli_bez_wskazania_to_zgadywanie_wiec_nic() {
         let (id, _) = wybierz_wpis(&lista(), None);
-        assert!(id.is_none(), "przy kilku modelach wybór data[0] był źródłem błędu");
+        assert!(id.is_none(), "with multiple models ambiguous selection is rejected");
     }
 }
 
 #[cfg(test)]
 mod testy_wspolbieznosci {
-    use crate::wspolne::{klucz_p2p_z_seeda, zbuduj_swarm};
+    use crate::common::{p2p_key_from_seed, build_swarm};
     use simon_harness::request_response::{PromptReply, PromptRequest};
     use std::time::{Duration, Instant};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     const OPOZNIENIE: Duration = Duration::from_secs(2);
 
-    /// Udawany backend: każde `chat/completions` trwa `OPOZNIENIE`, reszta
-    /// (/v1/models, /tokenize, /version) odpowiada od razu.
+    /// Mock backend: simulated delay on completions, immediate response otherwise.
     async fn falszywy_backend() -> u16 {
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = l.local_addr().unwrap().port();
@@ -1148,22 +1051,22 @@ mod testy_wspolbieznosci {
         for chat in [false, true] {
             for v in [super::WERSJA_PROMPTU + 1, u16::MAX] {
                 let (mut backend, mut req) = backend_i_zlecenie(port, v, chat);
-                // Błąd wersji ma pierwszeństwo przed bramką kontekstu i parsowaniem czatu.
+                // Version error check takes priority.
                 backend.max_ctx = 1;
                 req.max_ctx = 2;
                 req.prompt = "nie json".into();
-                let reply = tokio::time::timeout(Duration::from_secs(1), super::obsluz(&backend, &req))
+                let reply = tokio::time::timeout(Duration::from_secs(1), super::handle_request(&backend, &req))
                     .await
                     .expect("odrzucenie wersji nie czeka na backend");
-                let PromptReply::Blad(err) = reply else {
-                    panic!("oczekiwano błędu wersji");
+                let PromptReply::Error(err) = reply else {
+                    panic!("expected version error");
                 };
-                assert_eq!(err.kod, "wersja");
+                assert_eq!(err.code, "wersja");
                 assert_eq!(err.order_id, req.order_id);
                 assert_eq!(err.v, 1);
-                assert_eq!(err.realny_ctx, None);
+                assert_eq!(err.actual_ctx, None);
                 assert_eq!(err.limit_ctx, None);
-                assert!(err.opis.contains(&v.to_string()));
+                assert!(err.description.contains(&v.to_string()));
             }
         }
         assert!(tokio::time::timeout(Duration::from_millis(50), listener.accept())
@@ -1177,16 +1080,13 @@ mod testy_wspolbieznosci {
         for chat in [false, true] {
             for v in [0, super::WERSJA_PROMPTU] {
                 let (backend, req) = backend_i_zlecenie(port, v, chat);
-                let reply = super::obsluz(&backend, &req).await;
+                let reply = super::handle_request(&backend, &req).await;
                 assert!(matches!(reply, PromptReply::Ok(_)), "{reply:?}");
             }
         }
     }
 
-    /// Regresja 2026-10-11: node liczył prompt W pętli swarmu, więc N
-    /// równoległych agentów było obsługiwanych po kolei (a przy dłuższych
-    /// jobach część promptów ginęła). Przy `--max-jobs 4` cztery prompty
-    /// mają się liczyć naraz: ~1× opóźnienie backendu, nie 4×.
+    /// Regression 2026-10-11: verify concurrent prompt handling up to max_jobs.
     #[tokio::test(flavor = "multi_thread")]
     async fn cztery_prompty_licza_sie_naraz() {
         let backend = falszywy_backend().await;
@@ -1194,7 +1094,7 @@ mod testy_wspolbieznosci {
         let port = wolny.local_addr().unwrap().port();
         drop(wolny);
         let seed = [7u8; 32];
-        let peer = klucz_p2p_z_seeda(&seed).public().to_peer_id();
+        let peer = p2p_key_from_seed(&seed).public().to_peer_id();
         let args: Vec<String> = [
             "--role", "node",
             "--listen", &format!("/ip4/127.0.0.1/tcp/{port}"),
@@ -1206,11 +1106,11 @@ mod testy_wspolbieznosci {
         .map(|s| s.to_string())
         .collect();
         let opcje = crate::Opcje::parse(&args).unwrap();
-        tokio::spawn(async move { super::uruchom(&opcje).await });
+        tokio::spawn(async move { super::run(&opcje).await });
         tokio::time::sleep(Duration::from_secs(1)).await;
 
         async fn wyslij_i_czekaj(
-            swarm: &mut libp2p::Swarm<crate::wspolne::Zachowanie>,
+            swarm: &mut libp2p::Swarm<crate::common::SwarmBehaviour>,
             peer: libp2p::PeerId,
             request: PromptRequest,
         ) -> Result<(PromptReply, u64), String> {
@@ -1221,7 +1121,7 @@ mod testy_wspolbieznosci {
             let req_id = swarm.behaviour_mut().prompt_rr.send_request(&peer, request);
             loop {
                 match swarm.select_next_some().await {
-                    SwarmEvent::Behaviour(crate::wspolne::ZachowanieEvent::PromptRr(
+                    SwarmEvent::Behaviour(crate::common::SwarmBehaviourEvent::PromptRr(
                         RrEvent::Message {
                             message: RrMessage::Response {
                                 request_id,
@@ -1243,7 +1143,7 @@ mod testy_wspolbieznosci {
             .map(|i| {
                 let adres = adres.clone();
                 tokio::spawn(async move {
-                    let mut swarm = zbuduj_swarm(&[], &[adres], None).unwrap();
+                    let mut swarm = build_swarm(&[], &[adres], None).unwrap();
                     let req = PromptRequest {
                         v: 1,
                         order_id: format!("o{i}"),
@@ -1260,20 +1160,20 @@ mod testy_wspolbieznosci {
             })
             .collect();
         for a in agenci {
-            let (reply, _) = a.await.unwrap().expect("agent dostał odpowiedź");
+            let (reply, _) = a.await.unwrap().expect("agent received reply");
             assert!(matches!(reply, PromptReply::Ok(_)), "{reply:?}");
         }
         let czas = start.elapsed();
         assert!(
             czas < OPOZNIENIE * 3,
-            "4 prompty trwały {czas:?} — liczone po kolei, nie naraz"
+            "4 prompts took {czas:?} - should be computed concurrently"
         );
     }
 }
 
 #[cfg(test)]
 mod testy_czatu {
-    use super::{cialo_zapytania, wyjscie};
+    use super::{cialo_zapytania, extract_output};
     use serde_json::json;
     use simon_harness::request_response::PromptRequest;
 
@@ -1299,10 +1199,10 @@ mod testy_czatu {
         let b = cialo_zapytania("m", &req(&p, true)).unwrap();
         assert_eq!(b["tools"][0]["function"]["name"], "ls");
         assert_eq!(b["temperature"], 0.7, "parametr klienta, nie wymuszone 0");
-        assert!(b.get("stream").is_none() && b.get("n").is_none(), "spoza białej listy: {b}");
+        assert!(b.get("stream").is_none() && b.get("n").is_none(), "field outside allowlist: {b}");
         assert!(cialo_zapytania("m", &req(r#"{"messages": []}"#, true)).is_err());
         assert!(cialo_zapytania("m", &req("nie json", true)).is_err());
-        // tryb tekstowy bez zmian: prompt jako jedna wiadomość użytkownika
+        // text mode: prompt wrapped as single user message
         let t = cialo_zapytania("m", &req("nie json", false)).unwrap();
         assert_eq!(t["messages"][0]["content"], "nie json");
     }
@@ -1312,38 +1212,32 @@ mod testy_czatu {
         let v = json!({"choices": [{"finish_reason": "tool_calls", "message": {"content": null,
             "tool_calls": [{"id": "c1", "type": "function",
                             "function": {"name": "read_file", "arguments": "{\"path\":\"a.rs\"}"}}]}}]});
-        let (out, _) = wyjscie(&v, true);
+        let (out, _) = extract_output(&v, true);
         let m: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert!(m["content"].is_null());
         assert_eq!(m["tool_calls"][0]["function"]["arguments"], "{\"path\":\"a.rs\"}");
         assert_eq!(m["finish_reason"], "tool_calls");
-        // ucięte wywołanie zostaje ucięte: finish_reason=length jest w podpisanym wyniku
+        // truncated call remains truncated with finish_reason preserved
         let v2 = json!({"choices": [{"finish_reason": "length", "message": {"content": "abc"}}]});
-        assert_eq!(serde_json::from_str::<serde_json::Value>(&wyjscie(&v2, true).0).unwrap()["finish_reason"], "length");
-        // tryb tekstowy: sam tekst, jak dotąd
-        assert_eq!(wyjscie(&v2, false).0, "abc");
-        // NAPRAWA (audyt red-team Filipa, CWE-200): rozumowanie NIGDY nie
-        // zastępuje pustej treści — ani w trybie tekstowym, ani w czacie.
-        // Pusta treść musi wrócić jako "pusta" (błąd u wołającego w `policz`),
-        // nie jako reasoning podstawiony za odpowiedź.
-        let v3 = json!({"choices": [{"finish_reason": "length", "message": {"content": "", "reasoning": "myślę"}}]});
-        let (tekst3, pusta3) = wyjscie(&v3, false);
-        assert_eq!(tekst3, "", "reasoning nie może stać się podpisaną odpowiedzią");
-        assert!(pusta3, "pusta treść musi być zgłoszona jako pusta");
-        let (out3_chat, pusta3_chat) = wyjscie(&v3, true);
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&extract_output(&v2, true).0).unwrap()["finish_reason"], "length");
+        // text mode: raw text output preserved
+        assert_eq!(extract_output(&v2, false).0, "abc");
+        let v3 = json!({"choices": [{"finish_reason": "length", "message": {"content": "", "reasoning": "reasoning"}}]});
+        let (tekst3, pusta3) = extract_output(&v3, false);
+        assert_eq!(tekst3, "", "reasoning must not become signed output");
+        assert!(pusta3, "empty content must be flagged as empty");
+        let (out3_chat, pusta3_chat) = extract_output(&v3, true);
         assert_eq!(serde_json::from_str::<serde_json::Value>(&out3_chat).unwrap()["content"], "");
-        assert!(pusta3_chat, "pusta treść w czacie bez tool_calls jest też pusta");
+        assert!(pusta3_chat, "empty chat content without tool calls is empty");
     }
 
     #[test]
     fn czat_z_narzedziami_nie_jest_pusty_mimo_content_null() {
-        // tool_calls to prawdziwa odpowiedź nawet bez `content` — nie wolno
-        // tego traktować jak "brak odpowiedzi" (patrz `pusta` w `wyjscie`).
         let v = json!({"choices": [{"finish_reason": "tool_calls", "message": {"content": null,
             "tool_calls": [{"id": "c1", "type": "function",
                             "function": {"name": "ls", "arguments": "{}"}}]}}]});
-        let (_, pusta) = wyjscie(&v, true);
-        assert!(!pusta, "tool_calls bez content to nie 'pusta odpowiedź'");
+        let (_, pusta) = extract_output(&v, true);
+        assert!(!pusta, "tool calls without content is not an empty reply");
     }
 }
 
@@ -1368,7 +1262,7 @@ mod testy_receiptu {
         };
         let started = 1_700_000_000_000_000;
         let finished = 1_700_000_000_500_000;
-        let json_receipt = zbuduj_podpisany_receipt(
+        let json_receipt = build_signed_receipt(
             &klucz, "gemma-4", "llama.cpp/1", &req, "odpowiedz", 10, 5, started, finished, None,
         );
         let r: Receipt = serde_json::from_str(&json_receipt).unwrap();
@@ -1379,7 +1273,7 @@ mod testy_receiptu {
     }
 
     #[test]
-    fn test_zbuduj_podpisany_receipt_m1_i_fallback_m0() {
+    fn test_build_signed_receipt_m1_and_fallback_m0() {
         let klucz = Keypair::generate();
         let req = PromptRequest {
             v: 1,
@@ -1398,8 +1292,8 @@ mod testy_receiptu {
         let o_ids = [404, 505];
         let tok_hash = "tokenizer-sha256";
 
-        // 1. Level 1: gdy dane M1 są przekazane, powstaje poprawny receipt poziomu 1
-        let json_m1 = zbuduj_podpisany_receipt(
+        // 1. Level 1: when M1 data is provided, a valid level 1 receipt is built
+        let json_m1 = build_signed_receipt(
             &klucz,
             "qwen-fp16",
             "vllm/0.6.3",
@@ -1412,14 +1306,14 @@ mod testy_receiptu {
             Some((tok_hash, &p_ids, &o_ids)),
         );
         let r1: Receipt = serde_json::from_str(&json_m1).expect("parsowanie receiptu M1");
-        assert_eq!(r1.poziom(), 1);
-        assert!(r1.wiazania.is_some());
+        assert_eq!(r1.level(), 1);
+        assert!(r1.bindings.is_some());
         assert!(r1.verify_self().is_ok());
-        assert!(r1.zgodny_z_wyjsciem("odpowiedz"));
-        assert!(r1.zweryfikuj_m1(tok_hash, &req.nonce, &p_ids, &o_ids).is_ok());
+        assert!(r1.matches_output("odpowiedz"));
+        assert!(r1.verify_m1(tok_hash, &req.nonce, &p_ids, &o_ids).is_ok());
 
-        // 2. Level 0 fallback: gdy brak danych M1 (None), receipt ma poziom 0
-        let json_m0 = zbuduj_podpisany_receipt(
+        // 2. Level 0 fallback: without M1 data (None), receipt has level 0
+        let json_m0 = build_signed_receipt(
             &klucz,
             "qwen-fp16",
             "vllm/0.6.3",
@@ -1432,14 +1326,14 @@ mod testy_receiptu {
             None,
         );
         let r0: Receipt = serde_json::from_str(&json_m0).expect("parsowanie receiptu M0");
-        assert_eq!(r0.poziom(), 0);
-        assert!(r0.wiazania.is_none());
+        assert_eq!(r0.level(), 0);
+        assert!(r0.bindings.is_none());
         assert!(r0.verify_self().is_ok());
-        assert!(r0.zgodny_z_wyjsciem("odpowiedz"));
+        assert!(r0.matches_output("odpowiedz"));
     }
 
     #[test]
-    fn limit_peera_odrzuca_powtorke_i_nadmiar() {
+    fn check_peer_limits_rejects_replay_and_excess() {
         use std::collections::{HashMap, VecDeque};
         let (mut k, mut o) = (HashMap::new(), VecDeque::new());
         let peer = libp2p::PeerId::random();
@@ -1448,70 +1342,56 @@ mod testy_receiptu {
             v: 1, order_id: "o".into(), job_id: job.into(), model_hash: "m".into(), prompt: "p".into(),
             max_tokens: 1, max_ctx: 8, nonce: "n".into(), chat: false,
         };
-        let kod = |r: Option<PromptReply>| match r { Some(PromptReply::Blad(e)) => Some(e.kod), _ => None };
-        // ten sam job od tego samego peera drugi raz = powtórka
-        assert_eq!(kod(limit_peera(&mut k, &mut o, peer, &req("j1"), 1.0, 0)), None);
-        assert_eq!(kod(limit_peera(&mut k, &mut o, peer, &req("j1"), 1.0, 0)).as_deref(), Some("powtorzony_job"));
-        // kubełek: rate 1/s, zapas 4 -> j1 + 3 kolejne przechodzą, piąty w tej samej chwili nie
+        let kod = |r: Option<PromptReply>| match r { Some(PromptReply::Error(e)) => Some(e.code), _ => None };
+        assert_eq!(kod(check_peer_limits(&mut k, &mut o, peer, &req("j1"), 1.0, 0)), None);
+        assert_eq!(kod(check_peer_limits(&mut k, &mut o, peer, &req("j1"), 1.0, 0)).as_deref(), Some("powtorzony_job"));
         for j in ["j2", "j3", "j4"] {
-            assert_eq!(kod(limit_peera(&mut k, &mut o, peer, &req(j), 1.0, 0)), None, "{j}");
+            assert_eq!(kod(check_peer_limits(&mut k, &mut o, peer, &req(j), 1.0, 0)), None, "{j}");
         }
-        assert_eq!(kod(limit_peera(&mut k, &mut o, peer, &req("j5"), 1.0, 0)).as_deref(), Some("rate_limit"));
-        // inny peer ma własny kubełek
-        assert_eq!(kod(limit_peera(&mut k, &mut o, inny, &req("j5"), 1.0, 0)), None);
-        // po 2 s peer odzyskuje miejsce
-        assert_eq!(kod(limit_peera(&mut k, &mut o, peer, &req("j6"), 1.0, 2_000_000)), None);
-        // 0 = bez limitu
+        assert_eq!(kod(check_peer_limits(&mut k, &mut o, peer, &req("j5"), 1.0, 0)).as_deref(), Some("rate_limit"));
+        assert_eq!(kod(check_peer_limits(&mut k, &mut o, inny, &req("j5"), 1.0, 0)), None);
+        assert_eq!(kod(check_peer_limits(&mut k, &mut o, peer, &req("j6"), 1.0, 2_000_000)), None);
         let (mut k2, mut o2) = (HashMap::new(), VecDeque::new());
         for i in 0..100 {
-            assert_eq!(kod(limit_peera(&mut k2, &mut o2, peer, &req(&format!("x{i}")), 0.0, 0)), None);
+            assert_eq!(kod(check_peer_limits(&mut k2, &mut o2, peer, &req(&format!("x{i}")), 0.0, 0)), None);
         }
     }
 
     #[test]
-    fn test_wykryj_precyzje_z_nazwy_modelu() {
-        assert_eq!(wykryj_precyzje("gemma-4-26b-a4b-it-bf16"), Precision::Bf16);
-        // kwantyzacje całkowitoliczbowe to NIE fp4/fp8
-        assert_eq!(wykryj_precyzje("gemma-4-26b-a4b-it-qat-q4_0"), Precision::Int4);
-        assert_eq!(wykryj_precyzje("qwen-q8_0"), Precision::Int8);
-        assert_eq!(wykryj_precyzje("model-awq"), Precision::Int4);
-        assert_eq!(wykryj_precyzje("model-gptq"), Precision::Int4);
-        assert_eq!(wykryj_precyzje("model-int4"), Precision::Int4);
-        assert_eq!(wykryj_precyzje("model-fp8"), Precision::Fp8);
-        assert_eq!(wykryj_precyzje("model-nvfp4"), Precision::Fp4);
-        assert_eq!(wykryj_precyzje("model-fp32"), Precision::Fp32);
-        assert_eq!(wykryj_precyzje("model-f32"), Precision::Fp32);
-        assert_eq!(wykryj_precyzje("model-fp16"), Precision::Fp16);
-        // bez znacznika (albo Q5/Q6, których enum nie ma) — przyznajemy, że nie wiemy
-        assert_eq!(wykryj_precyzje("standard-model"), Precision::Unknown);
-        assert_eq!(wykryj_precyzje("deepseek-v4-flash-amd"), Precision::Unknown);
-        assert_eq!(wykryj_precyzje("llama-q5_k_m"), Precision::Unknown);
-        // kwantyzacja wygrywa z formatem bazowym w nazwie
-        assert_eq!(wykryj_precyzje("gemma-4-26b-bf16-q4_0"), Precision::Int4);
-        assert_eq!(wykryj_precyzje("llama-fp16-awq"), Precision::Int4);
-        assert_eq!(wykryj_precyzje("model-gptq-8bit"), Precision::Int8);
-        // rodziny GGUF i zapisy zwarte; kwantyzacja blokuje spadek do formatu bazowego
-        assert_eq!(wykryj_precyzje("model-bf16-iq4_xs"), Precision::Int4);
-        assert_eq!(wykryj_precyzje("llama-q4km"), Precision::Int4);
-        assert_eq!(wykryj_precyzje("qwen-q8_k"), Precision::Int8);
-        assert_eq!(wykryj_precyzje("model-w4a16"), Precision::Int4);
-        assert_eq!(wykryj_precyzje("model-w8a8"), Precision::Int8);
-        assert_eq!(wykryj_precyzje("model-fp8e4m3"), Precision::Fp8);
-        assert_eq!(wykryj_precyzje("model-bf16-q6_k"), Precision::Unknown);
-        // sprzeczne znaczniki (wagi int4 + fp8 KV) — nie zgadujemy
-        assert_eq!(wykryj_precyzje("llama-int4-fp8"), Precision::Unknown);
-        assert_eq!(wykryj_precyzje("llama-awq-fp8"), Precision::Unknown);
-        assert_eq!(wykryj_precyzje("llama-gptq-fp4"), Precision::Unknown);
-        assert_eq!(wykryj_precyzje("model-bf16-quantized"), Precision::Unknown);
-        // tylko pełne tokeny GGUF: „q80”/„q8deadbeef” nie są kwantyzacją
-        assert_eq!(wykryj_precyzje("model-q80"), Precision::Unknown);
-        assert_eq!(wykryj_precyzje("bf16-q8deadbeef"), Precision::Bf16);
-        // dwa formaty bazowe naraz — też nie zgadujemy
-        assert_eq!(wykryj_precyzje("merge-bf16-fp16"), Precision::Unknown);
-        // całe tokeny, nie podciągi: hex z „f16”/„bf16”/„f32” w środku to nie precyzja
-        assert_eq!(wykryj_precyzje("model@0a8f16c3bf16e9f32d"), Precision::Unknown);
-        assert_eq!(wykryj_precyzje("qwen2.5-32b-instruct"), Precision::Unknown);
-        // serializacja: nazwy w receipcie
+    fn test_detect_precision_from_model_name() {
+        assert_eq!(detect_precision_from_model_name("gemma-4-26b-a4b-it-bf16"), Precision::Bf16);
+        assert_eq!(detect_precision_from_model_name("gemma-4-26b-a4b-it-qat-q4_0"), Precision::Int4);
+        assert_eq!(detect_precision_from_model_name("qwen-q8_0"), Precision::Int8);
+        assert_eq!(detect_precision_from_model_name("model-awq"), Precision::Int4);
+        assert_eq!(detect_precision_from_model_name("model-gptq"), Precision::Int4);
+        assert_eq!(detect_precision_from_model_name("model-int4"), Precision::Int4);
+        assert_eq!(detect_precision_from_model_name("model-fp8"), Precision::Fp8);
+        assert_eq!(detect_precision_from_model_name("model-nvfp4"), Precision::Fp4);
+        assert_eq!(detect_precision_from_model_name("model-fp32"), Precision::Fp32);
+        assert_eq!(detect_precision_from_model_name("model-f32"), Precision::Fp32);
+        assert_eq!(detect_precision_from_model_name("model-fp16"), Precision::Fp16);
+        assert_eq!(detect_precision_from_model_name("standard-model"), Precision::Unknown);
+        assert_eq!(detect_precision_from_model_name("deepseek-v4-flash-amd"), Precision::Unknown);
+        assert_eq!(detect_precision_from_model_name("llama-q5_k_m"), Precision::Unknown);
+        assert_eq!(detect_precision_from_model_name("gemma-4-26b-bf16-q4_0"), Precision::Int4);
+        assert_eq!(detect_precision_from_model_name("llama-fp16-awq"), Precision::Int4);
+        assert_eq!(detect_precision_from_model_name("model-gptq-8bit"), Precision::Int8);
+        assert_eq!(detect_precision_from_model_name("model-bf16-iq4_xs"), Precision::Int4);
+        assert_eq!(detect_precision_from_model_name("llama-q4km"), Precision::Int4);
+        assert_eq!(detect_precision_from_model_name("qwen-q8_k"), Precision::Int8);
+        assert_eq!(detect_precision_from_model_name("model-w4a16"), Precision::Int4);
+        assert_eq!(detect_precision_from_model_name("model-w8a8"), Precision::Int8);
+        assert_eq!(detect_precision_from_model_name("model-fp8e4m3"), Precision::Fp8);
+        assert_eq!(detect_precision_from_model_name("model-bf16-q6_k"), Precision::Unknown);
+        assert_eq!(detect_precision_from_model_name("llama-int4-fp8"), Precision::Unknown);
+        assert_eq!(detect_precision_from_model_name("llama-awq-fp8"), Precision::Unknown);
+        assert_eq!(detect_precision_from_model_name("llama-gptq-fp4"), Precision::Unknown);
+        assert_eq!(detect_precision_from_model_name("model-bf16-quantized"), Precision::Unknown);
+        assert_eq!(detect_precision_from_model_name("model-q80"), Precision::Unknown);
+        assert_eq!(detect_precision_from_model_name("bf16-q8deadbeef"), Precision::Bf16);
+        assert_eq!(detect_precision_from_model_name("merge-bf16-fp16"), Precision::Unknown);
+        assert_eq!(detect_precision_from_model_name("model@0a8f16c3bf16e9f32d"), Precision::Unknown);
+        assert_eq!(detect_precision_from_model_name("qwen2.5-32b-instruct"), Precision::Unknown);
         assert_eq!(serde_json::to_string(&Precision::Int4).unwrap(), "\"int4\"");
         assert_eq!(serde_json::to_string(&Precision::Unknown).unwrap(), "\"unknown\"");
     }

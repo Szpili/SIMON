@@ -92,10 +92,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Detektor pomiarow-stalych
-        run: cargo test --release -p simon-core pomiar -- --nocapture
+        run: cargo test --release -p simon-core measurement -- --nocapture
 
-      # Sygnatura bledu z 2026-09-18: przepustowosc liczona ze stalej.
-      # Wartownik celowo pomija komentarze (opis incydentu ma moc zostac
-      # w kodzie) i przeliczenia ms->s, a lapie dzielenie przez stala stawke.
-      - name: Wartownik stalych
-        run: python3 scripts/wartownik_stalych.py crates
+      # Signature of incident from 2026-09-18: throughput calculated from a constant.
+      # Constant guard checks that token counts are not divided by hardcoded rates.
+      - name: Constant guard
+        run: python3 scripts/constant_guard.py crates

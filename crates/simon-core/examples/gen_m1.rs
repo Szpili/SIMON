@@ -1,20 +1,20 @@
-//! Generator fixture M1 do `przyklady/` — receipt z wiązaniem wejścia/stanu
-//! plus plik zadania (`--tokens`) do `simon verify`.
+//! M1 fixture generator for `przyklady/` — receipt with input/state binding
+//! and job task file (`--tokens`) for `simon verify`.
 //!
-//! Uruchom z korzenia repo: `cargo run -p simon-core --example gen_m1`
+//! Run from repo root: `cargo run -p simon-core --example gen_m1`
 use simon_core::crypto::Keypair;
 use simon_core::receipt::{
-    odcisk_parametrow, odcisk_tokenizera, odcisk_wyjscia, Precision, Receipt,
+    output_digest_for, params_digest, tokenizer_digest, Precision, Receipt,
 };
 
 fn main() {
-    // Deterministyczny klucz demo — fixture, nie produkcyjny.
+    // Deterministic demo keypair for test fixtures
     let k = Keypair::from_seed(&[42u8; 32]);
-    let tokenizer_hash = odcisk_tokenizera(b"{\"demo\":\"tokenizer\"}");
+    let tokenizer_hash = tokenizer_digest(b"{\"demo\":\"tokenizer\"}");
     let nonce = "demo-nonce-2026-10-04";
     let prompt_token_ids: Vec<u32> = (100..140).collect();
     let output_token_ids: Vec<u32> = (200..260).collect();
-    let sampling = odcisk_parametrow(0, 1000, 1, 0, 1000).unwrap();
+    let sampling = params_digest(0, 1000, 1, 0, 1000).unwrap();
     let output_text = "DEMO OUTPUT";
 
     let receipt = Receipt {
@@ -24,16 +24,16 @@ fn main() {
         runtime: "llama.cpp/511f9c13".into(),
         precision: Precision::Fp16,
         activation_hash: "toploc:NIE_POLICZONY".into(),
-        output_digest: odcisk_wyjscia("job-m1-demo", output_text).unwrap(),
+        output_digest: output_digest_for("job-m1-demo", output_text).unwrap(),
         prompt_tokens: prompt_token_ids.len() as u32,
         completion_tokens: output_token_ids.len() as u32,
         started_at_us: 0,
         finished_at_us: 1,
         signer: k.public(),
         signature: None,
-        wiazania: None,
+        bindings: None,
     }
-    .z_wiazaniem_m1(
+    .with_m1_bindings(
         tokenizer_hash.clone(),
         nonce.into(),
         &prompt_token_ids,
@@ -46,7 +46,7 @@ fn main() {
     .sign(&k)
     .unwrap();
 
-    let zadanie = serde_json::json!({
+    let task = serde_json::json!({
         "tokenizer_hash": tokenizer_hash,
         "client_nonce": nonce,
         "prompt_token_ids": prompt_token_ids,
@@ -61,8 +61,8 @@ fn main() {
     std::fs::write("przyklady/odpowiedz_m1.txt", output_text).unwrap();
     std::fs::write(
         "przyklady/zadanie_m1.json",
-        serde_json::to_string_pretty(&zadanie).unwrap() + "\n",
+        serde_json::to_string_pretty(&task).unwrap() + "\n",
     )
     .unwrap();
-    println!("zapisano przyklady/{{receipt_m1.json, odpowiedz_m1.txt, zadanie_m1.json}}");
+    println!("wrote przyklady/{{receipt_m1.json, odpowiedz_m1.txt, zadanie_m1.json}}");
 }

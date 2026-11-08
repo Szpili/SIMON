@@ -1,18 +1,11 @@
-//! Regresja (2026-10-31): słaby klucz publiczny nie może dawać ważnego podpisu.
+//! Regression (2026-10-31): weak public keys must not yield valid signatures.
 //!
-//! Znaleziony błąd: `PublicKey::verify_digest` wołał `verify` z ed25519-dalek,
-//! który nie odrzuca punktów małego rzędu. Klucz `01||00*31` (punkt
-//! tożsamościowy) z podpisem R = tożsamość, s = 0 przechodził dla KAŻDEGO
-//! odcisku, więc każdy mógł „podpisać” dowolny receipt bez klucza prywatnego.
-//!
-//! Dwa pierwsze testy PADAŁY przed poprawką (`is_weak` + `verify_strict`):
-//! przyjęte 256/256 i 67/256 odcisków. Trzeci to kontrola zwykłego klucza.
+//! Root cause fixed: PublicKey::verify_digest now calls verify_strict and checks
+//! key.is_weak(), rejecting small-order points (e.g. identity point 01||00*31).
 
 use simon_core::crypto::{Keypair, PublicKey, Signature};
 
-/// 256 różnych odcisków. Dla klucza 00..00 (rząd 4) wynik zależy od
-/// (SHA-512(R‖A‖M) mod ℓ) mod 4, więc pojedynczy odcisk niczego nie dowodzi;
-/// dla punktu tożsamościowego wynik od odcisku nie zależy.
+/// 256 different digests to verify rejection across edge cases.
 fn odciski() -> impl Iterator<Item = String> {
     (0u32..256).map(|i| format!("{i:064x}"))
 }
@@ -30,13 +23,13 @@ fn ile_przechodzi(klucz: [u8; 32], podpis: [u8; 64]) -> usize {
 #[test]
 fn klucz_tozsamosciowy_nie_podrabia_podpisu() {
     let mut klucz = [0u8; 32];
-    klucz[0] = 1; // 01||00*31 = punkt tożsamościowy (rząd 1)
+    klucz[0] = 1; // 01||00*31 = identity point (order 1)
     let mut podpis = [0u8; 64];
-    podpis[0] = 1; // R = tożsamość, s = 0
+    podpis[0] = 1; // R = identity, s = 0
     assert_eq!(
         ile_przechodzi(klucz, podpis),
         0,
-        "odciski przyjęte z kluczem tożsamościowym"
+        "digests accepted with identity key"
     );
 }
 
@@ -45,7 +38,7 @@ fn klucz_zerowy_nie_podrabia_podpisu() {
     assert_eq!(
         ile_przechodzi([0u8; 32], [0u8; 64]),
         0,
-        "odciski przyjęte z kluczem 00..00"
+        "digests accepted with 00..00 key"
     );
 }
 

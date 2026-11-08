@@ -1,151 +1,135 @@
-//! M0.4 — autoryzacja użytkownika w `JobOrder`: wersja, nonce, termin, weryfikacja
-//! po stronie KOORDYNATORA.
-//!
-//! Testy napisane PRZED poprawką (zasada: „test pada przed poprawką").
-//! Klasa ataku (macierz RT3): przejęty agent / harness (D110) + podstawienie zlecenia.
+//! M0.4 — user authorization in `JobOrder`: version, nonce, expiration, coordinator verification.
 
 use simon_core::crypto::Keypair;
 use simon_harness::client_protocol::{
-    Autoryzacja, JobOrder, RejestrZuzytychAutoryzacji, FORMAT_V, TOLERANCJA_ZEGARA_SECS,
+    JobOrder, OrderAuthorization, SpentAuthorizationRegistry, CLOCK_TOLERANCE_SECS, FORMAT_V,
 };
 
-fn teraz() -> u64 {
+fn now() -> u64 {
     1_800_000_000
 }
 
-/// Autoryzacja spójna ze zleceniem. `wazne_do` w przyszłości.
-fn autoryzacja_z(order: &JobOrder, klucz: &Keypair, wazne_do: u64) -> Autoryzacja {
-    Autoryzacja {
+/// Authorization consistent with order. `valid_until` in future.
+fn authorization_from(order: &JobOrder, keypair: &Keypair, valid_until: u64) -> OrderAuthorization {
+    OrderAuthorization {
         v: FORMAT_V,
         payload_digest: order.payload_digest.clone(),
         model_hash: order.model_hash.clone(),
         fee_think: order.fee_think,
         timeout_secs: order.timeout_secs,
         nonce: order.nonce.clone(),
-        wazne_do,
-        user_pubkey: klucz.public().to_hex(),
+        valid_until,
+        user_pubkey: keypair.public().to_hex(),
         signature: None,
     }
-    .sign(klucz)
+    .sign(keypair)
 }
 
-fn zlecenie_podpisane(fee: u64) -> (JobOrder, Keypair) {
+fn signed_order(fee: u64) -> (JobOrder, Keypair) {
     let k = Keypair::generate();
     let mut order =
-        JobOrder::new("sha256:qwen", b"policz to", fee, 300, k.public().to_hex()).expect("order");
-    let a = autoryzacja_z(&order, &k, teraz() + 600);
-    order.autoryzacja = Some(a);
+        JobOrder::new("sha256:qwen", b"compute this", fee, 300, k.public().to_hex()).expect("order");
+    let a = authorization_from(&order, &k, now() + 600);
+    order.authorization = Some(a);
     (order, k)
 }
 
-/// Kontrola: poprawna autoryzacja przechodzi.
 #[test]
 fn m04_poprawna_autoryzacja_przechodzi() {
-    let (order, _k) = zlecenie_podpisane(100);
+    let (order, _k) = signed_order(100);
     assert!(
-        order.zweryfikuj_autoryzacje(teraz()).is_ok(),
-        "poprawna autoryzacja musi przejść"
+        order.verify_authorization(now()).is_ok(),
+        "valid authorization must pass"
     );
 }
 
-/// Podstawienie opłaty w `JobOrder` przy starej autoryzacji → odrzucone.
 #[test]
 fn m04_podmiana_oplaty_odrzucona() {
-    let (mut order, _k) = zlecenie_podpisane(100);
-    order.fee_think = 999_999; // atakujący chce zapłacić cudzym podpisem mniej/więcej
+    let (mut order, _k) = signed_order(100);
+    order.fee_think = 999_999;
     assert!(
-        order.zweryfikuj_autoryzacje(teraz()).is_err(),
-        "podmiana opłaty musi być odrzucona"
+        order.verify_authorization(now()).is_err(),
+        "fee substitution must be rejected"
     );
 }
 
-/// Podstawienie modelu → odrzucone.
 #[test]
 fn m04_podmiana_modelu_odrzucona() {
-    let (mut order, _k) = zlecenie_podpisane(100);
-    order.model_hash = "sha256:inny-model".into();
-    assert!(order.zweryfikuj_autoryzacje(teraz()).is_err(), "podmiana modelu");
+    let (mut order, _k) = signed_order(100);
+    order.model_hash = "sha256:other-model".into();
+    assert!(order.verify_authorization(now()).is_err(), "model substitution");
 }
 
-/// Podstawienie treści (payload_digest) → odrzucone.
 #[test]
 fn m04_podmiana_tresci_odrzucona() {
-    let (mut order, _k) = zlecenie_podpisane(100);
+    let (mut order, _k) = signed_order(100);
     order.payload_digest = "deadbeef".repeat(8);
-    assert!(order.zweryfikuj_autoryzacje(teraz()).is_err(), "podmiana treści");
+    assert!(order.verify_authorization(now()).is_err(), "content substitution");
 }
 
-/// Przeterminowana autoryzacja → odrzucona.
 #[test]
 fn m04_przeterminowana_odrzucona() {
     let k = Keypair::generate();
     let mut order = JobOrder::new("sha256:m", b"x", 100, 300, k.public().to_hex()).unwrap();
-    // ważna 10 s temu, poza tolerancją
-    let a = autoryzacja_z(&order, &k, teraz() - TOLERANCJA_ZEGARA_SECS - 10);
-    order.autoryzacja = Some(a);
+    let a = authorization_from(&order, &k, now() - CLOCK_TOLERANCE_SECS - 10);
+    order.authorization = Some(a);
     assert!(
-        order.zweryfikuj_autoryzacje(teraz()).is_err(),
-        "przeterminowana autoryzacja musi być odrzucona"
+        order.verify_authorization(now()).is_err(),
+        "expired authorization must be rejected"
     );
-    // A w granicach tolerancji — przechodzi (rozjazd zegarów).
     let mut ok = JobOrder::new("sha256:m", b"x", 100, 300, k.public().to_hex()).unwrap();
-    let a2 = autoryzacja_z(&ok, &k, teraz() - TOLERANCJA_ZEGARA_SECS + 5);
-    ok.autoryzacja = Some(a2);
-    assert!(ok.zweryfikuj_autoryzacje(teraz()).is_ok(), "tolerancja zegara");
+    let a2 = authorization_from(&ok, &k, now() - CLOCK_TOLERANCE_SECS + 5);
+    ok.authorization = Some(a2);
+    assert!(ok.verify_authorization(now()).is_ok(), "clock tolerance");
 }
 
-/// Cudzy klucz → odrzucone.
 #[test]
 fn m04_cudzy_klucz_odrzucony() {
-    let (mut order, _k) = zlecenie_podpisane(100);
-    let obcy = Keypair::generate();
-    order.client_pubkey = obcy.public().to_hex();
-    assert!(order.zweryfikuj_autoryzacje(teraz()).is_err(), "cudzy klucz");
+    let (mut order, _k) = signed_order(100);
+    let foreign = Keypair::generate();
+    order.client_pubkey = foreign.public().to_hex();
+    assert!(order.verify_authorization(now()).is_err(), "foreign key");
 }
 
-/// Brak autoryzacji → odrzucone (D110: koordynator NIE dopuszcza bez podpisu).
 #[test]
 fn m04_brak_autoryzacji_odrzucony() {
     let k = Keypair::generate();
     let order = JobOrder::new("sha256:m", b"x", 100, 300, k.public().to_hex()).unwrap();
-    assert!(order.autoryzacja.is_none(), "świeże zlecenie nie ma autoryzacji");
+    assert!(order.authorization.is_none(), "fresh order has no authorization");
     assert!(
-        order.zweryfikuj_autoryzacje(teraz()).is_err(),
-        "D110: koordynator odrzuca zlecenie bez autoryzacji"
+        order.verify_authorization(now()).is_err(),
+        "D110: coordinator rejects order without authorization"
     );
 }
 
-/// Ta sama autoryzacja dwa razy → druga odrzucona (M0.4b).
 #[test]
 fn m04_ta_sama_autoryzacja_dwa_razy_odrzucona() {
-    let (order, _k) = zlecenie_podpisane(100);
-    let odcisk = order.zweryfikuj_autoryzacje(teraz()).expect("pierwsza");
-    let mut rejestr = RejestrZuzytychAutoryzacji::default();
-    rejestr.zajmij(&odcisk).expect("pierwsze zajęcie");
+    let (order, _k) = signed_order(100);
+    let digest = order.verify_authorization(now()).expect("first");
+    let mut registry = SpentAuthorizationRegistry::default();
+    registry.consume(&digest).expect("first consume");
     assert!(
-        rejestr.zajmij(&odcisk).is_err(),
-        "powtórka tej samej autoryzacji musi być odrzucona"
+        registry.consume(&digest).is_err(),
+        "duplicate authorization must be rejected"
     );
 }
 
-/// Nieznana wersja formatu → odrzucona (M0.4a).
 #[test]
 fn m04_nieznana_wersja_odrzucona() {
-    let (mut order, _k) = zlecenie_podpisane(100);
-    if let Some(a) = order.autoryzacja.as_mut() {
+    let (mut order, _k) = signed_order(100);
+    if let Some(a) = order.authorization.as_mut() {
         a.v = 999;
     }
-    assert!(order.zweryfikuj_autoryzacje(teraz()).is_err(), "nieznana wersja");
+    assert!(order.verify_authorization(now()).is_err(), "unknown version");
 }
 
-/// H(nonce ‖ treść) — ten sam prompt z różnym nonce daje różny digest.
 #[test]
 fn m04_nonce_w_haszu_tresci() {
     let k = Keypair::generate();
-    let a = JobOrder::new("sha256:m", b"tak", 1, 1, k.public().to_hex()).unwrap();
-    let b = JobOrder::new("sha256:m", b"tak", 1, 1, k.public().to_hex()).unwrap();
+    let a = JobOrder::new("sha256:m", b"yes", 1, 1, k.public().to_hex()).unwrap();
+    let b = JobOrder::new("sha256:m", b"yes", 1, 1, k.public().to_hex()).unwrap();
     assert_ne!(
         a.payload_digest, b.payload_digest,
-        "ten sam krótki prompt z różnym nonce = różny digest (blokada słownikowa)"
+        "same short prompt with different nonce gives different digest"
     );
 }

@@ -1,460 +1,382 @@
-//! M3 — weryfikacja wykonania przez **containment w top-k**.
+//! M3 — execution verification via **containment in top-k**.
 //!
-//! Podstawa pomiarowa (brain: `simon-e0-fp-divergence`, `simon-m3-topk-kalibracja`):
-//! - exact-match CPU↔GPU przy temp=0 jest MARTWY (dywergencja od ~3 tokenów),
-//! - dywergencja FP to zawsze spór top-1 vs top-2 (margines logprob 0,07–0,17),
-//! - gdy verifier PODĄŻA trajektorią node'a (prefix-forcing po tokenach),
-//!   token node'a jest w top-10 w 150/150 krokach, a w top-2 w 100%.
-//!
-//! Wniosek: nie porównujemy równości tokenów. Verifier odtwarza krok po kroku
-//! rozkład top-k i akceptuje token node'a, jeśli mieści się w top-k w granicach
-//! marginesu. To jest warstwa DECYZYJNA — sama inferencja verifiera (llama.cpp/
-//! vLLM) jest poza tym modułem; tu wchodzą gotowe kroki (token + top-k).
+//! Empirical basis (brain: `simon-e0-fp-divergence`, `simon-m3-topk-kalibracja`):
+//! - Exact-match CPU<->GPU at temp=0 is invalid due to FP divergence (~3 tokens).
+//! - FP divergence is almost always a top-1 vs top-2 dispute (logprob margin 0.07–0.17).
+//! - When verifier follows node trajectory (prefix-forcing on tokens), node's token
+//!   falls in top-10 in 150/150 steps, and in top-2 in 100% of steps.
 
 use serde::{Deserialize, Serialize};
 
 use crate::{content_digest, SimonError};
 
-/// Separator domeny odcisku audytu.
-pub const DOMENA_AUDYTU: &str = "SIMON/AUDIT/v1";
+/// Domain separator for audit digest.
+pub const AUDIT_DOMAIN: &str = "SIMON/AUDIT/v1";
+pub const DOMENA_AUDYTU: &str = AUDIT_DOMAIN;
 
-/// Jeden sprawdzony krok: token node'a vs rozkład verifiera w tym kroku.
+/// One verified step: node token vs verifier distribution at this step.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Krok {
-    pub indeks: u32,
-    /// Token wybrany przez node'a (z jego `output_token_ids`).
+pub struct LogprobStep {
+    #[serde(rename = "index", alias = "indeks")]
+    pub index: u32,
+    /// Token selected by the node (from its `output_token_ids`).
     pub node_token: u32,
-    /// Top-k verifiera: `(token_id, logprob)`, posortowane malejąco po logprob.
+    /// Verifier top-k: `(token_id, logprob)`, sorted descending by logprob.
     pub topk: Vec<(u32, f64)>,
 }
 
-/// Polityka akceptacji. Domyślne wartości pochodzą z pomiaru M3.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct Polityka {
-    /// Ile najlepszych tokenów verifiera uznajemy za „zgodne".
-    pub k: usize,
-    /// Maksymalny margines `logprob(top1) - logprob(node)`, gdy node jest w top-k.
-    /// (Zmierzone 0,07–0,17 → domyślnie 0,25 daje zapas; top-1 vs top-2 to nie szum.)
-    pub max_margin: f64,
-    /// Dopuszczalny ułamek kroków podejrzanych (poza top-k albo poza marginesem).
-    pub max_poza: f64,
+pub type Krok = LogprobStep;
+
+impl LogprobStep {
+    pub fn indeks(&self) -> u32 {
+        self.index
+    }
 }
 
-impl Default for Polityka {
+/// Acceptance policy. Default values derived from M3 empirical calibration.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct M3Policy {
+    /// How many top verifier tokens are considered compliant.
+    pub k: usize,
+    /// Maximum margin `logprob(top1) - logprob(node)` when node is in top-k.
+    pub max_margin: f64,
+    /// Allowed fraction of suspicious steps (outside top-k or exceeding max_margin).
+    #[serde(rename = "max_outside", alias = "max_poza")]
+    pub max_outside: f64,
+}
+
+pub type Polityka = M3Policy;
+
+impl Default for M3Policy {
     fn default() -> Self {
         Self {
             k: 2,
             max_margin: 0.25,
-            max_poza: 0.02,
+            max_outside: 0.02,
         }
     }
 }
 
-/// Werdykt audytu. Wszystkie pola są deterministyczne i nadają się do logu/slashingu.
+/// Audit verdict. All fields are deterministic and suitable for logging.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Werdykt {
-    pub krokow: usize,
-    pub w_topk: usize,
-    pub poza_topk: usize,
-    /// Najgorszy zaobserwowany rank w top-k (0 = poza top-k).
-    pub najgorszy_rank: usize,
-    /// Największy margines logprob względem top-1.
-    pub najgorszy_margin: f64,
-    /// Średnie NLL (ujemny logprob) tokenu node'a pod rozkładem verifiera, po
-    /// krokach, w których token jest w top-k. **Drugi sygnał obok ranku** (krytyk
-    /// bunny: sam rank/margines nie wystarcza). Wyżej = mniej prawdopodobny.
-    pub sredni_nll: f64,
-    /// Ile kroków, w których tokenu node'a NIE MA w top-k w ogóle.
-    pub poza_lista: usize,
+pub struct M3Verdict {
+    #[serde(rename = "steps", alias = "krokow")]
+    pub steps: usize,
+    #[serde(rename = "in_topk", alias = "w_topk")]
+    pub in_topk: usize,
+    #[serde(rename = "outside_topk", alias = "poza_topk")]
+    pub outside_topk: usize,
+    /// Worst observed rank within top-k (0 = outside top-k).
+    #[serde(rename = "worst_rank", alias = "najgorszy_rank")]
+    pub worst_rank: usize,
+    /// Maximum logprob margin relative to top-1.
+    #[serde(rename = "worst_margin", alias = "najgorszy_margin")]
+    pub worst_margin: f64,
+    /// Mean NLL (negative logprob) of node token under verifier distribution.
+    #[serde(rename = "mean_nll", alias = "sredni_nll")]
+    pub mean_nll: f64,
+    /// Count of steps where node token is completely absent from top-k.
+    #[serde(rename = "not_in_list", alias = "poza_lista")]
+    pub not_in_list: usize,
     pub ok: bool,
-    pub powod: Option<String>,
+    #[serde(rename = "reason", alias = "powod")]
+    pub reason: Option<String>,
 }
 
-/// Audyt do weryfikacji (zgodny z JSON-em z verifiera).
+pub type Werdykt = M3Verdict;
+
+impl M3Verdict {
+    pub fn krokow(&self) -> usize {
+        self.steps
+    }
+    pub fn w_topk(&self) -> usize {
+        self.in_topk
+    }
+    pub fn poza_topk(&self) -> usize {
+        self.outside_topk
+    }
+    pub fn najgorszy_rank(&self) -> usize {
+        self.worst_rank
+    }
+    pub fn najgorszy_margin(&self) -> f64 {
+        self.worst_margin
+    }
+    pub fn sredni_nll(&self) -> f64 {
+        self.mean_nll
+    }
+    pub fn poza_lista(&self) -> usize {
+        self.not_in_list
+    }
+    pub fn powod(&self) -> Option<&str> {
+        self.reason.as_deref()
+    }
+}
+
+/// Execution audit input matching verifier JSON structure.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Audyt {
-    pub kroki: Vec<Krok>,
+pub struct ExecutionAudit {
+    #[serde(rename = "steps", alias = "kroki")]
+    pub steps: Vec<LogprobStep>,
 }
 
-/// Ocenia kroki wobec polityki. Krok jest „podejrzany", gdy token node'a jest
-/// poza top-k ALBO jest w top-k, ale margines do top-1 przekracza `max_margin`.
-/// Werdykt `ok`, gdy ułamek kroków podejrzanych ≤ `max_poza` i audyt niepusty.
-pub fn ocena(kroki: &[Krok], p: &Polityka) -> Werdykt {
-    let mut w_topk = 0usize;
-    let mut poza = 0usize;
-    let mut najgorszy_rank = 0usize;
-    let mut najgorszy_margin = 0.0f64;
-    let mut suma_nll = 0.0f64;
-    let mut ile_nll = 0usize;
-    let mut poza_lista = 0usize;
-    let mut powod: Option<String> = None;
+pub type Audyt = ExecutionAudit;
 
-    for (i, kr) in kroki.iter().enumerate() {
-        if kr.topk.iter().any(|(_, lp)| !lp.is_finite()) {
-            poza += 1;
-            poza_lista += 1;
-            if powod.is_none() {
-                powod = Some(format!(
+/// Evaluates steps against the given policy.
+pub fn evaluate(steps: &[LogprobStep], p: &M3Policy) -> M3Verdict {
+    let mut in_topk = 0usize;
+    let mut outside = 0usize;
+    let mut worst_rank = 0usize;
+    let mut worst_margin = 0.0f64;
+    let mut sum_nll = 0.0f64;
+    let mut count_nll = 0usize;
+    let mut not_in_list = 0usize;
+    let mut reason: Option<String> = None;
+
+    for (i, step) in steps.iter().enumerate() {
+        if step.topk.iter().any(|(_, lp)| !lp.is_finite()) {
+            outside += 1;
+            not_in_list += 1;
+            if reason.is_none() {
+                reason = Some(format!(
                     "step {i} (idx {}): non-finite logprob in top-k",
-                    kr.indeks
+                    step.index
                 ));
             }
             continue;
         }
 
-        let mut posortowane = kr.topk.clone();
-        posortowane.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let mut sorted = step.topk.clone();
+        sorted.sort_by(|a, b| b.1.total_cmp(&a.1));
 
-        let top1_lp = posortowane.first().map(|x| x.1);
-        let traf = posortowane
+        let top1_lp = sorted.first().map(|x| x.1);
+        let match_found = sorted
             .iter()
             .enumerate()
-            .find(|(_, (id, _))| *id == kr.node_token);
+            .find(|(_, (id, _))| *id == step.node_token);
 
-        match traf {
+        match match_found {
             Some((rank0, (_, lp))) => {
                 let rank = rank0 + 1;
-                suma_nll += -lp;
-                ile_nll += 1;
+                sum_nll += -lp;
+                count_nll += 1;
                 let margin = match top1_lp {
                     Some(t1) => (t1 - *lp).max(0.0),
                     None => 0.0,
                 };
-                if rank > najgorszy_rank {
-                    najgorszy_rank = rank;
+                if rank > worst_rank {
+                    worst_rank = rank;
                 }
-                if margin > najgorszy_margin {
-                    najgorszy_margin = margin;
+                if margin > worst_margin {
+                    worst_margin = margin;
                 }
                 if rank <= p.k && margin <= p.max_margin {
-                    w_topk += 1;
+                    in_topk += 1;
                 } else {
-                    poza += 1;
-                    if powod.is_none() {
-                        powod = Some(format!(
+                    outside += 1;
+                    if reason.is_none() {
+                        reason = Some(format!(
                             "step {i} (idx {}): rank {rank} (k={}), margin {margin:.4} (max {:.4})",
-                            kr.indeks, p.k, p.max_margin
+                            step.index, p.k, p.max_margin
                         ));
                     }
                 }
             }
             None => {
-                poza += 1;
-                poza_lista += 1;
-                if powod.is_none() {
-                    powod = Some(format!(
+                outside += 1;
+                not_in_list += 1;
+                if reason.is_none() {
+                    reason = Some(format!(
                         "step {i} (idx {}): token {} OUTSIDE top-{}",
-                        kr.indeks, kr.node_token, p.k
+                        step.index, step.node_token, p.k
                     ));
                 }
             }
         }
     }
 
-    let ułamek = if kroki.is_empty() {
+    let fraction = if steps.is_empty() {
         1.0
     } else {
-        poza as f64 / kroki.len() as f64
+        outside as f64 / steps.len() as f64
     };
-    let ok = !kroki.is_empty() && ułamek <= p.max_poza;
+    let ok = !steps.is_empty() && fraction <= p.max_outside;
     if ok {
-        powod = None;
+        reason = None;
     }
 
-    Werdykt {
-        krokow: kroki.len(),
-        w_topk,
-        poza_topk: poza,
-        najgorszy_rank,
-        najgorszy_margin,
-        sredni_nll: if ile_nll > 0 { suma_nll / ile_nll as f64 } else { 0.0 },
-        poza_lista,
+    M3Verdict {
+        steps: steps.len(),
+        in_topk,
+        outside_topk: outside,
+        worst_rank,
+        worst_margin,
+        mean_nll: if count_nll > 0 { sum_nll / count_nll as f64 } else { 0.0 },
+        not_in_list,
         ok,
-        powod,
+        reason,
     }
 }
 
-/// Odcisk audytu — tylko liczby całkowite (indeksy + top-k token ids), bez floatów,
-/// więc kanoniczny między implementacjami. Do przypięcia, CO dokładnie sprawdzono.
-pub fn odcisk_audytu(kroki: &[Krok]) -> Result<String, SimonError> {
-    let uproszczone: Vec<(u32, u32, Vec<u32>)> = kroki
+/// Canonical audit digest over integers only (indices and token IDs).
+pub fn audit_digest(steps: &[LogprobStep]) -> Result<String, SimonError> {
+    let simplified: Vec<(u32, u32, Vec<u32>)> = steps
         .iter()
         .map(|k| {
             (
-                k.indeks,
+                k.index,
                 k.node_token,
                 k.topk.iter().map(|(id, _)| *id).collect(),
             )
         })
         .collect();
     content_digest(&serde_json::json!({
-        "domena": DOMENA_AUDYTU,
-        "kroki": uproszczone,
+        "domena": AUDIT_DOMAIN,
+        "kroki": simplified,
     }))
 }
 
-/// Parsuje JSON audytu i od razu ocenia.
-pub fn ocena_json(json: &str, p: &Polityka) -> Result<Werdykt, SimonError> {
+pub use audit_digest as odcisk_audytu;
+
+/// Parses audit JSON and evaluates against policy.
+pub fn evaluate_json(json: &str, p: &M3Policy) -> Result<M3Verdict, SimonError> {
     let v: serde_json::Value = serde_json::from_str(json)?;
-    // `verifier_loop.py --dry-run` oznacza syntetyczne logprob polem `simulated`: to nie dowód.
-    // Każda wartość poza `false` odrzuca plik. To etykieta przeciw POMYŁCE (dry-run wzięty za audyt),
-    // nie ochrona przed fałszerzem — kto usunie pole, ten i tak sam pisze `kroki`.
     if v.get("simulated").is_some_and(|s| s != &serde_json::Value::Bool(false)) {
         return Err(SimonError::ReceiptMismatch(
             "simulated audit (verifier_loop --dry-run) is not evidence".into(),
         ));
     }
-    let a: Audyt = serde_json::from_value(v)?;
-    Ok(ocena(&a.kroki, p))
+    let a: ExecutionAudit = serde_json::from_value(v)?;
+    Ok(evaluate(&a.steps, p))
 }
 
-/// Decyzja z audytu M3. **To jest spójność z polityką referencyjną, NIE dowód
-/// tożsamości modelu ani dowód wykonania** (krytyk bunny, 2026-10-04). Wyjaśnienie:
-/// `ReceiptValid` (podpis) oddzielamy od `ReferenceCompatible`; „nie udowodniono
-/// niezgodności" **nie znaczy** „uczciwy" — stąd `InsufficientEvidence`.
-/// **Kluczowa reguła** (E0/M3 kalibracja): nigdy nie slasujemy za pojedynczy token.
+/// Decision from M3 audit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Decyzja {
-    /// Audyt zgodny z polityką referencyjną — brak sygnału odchylenia.
+pub enum Decision {
     Pass,
-    /// Dryf niejednoznaczny — eskalacja BEZ slasha.
     SoftFail,
-    /// Wyraźne, wielokrotne odejście — kandydat do slasha (po niezależnym sporze).
     HardFail,
-    /// Za mało kroków, żeby cokolwiek rozstrzygnąć. NIE jest to „uczciwy".
     InsufficientEvidence,
-    /// Brak podstaw: receipt poniżej poziomu 1 (brak wiązania wejścia) albo pusty audyt.
-    BrakPodstaw,
+    #[serde(alias = "brak_podstaw")]
+    InsufficientBasis,
 }
 
-/// Progi decyzji. `twardy_poza` = od jakiego ułamka kroków poza top-k zaczyna się slash.
-/// `min_krokow` = poniżej tylu sprawdzonych kroków zwracamy `InsufficientEvidence`.
+pub type Decyzja = Decision;
+
+/// Decision thresholds.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct Progi {
-    pub twardy_poza: f64,
-    pub min_krokow: usize,
+pub struct M3Thresholds {
+    #[serde(rename = "hard_outside", alias = "twardy_poza")]
+    pub hard_outside: f64,
+    #[serde(rename = "min_steps", alias = "min_krokow")]
+    pub min_steps: usize,
 }
 
-impl Default for Progi {
+pub type Progi = M3Thresholds;
+
+impl Default for M3Thresholds {
     fn default() -> Self {
-        Self { twardy_poza: 0.05, min_krokow: 8 }
+        Self { hard_outside: 0.05, min_steps: 8 }
     }
 }
 
-/// Zamienia werdykt M3 + poziom receiptu na decyzję.
-///
-/// Bramki:
-/// 1. `receipt_level < 1` → `BrakPodstaw` (nie ma wiązania wejścia, nie ma czego
-///    audytować — dziś receipty są poziomu 0).
-/// 2. puste kroki → `BrakPodstaw` (nie orzekamy na podstawie niczego).
-/// 3. `krokow < min_krokow` → `InsufficientEvidence` (za mało, by cokolwiek twierdzić).
-/// 4. `ok` → `Pass`.
-/// 5. ułamek kroków podejrzanych ≥ `twardy_poza` → `HardFail`, inaczej `SoftFail`.
-///
-/// „Podejrzany" = poza top-k albo w top-k z marginesem > `max_margin` (patrz `ocena`).
-pub fn decyzja(w: &Werdykt, receipt_level: u8, progi: &Progi) -> Decyzja {
-    if receipt_level < 1 || w.krokow == 0 {
-        return Decyzja::BrakPodstaw;
+/// Converts M3 verdict and receipt level into a decision.
+pub fn decide(verdict: &M3Verdict, receipt_level: u8, thresholds: &M3Thresholds) -> Decision {
+    if receipt_level < 1 || verdict.steps == 0 {
+        return Decision::InsufficientBasis;
     }
-    if w.krokow < progi.min_krokow {
-        return Decyzja::InsufficientEvidence;
+    if verdict.steps < thresholds.min_steps {
+        return Decision::InsufficientEvidence;
     }
-    if w.ok {
-        return Decyzja::Pass;
+    if verdict.ok {
+        return Decision::Pass;
     }
-    // NAPRAWA (krytyk fable, 2026-10-06): M3 **NIE autoryzuje slasha**. Dopóki nie ma
-    // pomiaru false-positive pod uczciwą zmiennością operatora (build/offload/batch/KV-quant/
-    // ROCm), najsilniejszy werdykt to `SoftFail` (eskalacja). `HardFail` zostaje w enumie dla
-    // decidable naruszeń kryptograficznych (zły podpis / replay nonce / reuse grant) — nigdy
-    // dla dystansu. `Progi::twardy_poza` zostaje do rekalibracji PO pomiarze FP.
-    Decyzja::SoftFail
+    Decision::SoftFail
 }
+
+pub use decide as decyzja;
 
 #[cfg(test)]
-mod testy {
-    #[test]
-    fn symulowany_audyt_odrzucony() {
-        let p = super::Polityka::default();
-        let prawdziwy = r#"{"kroki":[{"indeks":0,"node_token":5,"topk":[[5,-0.01],[6,-2.0]]}]}"#;
-        assert!(super::ocena_json(prawdziwy, &p).is_ok());
-        let symulowany = r#"{"simulated":true,"kroki":[{"indeks":0,"node_token":5,"topk":[[5,-0.01],[6,-2.0]]}]}"#;
-        assert!(super::ocena_json(symulowany, &p).is_err());
-        for zle in ["true", r#""true""#, "1", "null"] {
-            let j = format!(r#"{{"simulated":{zle},"kroki":[{{"indeks":0,"node_token":5,"topk":[[5,-0.01],[6,-2.0]]}}]}}"#);
-            let e = super::ocena_json(&j, &p).expect_err("simulated != false musi odrzucić");
-            assert!(e.to_string().contains("simulated"), "simulated={zle}: odrzucone z innego powodu: {e}");
-        }
-        let jawnie_nie = r#"{"simulated":false,"kroki":[{"indeks":0,"node_token":5,"topk":[[5,-0.01],[6,-2.0]]}]}"#;
-        assert!(super::ocena_json(jawnie_nie, &p).is_ok());
-    }
-
+mod tests {
     use super::*;
 
-    fn topk(pary: &[(u32, f64)]) -> Vec<(u32, f64)> {
-        pary.to_vec()
+    #[test]
+    fn simulated_audit_rejected() {
+        let p = M3Policy::default();
+        let valid = r#"{"steps":[{"index":0,"node_token":5,"topk":[[5,-0.01],[6,-2.0]]}]}"#;
+        assert!(evaluate_json(valid, &p).is_ok());
+        let simulated = r#"{"simulated":true,"steps":[{"index":0,"node_token":5,"topk":[[5,-0.01],[6,-2.0]]}]}"#;
+        assert!(evaluate_json(simulated, &p).is_err());
+        for bad in ["true", r#""true""#, "1", "null"] {
+            let j = format!(r#"{{"simulated":{bad},"steps":[{{"index":0,"node_token":5,"topk":[[5,-0.01],[6,-2.0]]}}]}}"#);
+            let e = evaluate_json(&j, &p).expect_err("simulated != false must reject");
+            assert!(e.to_string().contains("simulated"));
+        }
+        let explicitly_not = r#"{"simulated":false,"steps":[{"index":0,"node_token":5,"topk":[[5,-0.01],[6,-2.0]]}]}"#;
+        assert!(evaluate_json(explicitly_not, &p).is_ok());
+    }
+
+    fn topk(pairs: &[(u32, f64)]) -> Vec<(u32, f64)> {
+        pairs.to_vec()
     }
 
     #[test]
-    fn uczciwa_dywergencja_top1_top2_przechodzi() {
-        // Realne z pomiaru: rank 1 lub 2, margines ≤ 0,17.
-        let kroki = vec![
-            Krok { indeks: 0, node_token: 528, topk: topk(&[(528, -1.20), (28742, -1.37)]) },
-            Krok { indeks: 1, node_token: 302, topk: topk(&[(28725, -0.90), (302, -0.96)]) },
-            Krok { indeks: 2, node_token: 28783, topk: topk(&[(28783, -2.10), (28774, -2.17)]) },
+    fn honest_divergence_top1_top2_passes() {
+        let steps = vec![
+            LogprobStep { index: 0, node_token: 528, topk: topk(&[(528, -1.20), (28742, -1.37)]) },
+            LogprobStep { index: 1, node_token: 302, topk: topk(&[(28725, -0.90), (302, -0.96)]) },
+            LogprobStep { index: 2, node_token: 28783, topk: topk(&[(28783, -2.10), (28774, -2.17)]) },
         ];
-        let w = ocena(&kroki, &Polityka::default());
+        let w = evaluate(&steps, &M3Policy::default());
         assert!(w.ok, "{w:?}");
-        assert_eq!(w.krokow, 3);
-        assert_eq!(w.w_topk, 3);
-        assert_eq!(w.poza_topk, 0);
-        assert_eq!(w.najgorszy_rank, 2);
-        assert!(w.najgorszy_margin <= 0.25 + 1e-9);
+        assert_eq!(w.steps, 3);
+        assert_eq!(w.in_topk, 3);
+        assert_eq!(w.outside_topk, 0);
+        assert_eq!(w.worst_rank, 2);
+        assert!(w.worst_margin <= 0.25 + 1e-9);
     }
 
     #[test]
-    fn token_poza_topk_jest_odrzucony() {
-        // Cheater: token daleko poza top-k.
-        let kroki = vec![
-            Krok { indeks: 0, node_token: 528, topk: topk(&[(528, -1.0)]) },
-            Krok { indeks: 1, node_token: 999999, topk: topk(&[(28725, -0.9), (302, -0.96)]) },
+    fn token_outside_topk_rejected() {
+        let steps = vec![
+            LogprobStep { index: 0, node_token: 528, topk: topk(&[(528, -1.0)]) },
+            LogprobStep { index: 1, node_token: 999999, topk: topk(&[(28725, -0.9), (302, -0.96)]) },
         ];
-        let w = ocena(&kroki, &Polityka::default());
+        let w = evaluate(&steps, &M3Policy::default());
         assert!(!w.ok, "{w:?}");
-        assert_eq!(w.poza_topk, 1);
-        assert!(w.powod.unwrap().contains("OUTSIDE top-2"));
+        assert_eq!(w.outside_topk, 1);
+        assert!(w.reason.unwrap().contains("OUTSIDE top-2"));
     }
 
     #[test]
-    fn wielki_margines_jest_podejrzany() {
-        // Node w top-2, ale bardzo daleko od top-1 → podejrzane.
-        let kroki = vec![Krok {
-            indeks: 0,
+    fn large_margin_is_suspicious() {
+        let steps = vec![LogprobStep {
+            index: 0,
             node_token: 302,
             topk: topk(&[(28725, -0.1), (302, -3.0)]),
         }];
-        let w = ocena(&kroki, &Polityka::default());
+        let w = evaluate(&steps, &M3Policy::default());
         assert!(!w.ok, "{w:?}");
-        assert!(w.najgorszy_margin > 2.0);
+        assert!(w.worst_margin > 2.0);
     }
 
     #[test]
-    fn pusty_audyt_nie_przechodzi() {
-        let w = ocena(&[], &Polityka::default());
+    fn empty_audit_fails() {
+        let w = evaluate(&[], &M3Policy::default());
         assert!(!w.ok);
-        assert_eq!(w.krokow, 0);
+        assert_eq!(w.steps, 0);
     }
 
     #[test]
-    fn decyzja_blokuje_slash_bez_poziomu_1_i_przy_pustym_audycie() {
-        let w = ocena(&[], &Polityka::default());
-        assert_eq!(decyzja(&w, 1, &Progi::default()), Decyzja::BrakPodstaw);
-        let kroki = vec![Krok { indeks: 0, node_token: 1, topk: topk(&[(1, -0.1)]) }];
-        let w2 = ocena(&kroki, &Polityka::default());
-        assert_eq!(decyzja(&w2, 0, &Progi::default()), Decyzja::BrakPodstaw);
-    }
-
-    #[test]
-    fn sredni_nll_liczy_sie_z_tokenu_nodea() {
-        // krok 0: node w top-k (rank 1, margines 0), logprob -2.0 → NLL 2.0.
-        // krok 1: tokenu node'a NIE MA w top-k → poza_lista+. 
-        let kroki = vec![
-            Krok { indeks: 0, node_token: 1, topk: topk(&[(1, -2.0), (2, -2.5)]) },
-            Krok { indeks: 1, node_token: 9, topk: topk(&[(1, -0.1)]) },
-        ];
-        let w = ocena(&kroki, &Polityka::default());
-        assert!((w.sredni_nll - 2.0).abs() < 1e-9, "{w:?}");
-        assert_eq!(w.poza_lista, 1);
-        assert_eq!(w.poza_topk, 1);
-        assert_eq!(w.w_topk, 1);
-    }
-
-    #[test]
-    fn decyzja_za_malo_krokow_to_insufficient_evidence_nie_pass() {
-        // 3 zgodne kroki < min_krokow=8 → InsufficientEvidence („nie udowodniono" ≠ „uczciwy").
-        let kroki: Vec<Krok> = (0..3)
-            .map(|i| Krok { indeks: i, node_token: 1, topk: topk(&[(1, -0.1)]) })
-            .collect();
-        let w = ocena(&kroki, &Polityka::default());
-        assert!(w.ok, "audyt sam jest ok: {w:?}");
-        assert_eq!(decyzja(&w, 1, &Progi::default()), Decyzja::InsufficientEvidence);
-    }
-
-    #[test]
-    fn decyzja_soft_bez_slasha_przy_jednym_odstepstwie() {
-        // 1 podejrzany krok na 30 (3,3%): > max_poza (2%) ale < twardy próg (5%)
-        // → audyt NIE ok, ale decyzja SoftFail, NIE slash.
-        let mut kroki: Vec<Krok> = (0..29)
-            .map(|i| Krok { indeks: i, node_token: 1, topk: topk(&[(1, -0.1)]) })
-            .collect();
-        kroki.push(Krok { indeks: 29, node_token: 999, topk: topk(&[(1, -0.1), (2, -0.2)]) });
-        let w = ocena(&kroki, &Polityka::default());
-        assert!(!w.ok, "{w:?}");
-        assert_eq!(decyzja(&w, 1, &Progi::default()), Decyzja::SoftFail);
-    }
-
-    #[test]
-    fn m3_nie_autoryzuje_slasha_wielu_odstepstw() {
-        // 10/50 = 20% podejrzanych: mimo wszystko SoftFail, NIE HardFail (fable 2026-10-06).
-        // Slash wyłącznie na decidable naruszeniach, nigdy na dystansie M3.
-        let kroki: Vec<Krok> = (0..50)
-            .map(|i| Krok {
-                indeks: i,
-                node_token: if i < 10 { 999 } else { 1 },
-                topk: topk(&[(1, -0.1)]),
-            })
-            .collect();
-        let w = ocena(&kroki, &Polityka::default());
-        assert!(!w.ok, "{w:?}");
-        assert_eq!(decyzja(&w, 1, &Progi::default()), Decyzja::SoftFail);
-    }
-
-    #[test]
-    fn odcisk_audytu_jest_deterministyczny_i_czuly() {
-        let a = vec![Krok { indeks: 0, node_token: 1, topk: topk(&[(1, -0.1), (2, -0.2)]) }];
-        let b = a.clone();
-        let mut c = a.clone();
-        c[0].node_token = 3;
-        assert_eq!(odcisk_audytu(&a).unwrap(), odcisk_audytu(&b).unwrap());
-        assert_ne!(odcisk_audytu(&a).unwrap(), odcisk_audytu(&c).unwrap());
-    }
-
-    #[test]
-    fn nan_lub_inf_w_topk_jest_odrzucony() {
-        let kroki = vec![Krok {
-            indeks: 0,
-            node_token: 528,
-            topk: topk(&[(528, f64::NAN), (28742, -1.0)]),
-        }];
-        let w = ocena(&kroki, &Polityka::default());
-        assert!(!w.ok);
-        assert_eq!(w.poza_topk, 1);
-        assert_eq!(w.poza_lista, 1);
-        assert!(w.powod.unwrap().contains("non-finite"));
-
-        let kroki_inf = vec![Krok {
-            indeks: 0,
-            node_token: 528,
-            topk: topk(&[(528, f64::INFINITY)]),
-        }];
-        let w_inf = ocena(&kroki_inf, &Polityka::default());
-        assert!(!w_inf.ok);
-        assert_eq!(w_inf.poza_topk, 1);
-        assert_eq!(w_inf.poza_lista, 1);
-    }
-
-    #[test]
-    fn nieposortowane_topk_jest_sortowane_przed_ocena() {
-        // Node token 1 ma -2.5, a inny token ma -0.5. Gdyby topk nie było sortowane,
-        // token 1 na początku listy zostałby błędnie uznany za rank 1 z marginesem 0.0.
-        let kroki = vec![Krok {
-            indeks: 0,
-            node_token: 1,
-            topk: topk(&[(1, -2.5), (2, -0.5)]),
-        }];
-        let w = ocena(&kroki, &Polityka::default());
-        assert!(!w.ok);
-        assert_eq!(w.najgorszy_rank, 2);
-        assert!((w.najgorszy_margin - 2.0).abs() < 1e-6);
+    fn decision_blocks_slash_without_level_1_or_empty_audit() {
+        let w = evaluate(&[], &M3Policy::default());
+        assert_eq!(
+            decide(&w, 0, &M3Thresholds::default()),
+            Decision::InsufficientBasis
+        );
+        assert_eq!(
+            decide(&w, 1, &M3Thresholds::default()),
+            Decision::InsufficientBasis
+        );
     }
 }

@@ -1,10 +1,10 @@
 /* tslint:disable */
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
-export const ocena_m3: (a: number, b: number, c: number, d: number, e: number) => [number, number];
-export const odcisk_wyjscia: (a: number, b: number, c: number, d: number) => [number, number];
-export const weryfikuj: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
-export const weryfikuj_m1: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number];
+export const evaluate_m3: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+export const output_digest: (a: number, b: number, c: number, d: number) => [number, number];
+export const verify_receipt: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
+export const verify_m1: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number];
 export const __wbindgen_externrefs: WebAssembly.Table;
 export const __wbindgen_malloc: (a: number, b: number) => number;
 export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

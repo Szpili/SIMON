@@ -82,8 +82,8 @@ def run_job(node, req, max_tokens):
     # The request goes in on stdin (chat mode): messages and tools never show up in `ps`.
     cmd = [BIN, "--role", "agent", "--bootstrap", node["bootstrap"], "--model-hash", node["model_hash"],
            "--request-file", "-", "--max-tokens", str(max_tokens), "--identity-file", IDENTITY, "--json"]
-    # node_id w nodes.json = klucz, który MA podpisać receipt (przypięcie). Bez niego agent sprawdza tylko,
-    # że ktoś podpisał ten tekst, nie że zrobił to ten węzeł — odpowiedź mówi to polem signer_pinned.
+    # node_id in nodes.json pins the receipt signer key. Without it agent only verifies
+    # that someone signed the text, not that this specific node did - indicated by signer_pinned.
     if node.get("node_id"):
         cmd += ["--expect-signer", node["node_id"]]
     chat = json.dumps({k: req[k] for k in CHAT_FIELDS if k in req})
@@ -110,7 +110,7 @@ def run_on_nodes(nodes, req, max_tokens):
             raise
         except Exception as e:
             errors.append(str(e))
-    # node_zajety i rate_limit = chwilowe przeciążenie: klient ma ponowić (503), nie traktować jak awarii
+    # node_busy and rate_limit = temporary overload: client should retry (503), not treat as failure
     raise RuntimeError(("node_zajety: " if all("node_zajety" in e or "rate_limit" in e for e in errors) else "")
                        + f"failed on {len(errors)} node(s): {errors[-1]}")
 
@@ -176,7 +176,7 @@ class Handler(BaseHTTPRequestHandler):
         if not expected_key:
             return True
         auth_header = self.headers.get("Authorization", "")
-        # porównanie skrótów SHA-256: bez wczesnego wyjścia na różnej długości tokenu
+        # SHA-256 hash comparison: constant-time without early exit on length mismatch
         if hmac.compare_digest(hashlib.sha256(auth_header.encode()).digest(),
                                hashlib.sha256(f"Bearer {expected_key}".encode()).digest()):
             return True
