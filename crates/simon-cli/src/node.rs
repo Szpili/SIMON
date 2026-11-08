@@ -19,6 +19,10 @@ use tokio::sync::Semaphore;
 const DOMYSLNY_MODEL_URL: &str = "http://127.0.0.1:18020";
 
 pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
+    run(opcje).await
+}
+
+pub async fn run(opcje: &Opcje) -> Result<(), String> {
     let listen = opcje
         .listen
         .clone()
@@ -277,6 +281,32 @@ fn sprawdz_wersje(request: &PromptRequest) -> Option<PromptReply> {
 
 /// Jedno zlecenie: bramka kontekstu, potem liczenie. Biegnie w osobnym
 /// zadaniu tokio, nigdy w pętli swarmu.
+#[allow(dead_code)]
+pub async fn handle_request(b: &Backend, request: &PromptRequest) -> PromptReply {
+    obsluz(b, request).await
+}
+
+#[allow(dead_code)]
+pub async fn compute_completion(
+    model_url: &str,
+    model_hash: &str,
+    runtime: &str,
+    klucz: &Keypair,
+    req: &PromptRequest,
+) -> PromptReply {
+    policz(model_url, model_hash, runtime, klucz, req).await
+}
+
+#[allow(dead_code)]
+pub fn extract_output(v: &serde_json::Value, chat: bool) -> (String, bool) {
+    wyjscie(v, chat)
+}
+
+#[allow(dead_code)]
+pub async fn probe_backend_facts(model_url: &str, zadany: Option<&str>) -> (Option<String>, u32) {
+    odczytaj_moje_fakty(model_url, zadany).await
+}
+
 pub async fn obsluz(b: &Backend, request: &PromptRequest) -> PromptReply {
     if let Some(reply) = sprawdz_wersje(request) {
         return reply;

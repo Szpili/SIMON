@@ -43,6 +43,10 @@ const NARZUT_SZABLONU_TOKENOW: u32 = 60;
 const MARGINES_ZAOSTRZENIA: f64 = 0.9;
 
 pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
+    run(opcje).await
+}
+
+pub async fn run(opcje: &Opcje) -> Result<(), String> {
     if opcje.prompt.is_none() && opcje.file.is_none() && opcje.request_file.is_none() {
         return Err("agent wymaga --prompt <tekst>, --file <ścieżka> lub --request-file <ścieżka|->".into());
     }
@@ -724,20 +728,23 @@ fn obsluz_odpowiedz(
                     "ok": true,
                     "output": r.output,
                     "job_id": r.job_id,
+                    "proof_level": poziom_dowodu,
                     "poziom_dowodu": poziom_dowodu,
                     "poziom_deklarowany_przez_node": poziom_deklarowany,
-                    // czy klient wiedział, CZYJ klucz ma podpisać (przypięty node_id), czy tylko że ktoś podpisał
+                    "declared_level": poziom_deklarowany,
                     "signer_pinned": oczekiwany_signer.is_some(),
                     "ttft_ms": r.ttft_ms,
                     "gen_ms": r.gen_ms,
+                    "network_ms": siec_ms,
                     "siec_ms": siec_ms,
                     "tokens_out": r.tokens_out,
                     "node_declared_tok_s": (tok_s * 10.0).round() / 10.0,
+                    "receipt_verified": weryfikacja,
                     "receipt_zweryfikowany": weryfikacja,
                     "receipt": receipt,
-                    // Czasy node'a to DEKLARACJA — nazwy mowia to wprost.
                     "node_declared_ttft_ms": r.ttft_ms,
                     "node_declared_gen_ms": r.gen_ms,
+                    "client_observation": obserwacja,
                     "obserwacja_klienta": obserwacja,
                 }));
                 return if weryfikacja { Ok(()) } else {

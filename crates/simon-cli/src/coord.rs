@@ -17,6 +17,10 @@ use simon_harness::client_protocol::{
 use simon_node::{JobResult, RegisterMsg, Registry, TOPIC_JOB_RESULT};
 
 pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
+    run(opcje).await
+}
+
+pub async fn run(opcje: &Opcje) -> Result<(), String> {
     let listen = opcje
         .listen
         .clone()
@@ -106,6 +110,31 @@ pub async fn uruchom(opcje: &Opcje) -> Result<(), String> {
             _ => {}
         }
     }
+}
+
+#[allow(dead_code)]
+pub fn handle_registration(
+    rejestr: &mut Registry,
+    msg: RegisterMsg,
+    operator_voucher_key: Option<&simon_core::PublicKey>,
+) -> bool {
+    obsluz_rejestracje(rejestr, msg, operator_voucher_key)
+}
+
+#[allow(dead_code)]
+pub fn handle_job_result(rejestr: &mut Registry, res: JobResult) {
+    obsluz_wynik(rejestr, res);
+}
+
+#[allow(dead_code)]
+pub fn process_job_order(
+    klucz: &Keypair,
+    zuzyte: &mut RejestrZuzytychAutoryzacji,
+    rejestr: &mut Registry,
+    order: &JobOrder,
+    teraz: u64,
+) -> Result<(OrderAccepted, String, u32), String> {
+    przetworz_zlecenie(klucz, zuzyte, rejestr, order, teraz)
 }
 
 pub fn obsluz_rejestracje(

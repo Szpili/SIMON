@@ -17,122 +17,68 @@ mod node;
 pub(crate) use common as wspolne;
 
 const USAGE: &str = r#"
-SIMON — rozproszona inferencja (M1)
+SIMON — distributed inference (M1)
 
-UŻYCIE:
-    simon --role <agent|coord|node> [OPCJE]
+USAGE:
+    simon --role <agent|coord|node> [OPTIONS]
 
-ROLE:
-    node     liczy modele dla sieci (worker)
-    agent    zleca pracę (klient / harness)
-    coord    przyjmuje zlecenia i rozgłasza przyjęcie
+ROLES:
+    node     computes models for the network (worker)
+    agent    orders work (client / harness)
+    coord    accepts orders and broadcasts acceptance
 
-OPCJE:
-    --listen <multiaddr>     nasłuch, np. /ip4/0.0.0.0/tcp/9001
-    --bootstrap <multiaddr>  peer startowy (inny niż własny adres)
-    --model-url <url>        [node] endpoint vLLM, np. http://127.0.0.1:18020
-                             (klucz API backendu, np. AMD Token Factory:
-                             zmienna SIMON_MODEL_API_KEY, nie argument)
-    --rate-per-peer <n>      [node] ile zleceń/s przyjmie od JEDNEGO peera (domyślnie 16,
-                             zapas 4 s); ponad to błąd `rate_limit`. 0 = bez limitu.
-                             Chroni kolejkę przed jednym hałaśliwym peerem w sieci firmowej.
-    --max-jobs <n>           [node] ile promptów liczyć naraz (domyślnie 1;
-                             ustaw na liczbę slotów backendu, np. -np
-                             llama-server). Nadmiar czeka w kolejce
-                             (4 na slot), ponad nią node odpowiada
-                             błędem `node_zajety`
-    --model-hash <hash>      [node] deklarowany model / [agent] model, o który prosisz
-    --prompt <tekst|->       [agent] prompt do policzenia; w trybie --file
-                             to PYTANIE/instrukcja stosowana do każdego kawałka.
-                             `-` = stdin, więc treść nie trafia do `ps`/
-                             `/proc/<pid>/cmdline` (CWE-214, audyt Filipa)
-    --request-file <plik|->  [agent] tryb czatu: żądanie OpenAI z `messages`
-                             (i opcjonalnie `tools`, `tool_choice`,
-                             `temperature`, `top_p`, `stop`); `-` = stdin,
-                             więc treść nie trafia do `ps`. Wynik to JSON
-                             wiadomości (content, tool_calls, finish_reason)
-    --file <ścieżka>         [agent] M3.x: plik większy niż limit node'a —
-                             włącza chunkowanie + map-reduce (sekwencyjnie,
-                             hierarchiczna redukcja). Patrz PRZYKŁADY.
-    --chunk-tokens <n>       [agent] budżet tokenów na kawałek w --file
-                             (domyślnie 4000; konserwatywny margines wg
-                             najgęstszego zmierzonego materiału, base64)
-    --map-max-tokens <n>     [agent] limit wyjścia NA KAWAŁEK w --file
-                             (domyślnie 200 — trzyma reduce w ryzach)
-    --then-bootstrap <addr>  [agent] B2: łańcuch — po zweryfikowaniu wyniku
-                             ETAPU A, wyślij --then-prompt + wynik A (jako
-                             DANE) do TEGO node'a (może inny model/karta)
-    --then-model-hash <m>    [agent] model żądany na etapie B (domyślnie
-                             jak --model-hash)
-    --then-prompt <tekst>    [agent] instrukcja etapu B (co zrobić z
-                             wynikiem etapu A)
-    --max-tokens <n>         [agent] limit tokenów (domyślnie 128; w trybie
-                             --file dotyczy rund redukcji, nie kawałków map)
-    --fee <n>                [agent] opłata THINK (domyślnie 1)
-    --json                   [agent] jeden obiekt JSON na stdout (wynik,
-                             pomiar, surowy receipt, werdykt weryfikacji)
-                             zamiast wydruku dla człowieka — dla demo/integracji
-    --identity-file <plik>   [agent] M5.2a: plik trwałej tożsamości klienta.
-                             Domyślnie katalog danych użytkownika. Sekretu NIE
-                             podaje się w wierszu poleceń — byłby w `ps`.
-    --rejestr <plik>         [agent] M5.2: dopisz wykonaną pracę do lokalnego
-                             metrycznika (JSON Lines). NIE portfel, NIE saldo —
-                             surowe liczniki, czasy mierzone u klienta i poziom
-                             weryfikacji. Wykrywa powtórzenie receiptu.
-    --expect-output <plik>   [z --verify-receipt] sprawdź, czy receipt opisuje
-                             TĘ treść. Bez tego weryfikujesz podpis, ale nie to,
-                             czy dotyczy tekstu, który trzymasz w ręku.
-    --tokens <plik>          [z --verify-receipt] M1: plik JSON
-                             {tokenizer_hash, client_nonce, prompt_token_ids[],
-                             output_token_ids[]} — sprawdź wiązanie wejścia/stanu.
-    --audyt <plik>           [z --verify-receipt] M3: plik JSON
-                             {kroki:[{indeks,node_token,topk:[[id,lp],..]}]} —
-                             ocena containment top-k (polityka domyślna k=2).
-    --expect-signer <hex>    [agent i --verify-receipt] receipt musi podpisać TEN węzeł
-                             (klucz publiczny Ed25519 w hex). Bez tego podpis dowodzi
-                             tylko, że JAKIŚ klucz podpisał tekst — receipt niesie własny klucz.
-    --verify-receipt <plik>  sprawdź receipt, który ktoś Ci podał (`-` = stdin).
-                             Offline, bez sieci. Z --expect-job-id/--expect-model
-                             sprawdza też, czy to receipt do TEGO zlecenia.
+OPTIONS:
+    --listen <multiaddr>     listen address, e.g. /ip4/0.0.0.0/tcp/9001
+    --bootstrap <multiaddr>  bootstrap peer
+    --model-url <url>        [node] endpoint for vLLM, e.g. http://127.0.0.1:18020
+                             (API key via SIMON_MODEL_API_KEY environment variable)
+    --rate-per-peer <n>      [node] orders/s accepted from a single peer (default 16);
+                             excess returns rate_limit error. 0 = unlimited.
+    --max-jobs <n>           [node] concurrent prompts to process (default 1).
+                             Excess queued (4 per slot), beyond that returns node_busy.
+    --model-hash <hash>      [node] declared model / [agent] requested model
+    --prompt <text|->        [agent] prompt to compute; in --file mode this is the
+                             query/instruction applied to each chunk. '-' = stdin.
+    --request-file <file|->  [agent] chat mode: OpenAI request JSON with messages/tools;
+                             '-' = stdin.
+    --file <path>            [agent] M3.x: file exceeding node limit —
+                             enables chunking + map-reduce.
+    --chunk-tokens <n>       [agent] token budget per chunk in --file (default 4000)
+    --map-max-tokens <n>     [agent] output limit per chunk in --file (default 200)
+    --then-bootstrap <addr>  [agent] B2 chain: after verifying STAGE A output,
+                             send --then-prompt + A's output (as DATA) to this node
+    --then-model-hash <m>    [agent] model requested for stage B (default: same as --model-hash)
+    --then-prompt <text>     [agent] stage B instruction (what to do with stage A output)
+    --max-tokens <n>         [agent] token limit (default 128)
+    --fee <n>                [agent] THINK fee (default 1)
+    --json                   [agent] single JSON object on stdout (result, measurement,
+                             raw receipt, verification verdict)
+    --identity-file <file>   [agent] M5.2a: client persistent identity file.
+    --rejestr <file>         [agent] M5.2: append completed work to local work registry.
+    --expect-output <file>   [with --verify-receipt] verify receipt describes this content.
+    --tokens <file>          [with --verify-receipt] M1: JSON file with input/state binding.
+    --audyt <file>           [with --verify-receipt] M3: JSON file with execution audit.
+    --expect-signer <hex>    [agent and --verify-receipt] receipt must be signed by this node key.
+    --verify-receipt <file>  verify receipt offline ('-' = stdin).
 
-PODKOMENDA (alias na --verify-receipt):
-    simon verify <receipt> [--output <plik>] [--job-id <id>] [--model <m>] [--signer <hex>] [--json]
-                             to samo, czytelniej. `--output` = `--expect-output`,
-                             `--signer` = `--expect-signer`.
-    --key-file <plik>        [node] jak --key, ale ziarno czytane z pliku.
-                             UŻYWAJ TEGO we wdrożeniu: --key <hex> jest widoczny
-                             w `ps` dla każdego użytkownika maszyny.
-    --key <hex>              [node] trwały klucz Ed25519 (64 hex = 32 B seed).
-                             Bez tego node losuje klucz przy starcie i klient
-                             nie ma stałej tożsamości do weryfikacji receiptu.
-    -h, --help               ta pomoc
+SUBCOMMAND (alias for --verify-receipt):
+    simon verify <receipt> [--output <file>] [--job-id <id>] [--model <m>] [--signer <hex>] [--json]
+    --key-file <file>        [node] load key seed from file.
+    --key <hex>              [node] persistent Ed25519 key (64 hex = 32 B seed).
+    -h, --help               print help
 
-PRZYKŁADY:
-    # node na Szponie (vLLM na 18020)
+EXAMPLES:
+    # node with vLLM
     simon --role node --listen /ip4/0.0.0.0/tcp/9001 --model-url http://127.0.0.1:18020 --model-hash qwen3.8-27b
 
-    # node na Franku, podpięty do Szpona
-    simon --role node --listen /ip4/0.0.0.0/tcp/9002 --bootstrap /ip4/<IP_SZPONA>/tcp/9001 --model-url http://127.0.0.1:8000 --model-hash bielik-awq
+    # agent (client) connecting to node
+    simon --role agent --bootstrap /ip4/<IP_NODE>/tcp/9001 --prompt "compute 2+2"
 
-    # agent (klient) — łączy się z nodem
-    simon --role agent --bootstrap /ip4/<IP_NODA>/tcp/9001 --prompt "policz 2+2"
+    # offline verification
+    simon verify examples/receipt.json --output examples/response.txt
 
-    # agent, duży plik (M3.x map-reduce): pytanie stosowane do każdego kawałka
-    simon --role agent --bootstrap /ip4/<IP_NODA>/tcp/9001 \
-        --file duzy_dokument.txt --prompt "streść kluczowe fakty" \
-        --chunk-tokens 4000 --map-max-tokens 200
-
-    # agent, łańcuch B2: CODER (node 1) -> TESTER (node 2), bez ręcznego przeklejania
-    simon --role agent --bootstrap /ip4/<IP_CODER>/tcp/9001 \
-        --prompt "napisz funkcję sumującą dwie liczby w Rust" \
-        --then-bootstrap /ip4/<IP_TESTER>/tcp/9002 \
-        --then-prompt "znajdź przypadek brzegowy dla tej funkcji"
-
-    # weryfikacja cudzego receiptu offline (ta sama komenda co PODKOMENDA)
-    simon verify przyklady/receipt.json --output przyklady/odpowiedz.txt
-
-UWAGA (RULES #1): prompt idzie kanałem PUNKT-PUNKT (/simon/prompt/1),
-nigdy przez gossipsub. Gossipsubem idzie tylko zlecenie bez treści.
+NOTE (RULES #1): prompt travels over point-to-point channel (/simon/prompt/1),
+never gossipsub. Only metadata travels over gossipsub.
 "#;
 
 /// Rola procesu.
@@ -493,13 +439,17 @@ fn weryfikuj_offline(opcje: &Opcje, zrodlo: &str) -> ExitCode {
     if opcje.json {
         println!("{}", serde_json::json!({
             "ok": ok,
+            "parses": true,
             "parsuje_sie": true,
+            "signature_ok": podpis_ok,
             "podpis_ok": podpis_ok,
             "job_id_ok": job_ok,
             "model_ok": model_ok,
             "signer_ok": signer_ok,
+            "content_ok": tresc_ok,
             "tresc_ok": tresc_ok,
-            "poziom": r.poziom(),
+            "level": r.level(),
+            "poziom": r.level(),
             "m1_ok": m1_ok,
             "m3_ok": m3_ok,
             "prompt_tokens": r.prompt_tokens,
@@ -511,37 +461,37 @@ fn weryfikuj_offline(opcje: &Opcje, zrodlo: &str) -> ExitCode {
             "signer": r.signer,
         }));
     } else {
-        println!("podpis Ed25519 : {}", if podpis_ok { "OK" } else { "ZŁY" });
-        if let Some(v) = job_ok { println!("job_id         : {}", if v { "zgodny" } else { "NIEZGODNY" }); }
-        if let Some(v) = model_ok { println!("model_hash     : {}", if v { "zgodny" } else { "NIEZGODNY" }); }
-        if let Some(v) = signer_ok { println!("signer         : {}", if v { "zgodny" } else { "NIEZGODNY — inny klucz node'a niż oczekiwany" }); }
-        if let Some(v) = tresc_ok { println!("treść wyniku   : {}", if v { "zgodna z odciskiem" } else { "NIEZGODNA — to nie jest ten wynik" }); }
+        println!("Ed25519 signature : {}", if podpis_ok { "OK" } else { "INVALID" });
+        if let Some(v) = job_ok { println!("job_id           : {}", if v { "matches" } else { "MISMATCH" }); }
+        if let Some(v) = model_ok { println!("model_hash       : {}", if v { "matches" } else { "MISMATCH" }); }
+        if let Some(v) = signer_ok { println!("signer           : {}", if v { "matches" } else { "MISMATCH — different node key than expected" }); }
+        if let Some(v) = tresc_ok { println!("output content   : {}", if v { "matches digest" } else { "MISMATCH — content does not match" }); }
         if let Some(w) = m1_wynik.as_ref() {
             match w {
-                Ok(()) => println!("wiązanie M1    : OK (tokenizer + nonce + prompt + wyjście)"),
-                Err(e) => println!("wiązanie M1    : ZŁE — {e}"),
+                Ok(()) => println!("M1 binding       : OK (tokenizer + nonce + prompt + output)"),
+                Err(e) => println!("M1 binding       : FAILED — {e}"),
             }
         }
         if let Some(w) = m3_wynik.as_ref() {
             println!(
-                "audyt M3       : {} (steps={}, in top-k={}, outside={}, worst rank={}, margin={:.4})",
+                "M3 audit         : {} (steps={}, in top-k={}, outside={}, worst rank={}, margin={:.4})",
                 if w.ok { "OK" } else { "REJECTED" },
                 w.steps, w.in_topk, w.outside_topk, w.worst_rank, w.worst_margin
             );
             if let Some(p) = &w.reason {
-                println!("                 {p}");
+                println!("                   {p}");
             }
         }
-        let pz = r.poziom();
-        println!("poziom dowodu  : {pz}");
+        let pz = r.level();
+        println!("proof level      : {pz}");
         if pz == 0 {
             println!(
-                "UWAGA          : poziom 0 = tylko autorstwo/podpis; BRAK wiązania wejścia/stanu (M1).\n                 \
-                 Nie przedstawiać jako weryfikacji wykonania (docs/THREAT-MODEL.md)."
+                "NOTE             : level 0 = authorship/signature only; NO input/state binding (M1).\n                   \
+                 Do not present as execution verification (docs/THREAT-MODEL.md)."
             );
         }
-        println!("node           : {}", r.node_id);
-        println!("werdykt        : {}", if ok { "RECEIPT WAŻNY" } else { "ODRZUCONY" });
+        println!("node             : {}", r.node_id);
+        println!("verdict          : {}", if ok { "RECEIPT VALID" } else { "REJECTED" });
     }
     if ok { ExitCode::SUCCESS } else { ExitCode::FAILURE }
 }
