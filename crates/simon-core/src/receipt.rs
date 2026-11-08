@@ -75,8 +75,8 @@ pub struct Receipt {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub signature: Option<Signature>,
 
-    /// M1: optional input/state bindings. Serialized as `bindings` with `wiazania` alias.
-    #[serde(rename = "bindings", alias = "wiazania", skip_serializing_if = "Option::is_none", default)]
+    /// M1: optional input/state bindings. Serialized as `wiazania` (wire/canonical digest compatibility) with `bindings` alias.
+    #[serde(rename = "wiazania", alias = "bindings", skip_serializing_if = "Option::is_none", default)]
     pub bindings: Option<M1Bindings>,
 }
 

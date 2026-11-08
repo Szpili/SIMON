@@ -3,7 +3,7 @@
 # SIMON Fast Verification Gate & Team Captain Guardrail Runner
 #
 # Runs full offline/CPU test suites and Captain review guardrails in < 30-40s:
-#   1. Protocol & constant sync guard (scripts/wartownik_stalych.py)
+#   1. Protocol & constant sync guard (scripts/constant_guard.py)
 #   2. Rust unit & integration tests across all workspace crates (cargo test --workspace)
 #   3. Rust Clippy lints across all targets (cargo clippy --workspace --all-targets -- -D warnings)
 #   4. Python tool selfcheck suites (rules, tickets, agent_triage, export_ui, simon-api)
@@ -95,8 +95,8 @@ run_step() {
 # ------------------------------------------------------------------------------
 # 1. Constant & Protocol Guard
 # ------------------------------------------------------------------------------
-run_step 1 "Wartownik Stalych (scripts/wartownik_stalych.py)" \
-    "python3 scripts/wartownik_stalych.py crates"
+run_step 1 "Constant Guard (scripts/constant_guard.py)" \
+    "python3 scripts/constant_guard.py crates"
 
 # ------------------------------------------------------------------------------
 # 2. Rust Workspace Tests

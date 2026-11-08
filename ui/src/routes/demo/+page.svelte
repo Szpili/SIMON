@@ -1,12 +1,12 @@
 <script lang="ts">
   import {
-    RECEIPT_JSON, OUTPUT, RECEIPT_M1_JSON, ZADANIE_M1, OUTPUT_M1, AUDYT_M3_JSON
+    RECEIPT_JSON, OUTPUT, RECEIPT_M1_JSON, FIXTURE_M1, OUTPUT_M1, AUDYT_M3_JSON
   } from '$lib/fixture';
   import type { Receipt } from '$lib/receipt';
   import NodePanel from '$lib/components/NodePanel.svelte';
   import VerifierPanel from '$lib/components/VerifierPanel.svelte';
 
-  let poziom = $state<0 | 1>(1);
+  let level = $state<0 | 1>(1);
   let scan = $state(true);
 
   function flipHex(sig: string): string {
@@ -35,7 +35,7 @@
 
   // level 1 — M1: the node committed to the exact output TOKENS.
   let r1 = $state<Receipt>(JSON.parse(RECEIPT_M1_JSON) as Receipt);
-  let outTok = $state<number[]>([...ZADANIE_M1.output_token_ids]);
+  let outTok = $state<number[]>([...FIXTURE_M1.output_token_ids]);
   let tampered1 = $state(false);
   const r1Json = $derived(JSON.stringify(r1));
   function tamper1() { outTok = outTok.map((t, i) => (i === 5 ? t + 1 : t)); tampered1 = true; }
@@ -47,17 +47,17 @@
   }
   function restore1() {
     r1 = JSON.parse(RECEIPT_M1_JSON) as Receipt;
-    outTok = [...ZADANIE_M1.output_token_ids];
+    outTok = [...FIXTURE_M1.output_token_ids];
     tampered1 = false;
   }
 
-  const m1Wejscie = $derived({
-    tokenizerHash: ZADANIE_M1.tokenizer_hash,
-    clientNonce: ZADANIE_M1.client_nonce,
-    promptTokens: ZADANIE_M1.prompt_token_ids,
+  const m1Input = $derived({
+    tokenizerHash: FIXTURE_M1.tokenizer_hash,
+    clientNonce: FIXTURE_M1.client_nonce,
+    promptTokens: FIXTURE_M1.prompt_token_ids,
     outputTokens: outTok
   });
-  const tokWidok = $derived(
+  const tokView = $derived(
     'tokens: [' + outTok.slice(0, 12).join(', ') + (outTok.length > 12 ? ', …]' : ']')
   );
 </script>
@@ -74,11 +74,11 @@
     <div class="flex items-center gap-3">
       <div class="mono flex text-xs">
         <button
-          class="border px-3 py-1 {poziom === 0 ? 'border-valid text-valid' : 'border-line text-neutral-500'}"
-          onclick={() => (poziom = 0)}>level 0</button>
+          class="border px-3 py-1 {level === 0 ? 'border-valid text-valid' : 'border-line text-neutral-500'}"
+          onclick={() => (level = 0)}>level 0</button>
         <button
-          class="border border-l-0 px-3 py-1 {poziom === 1 ? 'border-valid text-valid' : 'border-line text-neutral-500'}"
-          onclick={() => (poziom = 1)}>level 1 (M1+M3)</button>
+          class="border border-l-0 px-3 py-1 {level === 1 ? 'border-valid text-valid' : 'border-line text-neutral-500'}"
+          onclick={() => (level = 1)}>level 1 (M1+M3)</button>
       </div>
       <label class="mono flex cursor-pointer items-center gap-2 text-xs text-neutral-500">
         <input type="checkbox" bind:checked={scan} class="accent-green-500" /> scanlines
@@ -87,16 +87,16 @@
   </div>
 
   <div class="grid gap-4 md:grid-cols-2" class:no-scan={!scan}>
-    {#if poziom === 0}
+    {#if level === 0}
       <NodePanel receipt={r0} output={output0} tampered={tampered0} ontamper={tamper0} onTamperSig={tamperSigL0} onrestore={restore0} />
       <VerifierPanel receiptJson={r0Json} receipt={r0} output={output0} />
     {:else}
-      <NodePanel receipt={r1} output={tokWidok} tampered={tampered1} ontamper={tamper1} onTamperSig={tamperSigL1} onrestore={restore1} tamperNote="Output token 6 was changed by one." />
-      <VerifierPanel receiptJson={r1Json} receipt={r1} output={OUTPUT_M1} m1={m1Wejscie} auditJson={AUDYT_M3_JSON} />
+      <NodePanel receipt={r1} output={tokView} tampered={tampered1} ontamper={tamper1} onTamperSig={tamperSigL1} onrestore={restore1} tamperNote="Output token 6 was changed by one." />
+      <VerifierPanel receiptJson={r1Json} receipt={r1} output={OUTPUT_M1} m1={m1Input} auditJson={AUDYT_M3_JSON} />
     {/if}
   </div>
 
-  {#if poziom === 1}
+  {#if level === 1}
     <p class="mt-3 mono text-xs text-neutral-500">
       level 1: receipt commits the exact prompt token ids (M1); tamper flips one output token; the M3
       audit then checks the node's tokens against the verifier's top-k.

@@ -1,11 +1,11 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { Receipt, Verdict, WerdyktM1, WerdyktM3 } from './../receipt';
-  import { verifyReceipt, outputDigest, verifyM1, ocenaM3 } from './../verify';
+  import type { Receipt, Verdict, M1Verdict, M3Verdict } from './../receipt';
+  import { verifyReceipt, outputDigest, verifyM1, evaluateM3 } from './../verify';
   import StatusPill from './StatusPill.svelte';
   import CheckStep from './CheckStep.svelte';
 
-  type M1Wejscie = {
+  type M1Input = {
     tokenizerHash: string;
     clientNonce: string;
     promptTokens: number[];
@@ -22,7 +22,7 @@
     receiptJson: string;
     receipt: Receipt;
     output: string | null;
-    m1?: M1Wejscie | null;
+    m1?: M1Input | null;
     auditJson?: string | null;
   } = $props();
 
@@ -32,7 +32,7 @@
   let pill = $state<'idle' | 'running' | 'valid' | 'rejected'>('idle');
   let showJson = $state(false);
   let busy = $state(false);
-  const poziom = $derived(receipt.wiazania?.receipt_level ?? 0);
+  const level = $derived(receipt.bindings?.receipt_level ?? receipt.wiazania?.receipt_level ?? 0);
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   const short = (s: string) => (s.length > 26 ? s.slice(0, 12) + '…' + s.slice(-8) : s);
 
@@ -42,54 +42,66 @@
 
     let v: Verdict;
     let computed: string | null = null;
-    let m1v: WerdyktM1 | null = null;
-    let m3v: WerdyktM3 | null = null;
+    let m1v: M1Verdict | null = null;
+    let m3v: M3Verdict | null = null;
     try {
       v = await verifyReceipt(receiptJson, output);
       try { computed = output ? await outputDigest(receipt.job_id, output) : null; } catch { computed = null; }
       if (m1) m1v = await verifyM1(receiptJson, m1.tokenizerHash, m1.clientNonce, m1.promptTokens, m1.outputTokens);
-      if (auditJson) m3v = await ocenaM3(auditJson);
+      if (auditJson) m3v = await evaluateM3(auditJson);
     } catch (e) {
       v = {
-        parsuje_sie: false, podpis_ok: false, tresc_ok: null, job_id_ok: null, model_ok: null,
+        parses: false, signature_ok: false, content_ok: null, job_id_ok: null, model_ok: null,
         ok: false, job_id: null, node_id: null, model_hash: null, runtime: null, signer: null,
-        output_digest: null, powod: String(e)
+        output_digest: null, reason: String(e)
       };
     }
+    const parsesOk = v.parses ?? v.parsuje_sie ?? false;
+    const sigOk = v.signature_ok ?? v.podpis_ok ?? false;
+    const contentOk = v.content_ok ?? v.tresc_ok ?? null;
+    const reasonText = v.reason ?? v.powod ?? null;
+
     steps = [
       {
         label: 'Parse the receipt (schema + node identity)',
-        status: v.parsuje_sie ? 'pass' : 'fail',
-        detail: v.parsuje_sie ? `job ${short(v.job_id ?? '')}, model ${v.model_hash}` : (v.powod ?? 'not a receipt')
+        status: parsesOk ? 'pass' : 'fail',
+        detail: parsesOk ? `job ${short(v.job_id ?? '')}, model ${v.model_hash}` : (reasonText ?? 'not a receipt')
       },
       {
         label: 'Ed25519 signature over the whole receipt',
-        status: v.podpis_ok ? 'pass' : 'fail',
-        detail: v.podpis_ok ? `signer ${short(v.signer ?? '')}` : 'signature does not match the receipt digest'
+        status: sigOk ? 'pass' : 'fail',
+        detail: sigOk ? `signer ${short(v.signer ?? '')}` : 'signature does not match the receipt digest'
       },
       {
         label: 'Output matches the signed digest (job_id-bound)',
-        status: v.tresc_ok ? 'pass' : 'fail',
-        detail: v.tresc_ok
+        status: contentOk ? 'pass' : 'fail',
+        detail: contentOk
           ? (computed ? short(computed) : 'identical')
           : `signed ${short(v.output_digest ?? '')} ≠ computed ${short(computed ?? '')}`
       }
     ];
 
     if (m1v) {
+      const m1Reason = m1v.reason ?? m1v.powod ?? null;
       steps = [...steps, {
         label: 'M1: exact input + state binding (tokenizer, nonce, tokens)',
         status: m1v.ok ? 'pass' : 'fail',
-        detail: m1v.ok ? 'tokenizer + nonce + prompt tokens + output tokens committed' : (m1v.powod ?? 'binding mismatch')
+        detail: m1v.ok ? 'tokenizer + nonce + prompt tokens + output tokens committed' : (m1Reason ?? 'binding mismatch')
       }];
     }
     if (m3v) {
+      const inTopk = m3v.in_topk ?? m3v.w_topk ?? 0;
+      const stepsCount = m3v.steps ?? m3v.krokow ?? 0;
+      const worstRank = m3v.worst_rank ?? m3v.najgorszy_rank ?? 0;
+      const worstMargin = m3v.worst_margin ?? m3v.najgorszy_margin ?? 0;
+      const outsideTopk = m3v.outside_topk ?? m3v.poza_topk ?? 0;
+      const m3Reason = m3v.reason ?? m3v.powod ?? null;
       steps = [...steps, {
         label: 'M3: node tokens within verifier top-k (telemetry, does not gate the verdict)',
         status: m3v.ok ? 'pass' : 'fail',
         detail: m3v.ok
-          ? `${m3v.w_topk}/${m3v.krokow} in top-k, worst rank ${m3v.najgorszy_rank}, margin ${m3v.najgorszy_margin.toFixed(3)}`
-          : (m3v.powod ?? `${m3v.poza_topk}/${m3v.krokow} suspicious`)
+          ? `${inTopk}/${stepsCount} in top-k, worst rank ${worstRank}, margin ${worstMargin.toFixed(3)}`
+          : (m3Reason ?? `${outsideTopk}/${stepsCount} suspicious`)
       }];
     }
 
@@ -105,7 +117,7 @@
 <section class="scanlines flex flex-col border border-line bg-panel p-5" aria-labelledby="ver-h">
   <div class="flex items-baseline justify-between">
     <h2 id="ver-h" class="mono text-base font-bold text-neutral-100">Verifier</h2>
-    <span class="mono text-xs text-neutral-500">receipt level {poziom}</span>
+    <span class="mono text-xs text-neutral-500">receipt level {level}</span>
   </div>
 
   <div class="mt-5"><StatusPill state={pill} /></div>

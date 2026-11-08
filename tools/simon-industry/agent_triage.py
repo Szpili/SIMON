@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SIMON Autonomous Industrial Triage Agent with M7 Capability Grants (Zezwolenie).
+"""SIMON Autonomous Industrial Triage Agent with M7 Capability Grants.
 
 Implements an autonomous 2-to-4 turn diagnostic agent over the SIMON OpenAI-compatible
 gateway (:18600/v1/chat/completions) using Gemma 4 (gemma-4-26b-a4b-it-bf16 on AMD Instinct
@@ -12,10 +12,10 @@ Key Architectural Guarantees:
      - inspect_sensor_telemetry(udi): returns telemetry and deterministic rule findings
   2. Gated Action Tool & Deterministic M7 Capability Ceiling:
      - propose_work_order(urgency, failure_modes, action_code, part_id, summary):
-       Enforces Sufit capability bounds (enum bounds, no ambient authority, no equipment shutdown commands).
+       Enforces CapabilityCeiling bounds (enum bounds, no ambient authority, no equipment shutdown commands).
        Computes the exact SIMON/GRANT-PARAMS/v1 SHA-256 parameter digest matching
-       crates/simon-core/src/cap.rs: odcisk_parametrow_akcji("propose_work_order", args).
-       No ERP/PLC execution occurs without a cryptographic Ed25519 operator Zezwolenie grant.
+       crates/simon-core/src/cap.rs: action_params_digest("propose_work_order", args).
+       No ERP/PLC execution occurs without a cryptographic Ed25519 operator CapabilityGrant.
   3. Offline Selfcheck:
      - python3 agent_triage.py --selfcheck (or run with no args) runs full deterministic test suite.
 """
@@ -101,18 +101,18 @@ FORBIDDEN = re.compile(
 )
 
 
-def _znormalizuj(t: str) -> str:
-    """NFKC (pełna szerokość, ligatury), bez znaków formatujących (zero-width, miękki dywiz),
-    myślniki jak spacje, zwinięte białe znaki: 'shut  down', 'shut-down', 'shut\u200bdown' nie przejdą."""
+def _normalize_text(t: str) -> str:
+    """NFKC normalization, stripped format chars (zero-width, soft hyphen),
+    hyphens as spaces, collapsed whitespace: 'shut  down', 'shut-down', 'shut\\u200bdown' cannot bypass."""
     t = unicodedata.normalize("NFKC", t)
     t = "".join(c for c in t if unicodedata.category(c) != "Cf")
     t = re.sub(r"[-\u2010-\u2015_]", " ", t)
     return re.sub(r"\s+", " ", t)
 
 
-def _czysty_id(v, dozwolone: str = r"[^A-Za-z0-9-]", maks: int = 16) -> str:
-    """Pola z CSV (Product ID, Type) przed modelem: tylko znaki identyfikatora — dane nie niosą instrukcji."""
-    return re.sub(dozwolone, "", str(v))[:maks]
+def _clean_id(v, allowed: str = r"[^A-Za-z0-9-]", max_len: int = 16) -> str:
+    """CSV fields (Product ID, Type) before model: only identifier characters — data carries no instructions."""
+    return re.sub(allowed, "", str(v))[:max_len]
 
 TOOLS = [
     {
@@ -232,12 +232,12 @@ SYSTEM_PROMPT = (
     "Your objective is to diagnose machine anomalies using the available diagnostic tools, "
     "verify spare parts availability, and propose a maintenance work order via propose_work_order. "
     "Never instruct anyone to shut down, switch off, or bypass equipment. "
-    "All action proposals are gated by the plant M7 capability ceiling and require cryptographic operator Zezwolenie."
+    "All action proposals are gated by the plant M7 capability ceiling and require cryptographic operator CapabilityGrant."
 )
 
 
 def compute_grant_params_digest(akcja: str, args: dict) -> str:
-    """Computes exact SIMON/GRANT-PARAMS/v1 commitment digest matching simon-core::cap::odcisk_parametrow_akcji."""
+    """Computes exact SIMON/GRANT-PARAMS/v1 commitment digest matching simon-core::cap::action_params_digest."""
     canon = json.dumps(
         {"akcja": akcja, "domena": DOMENA_GRANT_PARAMS, "parametry": args},
         separators=(",", ":"),
@@ -280,7 +280,7 @@ def execute_lookup_machine_history(csv_path: Path, product_type: str, udi: int) 
         f = rules.features(r)
         history.append({
             "udi": cur_uid,
-            "type": _czysty_id(r["Type"], r"[^A-Za-z]", 2),
+            "type": _clean_id(r["Type"], r"[^A-Za-z]", 2),
             "wear_min": f["wear_min"],
             "temp_diff_K": f["temp_diff_K"],
             "torque_Nm": f["torque_Nm"],
@@ -333,8 +333,8 @@ def execute_inspect_sensor_telemetry(csv_path: Path, udi: int) -> dict:
             finds = rules.findings(f)
             return {
                 "udi": udi,
-                "product_id": _czysty_id(r["Product ID"]),
-                "type": _czysty_id(r["Type"], r"[^A-Za-z]", 2),
+                "product_id": _clean_id(r["Product ID"]),
+                "type": _clean_id(r["Type"], r"[^A-Za-z]", 2),
                 "features": f,
                 "findings": finds,
                 "allowed_checks": {k: v for x in finds for k, v in rules.CHECKS.get(x["mode"], {}).items()},
@@ -381,10 +381,10 @@ def execute_propose_work_order(args: dict, findings: list | None) -> dict:
     summary = args.get("summary", "")
     if not isinstance(summary, str) or not summary.strip():
         raise ValueError("M7 Capability Ceiling Violation: summary must be non-empty text")
-    if len(_znormalizuj(summary)) > 300 or len(summary) > 300:
+    if len(_normalize_text(summary)) > 300 or len(summary) > 300:
         raise ValueError(f"M7 Capability Ceiling Violation: summary exceeds 300 characters ({len(summary)})")
-    if FORBIDDEN.search(_znormalizuj(summary)):
-        matched = FORBIDDEN.search(_znormalizuj(summary)).group(0)
+    if FORBIDDEN.search(_normalize_text(summary)):
+        matched = FORBIDDEN.search(_normalize_text(summary)).group(0)
         raise PermissionError(
             f"M7 Capability Ceiling Violation: forbidden shutdown/override command detected: '{matched}'"
         )
@@ -421,11 +421,11 @@ def execute_propose_work_order(args: dict, findings: list | None) -> dict:
         "akcja": "propose_work_order",
         "domena": DOMENA_GRANT_PARAMS,
         "parametry_digest": parametry_digest,
-        "requires_grant": "Zezwolenie",
+        "requires_grant": "CapabilityGrant",
         "parameters": args,
         "message": (
-            f"Action validated against Sufit ceiling. Direct ERP/PLC execution blocked. "
-            f"Awaiting M7 Ed25519 single-use operator Zezwolenie token with digest {parametry_digest[:16]}..."
+            f"Action validated against CapabilityCeiling. Direct ERP/PLC execution blocked. "
+            f"Awaiting M7 Ed25519 single-use operator CapabilityGrant token with digest {parametry_digest[:16]}..."
         ),
     }
 
@@ -580,7 +580,7 @@ def selfcheck():
     res = execute_propose_work_order(valid_args, reg)
     assert res["status"] == "GATED_BY_OPERATOR_CAPABILITY_CEILING"
     assert res["domena"] == DOMENA_GRANT_PARAMS
-    assert res["requires_grant"] == "Zezwolenie"
+    assert res["requires_grant"] == "CapabilityGrant"
     expected_canon = json.dumps(
         {"akcja": "propose_work_order", "domena": DOMENA_GRANT_PARAMS, "parametry": valid_args},
         separators=(",", ":"),
