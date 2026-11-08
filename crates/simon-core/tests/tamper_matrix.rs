@@ -7,9 +7,6 @@
 //! Ed25519 przy założeniu tajności klucza". NIE licencjonuje poprawności wykonania,
 //! tożsamości modelu ani poufności wobec executora.
 
-use simon_core::cap::{
-    odcisk_parametrow_akcji, sprawdz, Kontekst, OdmowaZ, Zezwolenie,
-};
 use simon_core::crypto::Keypair;
 use simon_core::protokol::{BladProtokolu, OknoNonce};
 use simon_core::receipt::{odcisk_parametrow, odcisk_wyjscia, Precision, Receipt};
@@ -151,65 +148,65 @@ fn grant_double_use_expired_zly_parametr() {
     let op = Keypair::from_seed(&[7u8; 32]);
     let pk = op.public().to_hex();
     let par = serde_json::json!({"msg": "ok"});
-    let z = Zezwolenie {
+    let z = simon_core::cap::CapabilityGrant {
         id: "g-1".into(),
-        akcja: "log_message".into(),
-        parametry_digest: odcisk_parametrow_akcji("log_message", &par).unwrap(),
-        wystawca: String::new(),
-        wazne_do_us: 1_000_000,
-        budzet: Some(1),
-        podpis: None,
+        action: "log_message".into(),
+        params_digest: simon_core::cap::action_params_digest("log_message", &par).unwrap(),
+        issuer: String::new(),
+        valid_until_us: 1_000_000,
+        budget: Some(1),
+        signature: None,
     }
-    .podpisz(&op)
+    .sign(&op)
     .unwrap();
-    let sufit = simon_core::cap::Sufit {
-        akcje: std::collections::BTreeMap::from([(
+    let sufit = simon_core::cap::CapabilityCeiling {
+        actions: std::collections::BTreeMap::from([(
             "log_message".to_string(),
-            simon_core::cap::Akcja {
-                nazwa: "log_message".into(),
-                parametry: vec![simon_core::cap::Parametr {
-                    nazwa: "msg".into(),
-                    wymagany: true,
-                    ograniczenie: simon_core::cap::Ograniczenie::Tekst { max_len: 200 },
+            simon_core::cap::ActionDef {
+                name: "log_message".into(),
+                params: vec![simon_core::cap::ActionParam {
+                    name: "msg".into(),
+                    required: true,
+                    constraint: simon_core::cap::ParamConstraint::Text { max_len: 200 },
                 }],
             },
         )]),
     };
     let uzyte = vec!["g-1".to_string()];
-    let ok = Kontekst {
-        teraz_us: 500_000,
-        oczekiwany_wystawca: &pk,
-        odwolane: &[],
-        uzyte: &[],
+    let ok = simon_core::cap::GrantContext {
+        now_us: 500_000,
+        expected_issuer: &pk,
+        revoked: &[],
+        used: &[],
     };
-    assert!(sprawdz(&sufit, &z, "log_message", &par, &ok).is_ok());
+    assert!(simon_core::cap::verify_grant(&sufit, &z, "log_message", &par, &ok).is_ok());
     // double-use
-    let ok_uzyte = Kontekst {
-        teraz_us: 500_000,
-        oczekiwany_wystawca: &pk,
-        odwolane: &[],
-        uzyte: &uzyte,
+    let ok_uzyte = simon_core::cap::GrantContext {
+        now_us: 500_000,
+        expected_issuer: &pk,
+        revoked: &[],
+        used: &uzyte,
     };
     assert_eq!(
-        sprawdz(&sufit, &z, "log_message", &par, &ok_uzyte),
-        Err(OdmowaZ::Uzyte)
+        simon_core::cap::verify_grant(&sufit, &z, "log_message", &par, &ok_uzyte),
+        Err(simon_core::cap::GrantRejection::Used)
     );
     // zły parametr
     let zly = serde_json::json!({"msg": "rm -rf /"});
     assert_eq!(
-        sprawdz(&sufit, &z, "log_message", &zly, &ok),
-        Err(OdmowaZ::Parametry)
+        simon_core::cap::verify_grant(&sufit, &z, "log_message", &zly, &ok),
+        Err(simon_core::cap::GrantRejection::Params)
     );
     // expired
-    let ok_exp = Kontekst {
-        teraz_us: 2_000_000,
-        oczekiwany_wystawca: &pk,
-        odwolane: &[],
-        uzyte: &[],
+    let ok_exp = simon_core::cap::GrantContext {
+        now_us: 2_000_000,
+        expected_issuer: &pk,
+        revoked: &[],
+        used: &[],
     };
     assert_eq!(
-        sprawdz(&sufit, &z, "log_message", &par, &ok_exp),
-        Err(OdmowaZ::Wygaslo)
+        simon_core::cap::verify_grant(&sufit, &z, "log_message", &par, &ok_exp),
+        Err(simon_core::cap::GrantRejection::Expired)
     );
 }
 

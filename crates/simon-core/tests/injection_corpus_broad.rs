@@ -7,43 +7,43 @@
 //! nie test „czy model jest odporny".
 
 use serde_json::json;
-use simon_core::cap::{waliduj_json, Akcja, Ograniczenie, Parametr, Sufit};
+use simon_core::cap::{validate_json, ActionDef, ActionParam, CapabilityCeiling, ParamConstraint};
 use simon_core::web::{dozwolony_code, dozwolony_dns, dozwolony_web, PolaUrl, PolitykaWeb};
 
-fn sufit() -> Sufit {
-    let mut akcje = std::collections::BTreeMap::new();
-    akcje.insert(
+fn sufit() -> CapabilityCeiling {
+    let mut actions = std::collections::BTreeMap::new();
+    actions.insert(
         "log_message".to_string(),
-        Akcja {
-            nazwa: "log_message".into(),
-            parametry: vec![Parametr {
-                nazwa: "msg".into(),
-                wymagany: true,
-                ograniczenie: Ograniczenie::Tekst { max_len: 200 },
+        ActionDef {
+            name: "log_message".into(),
+            params: vec![ActionParam {
+                name: "msg".into(),
+                required: true,
+                constraint: ParamConstraint::Text { max_len: 200 },
             }],
         },
     );
-    akcje.insert(
+    actions.insert(
         "ustaw_tryb".to_string(),
-        Akcja {
-            nazwa: "ustaw_tryb".into(),
-            parametry: vec![
-                Parametr {
-                    nazwa: "tryb".into(),
-                    wymagany: true,
-                    ograniczenie: Ograniczenie::Enum {
-                        wartosci: vec!["safe".into(), "fast".into()],
+        ActionDef {
+            name: "ustaw_tryb".into(),
+            params: vec![
+                ActionParam {
+                    name: "tryb".into(),
+                    required: true,
+                    constraint: ParamConstraint::Enum {
+                        values: vec!["safe".into(), "fast".into()],
                     },
                 },
-                Parametr {
-                    nazwa: "limit".into(),
-                    wymagany: false,
-                    ograniczenie: Ograniczenie::Zakres { min: 0, max: 10 },
+                ActionParam {
+                    name: "limit".into(),
+                    required: false,
+                    constraint: ParamConstraint::Range { min: 0, max: 10 },
                 },
             ],
         },
     );
-    Sufit { akcje }
+    CapabilityCeiling { actions }
 }
 
 fn pol() -> PolitykaWeb {
@@ -83,7 +83,7 @@ fn uruchom() -> (usize, usize, usize, usize) {
     for t in zakazane {
         adv += 1;
         let j = json!({ "tool": t, "args": { "cmd": "rm -rf / --no-preserve-root" } }).to_string();
-        if waliduj_json(&s, &j).is_ok() {
+        if validate_json(&s, &j).is_ok() {
             atak += 1;
         }
     }
@@ -106,7 +106,7 @@ fn uruchom() -> (usize, usize, usize, usize) {
     ];
     for j in cap_zle {
         adv += 1;
-        if waliduj_json(&s, &j).is_ok() {
+        if validate_json(&s, &j).is_ok() {
             atak += 1;
         }
     }
@@ -180,7 +180,7 @@ fn uruchom() -> (usize, usize, usize, usize) {
     ] {
         ben += 1;
         let j = json!({ "tool": "log_message", "args": { "msg": msg } }).to_string();
-        if waliduj_json(&s, &j).is_err() {
+        if validate_json(&s, &j).is_err() {
             strata += 1;
         }
     }
@@ -188,13 +188,13 @@ fn uruchom() -> (usize, usize, usize, usize) {
         for limit in [0, 1, 5, 10] {
             ben += 1;
             let j = json!({ "tool": "ustaw_tryb", "args": { "tryb": tryb, "limit": limit } }).to_string();
-            if waliduj_json(&s, &j).is_err() {
+            if validate_json(&s, &j).is_err() {
                 strata += 1;
             }
         }
     }
     ben += 1;
-    if waliduj_json(&s, r#"{"tool":"ustaw_tryb","args":{"tryb":"safe"}}"#).is_err() {
+    if validate_json(&s, r#"{"tool":"ustaw_tryb","args":{"tryb":"safe"}}"#).is_err() {
         strata += 1;
     }
     for h in [

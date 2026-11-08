@@ -4,44 +4,44 @@
 //! Decyzja = koniunkcja: (akcja+wartości OK) ORAZ (provenance → sink dozwolone).
 
 use serde_json::json;
-use simon_core::cap::{waliduj, Akcja, Ograniczenie, Parametr, Sufit};
+use simon_core::cap::{validate, ActionDef, ActionParam, CapabilityCeiling, ParamConstraint};
 use simon_core::przeplyw::{przeplyw_ok, Sink, Zaufanie};
 
-fn sufit() -> Sufit {
-    let mut akcje = std::collections::BTreeMap::new();
-    akcje.insert(
+fn sufit() -> CapabilityCeiling {
+    let mut actions = std::collections::BTreeMap::new();
+    actions.insert(
         "send_email".into(),
-        Akcja {
-            nazwa: "send_email".into(),
-            parametry: vec![
-                Parametr {
-                    nazwa: "to".into(),
-                    wymagany: true,
+        ActionDef {
+            name: "send_email".into(),
+            params: vec![
+                ActionParam {
+                    name: "to".into(),
+                    required: true,
                     // Allowlist adresatów — sama nazwa akcji NIE wystarcza.
-                    ograniczenie: Ograniczenie::Enum {
-                        wartosci: vec!["boss@example.com".into(), "team@example.com".into()],
+                    constraint: ParamConstraint::Enum {
+                        values: vec!["boss@example.com".into(), "team@example.com".into()],
                     },
                 },
-                Parametr {
-                    nazwa: "subject".into(),
-                    wymagany: true,
-                    ograniczenie: Ograniczenie::Tekst { max_len: 100 },
+                ActionParam {
+                    name: "subject".into(),
+                    required: true,
+                    constraint: ParamConstraint::Text { max_len: 100 },
                 },
             ],
         },
     );
-    Sufit { akcje }
+    CapabilityCeiling { actions }
 }
 
 /// Pełna decyzja dla akcji: kształt wartości (I2) ORAZ provenance do sinku (I4).
 fn czy_wolno(
-    s: &Sufit,
+    s: &CapabilityCeiling,
     akcja: &str,
     wartosci: &serde_json::Value,
     zrodlo: Zaufanie,
     deklasacje: &[(Zaufanie, Sink)],
 ) -> bool {
-    if waliduj(s, akcja, wartosci).is_err() {
+    if validate(s, akcja, wartosci).is_err() {
         return false;
     }
     przeplyw_ok(zrodlo, Sink::ArgumentAkcji, deklasacje)
