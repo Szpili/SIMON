@@ -622,7 +622,7 @@ mod tests {
             finished_at_us: 2000,
             signer: node_key.public(),
             signature: None,
-            wiazania: None,
+            bindings: None,
         }
         .sign(&node_key)
         .expect("sign receipt");

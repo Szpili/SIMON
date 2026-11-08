@@ -386,7 +386,7 @@ mod tests {
             finished_at_us: 2000,
             signer: node_key.public(),
             signature: None,
-            wiazania: None,
+            bindings: None,
         };
         receipt = receipt.sign(&node_key).unwrap();
 

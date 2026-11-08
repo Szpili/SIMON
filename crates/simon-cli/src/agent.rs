@@ -851,7 +851,7 @@ mod tests {
             runtime: "vllm/1".into(), precision: simon_core::receipt::Precision::Unknown,
             activation_hash: "a".into(), prompt_tokens: 1, completion_tokens: 1,
             output_digest: simon_core::receipt::odcisk_wyjscia("j", "dowolny tekst").unwrap(),
-            started_at_us: 1, finished_at_us: 2, signer: napastnik.public(), signature: None, wiazania: None,
+            started_at_us: 1, finished_at_us: 2, signer: napastnik.public(), signature: None, bindings: None,
         }
         .sign(&napastnik)
         .unwrap();
@@ -993,7 +993,7 @@ mod tests {
             finished_at_us: 1_000_000,
             signer: klucz.public(),
             signature: None,
-            wiazania: None,
+            bindings: None,
         }
         .sign(&klucz)
         .expect("podpis");
@@ -1031,7 +1031,7 @@ mod tests {
             finished_at_us: 1_000_000,
             signer: klucz.public(),
             signature: None,
-            wiazania: None,
+            bindings: None,
         }
         .sign(&klucz)
         .expect("podpis");
@@ -1070,7 +1070,7 @@ mod tests {
             finished_at_us: 1,
             signer: klucz.public(),
             signature: None,
-            wiazania: None,
+            bindings: None,
         }
         .sign(&klucz)
         .expect("podpis");
@@ -1132,7 +1132,7 @@ mod tests {
             finished_at_us: 1_000_000,
             signer: klucz.public(),
             signature: None,
-            wiazania: None,
+            bindings: None,
         }
         .sign(&klucz)
         .expect("podpis");
@@ -1168,7 +1168,7 @@ mod tests {
             finished_at_us: 1_000_000,
             signer: klucz.public(),
             signature: None,
-            wiazania: None,
+            bindings: None,
         }
         .z_wiazaniem_m1(
             tokenizer_hash.into(),

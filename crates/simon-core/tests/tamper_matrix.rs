@@ -30,7 +30,7 @@ fn bazowy_podpisany() -> (Receipt, Keypair) {
         finished_at_us: 2_000_000,
         signer: k.public(),
         signature: None,
-        wiazania: None,
+        bindings: None,
     }
     .z_wiazaniem_m1(
         "tokhash".into(),
@@ -71,32 +71,32 @@ fn kazde_pole_v2_jest_pod_podpisem() {
             r.signer = Keypair::from_seed(&[99u8; 32]).public()
         })),
         // pola M1
-        ("wiazania.schema_version", Box::new(|r| {
-            r.wiazania.as_mut().unwrap().schema_version += 1
+        ("bindings.schema_version", Box::new(|r| {
+            r.bindings.as_mut().unwrap().schema_version += 1
         })),
-        ("wiazania.receipt_level", Box::new(|r| {
-            r.wiazania.as_mut().unwrap().receipt_level = 0
+        ("bindings.receipt_level", Box::new(|r| {
+            r.bindings.as_mut().unwrap().receipt_level = 0
         })),
-        ("wiazania.exec_profile", Box::new(|r| {
-            r.wiazania.as_mut().unwrap().exec_profile.push('x')
+        ("bindings.exec_profile", Box::new(|r| {
+            r.bindings.as_mut().unwrap().exec_profile.push('x')
         })),
-        ("wiazania.tokenizer_hash", Box::new(|r| {
-            r.wiazania.as_mut().unwrap().tokenizer_hash.push('x')
+        ("bindings.tokenizer_hash", Box::new(|r| {
+            r.bindings.as_mut().unwrap().tokenizer_hash.push('x')
         })),
-        ("wiazania.prompt_digest", Box::new(|r| {
-            r.wiazania.as_mut().unwrap().prompt_digest.push('x')
+        ("bindings.prompt_digest", Box::new(|r| {
+            r.bindings.as_mut().unwrap().prompt_digest.push('x')
         })),
-        ("wiazania.output_token_chain", Box::new(|r| {
-            r.wiazania.as_mut().unwrap().output_token_chain.push('x')
+        ("bindings.output_token_chain", Box::new(|r| {
+            r.bindings.as_mut().unwrap().output_token_chain.push('x')
         })),
-        ("wiazania.client_nonce", Box::new(|r| {
-            r.wiazania.as_mut().unwrap().client_nonce.push('x')
+        ("bindings.client_nonce", Box::new(|r| {
+            r.bindings.as_mut().unwrap().client_nonce.push('x')
         })),
-        ("wiazania.sampling_params_hash", Box::new(|r| {
-            r.wiazania.as_mut().unwrap().sampling_params_hash.push('x')
+        ("bindings.sampling_params_hash", Box::new(|r| {
+            r.bindings.as_mut().unwrap().sampling_params_hash.push('x')
         })),
-        ("wiazania.rng_seed", Box::new(|r| {
-            r.wiazania.as_mut().unwrap().rng_seed += 1
+        ("bindings.rng_seed", Box::new(|r| {
+            r.bindings.as_mut().unwrap().rng_seed += 1
         })),
     ];
 

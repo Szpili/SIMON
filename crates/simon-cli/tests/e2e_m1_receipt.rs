@@ -207,7 +207,7 @@ async fn test_e2e_scenariusz_1_uczciwy_przeplyw_m1() {
 
     let r: Receipt = serde_json::from_str(&resp.receipt).expect("poprawny JSON receiptu");
     assert_eq!(r.poziom(), 1, "receipt musi posiadać poziom M1");
-    assert!(r.wiazania.is_some(), "wiazania M1 muszą być obecne");
+    assert!(r.bindings.is_some(), "wiazania M1 muszą być obecne");
     assert!(r.verify_self().is_ok(), "podpis node'a musi być prawidłowy");
     assert!(r.zgodny_z_wyjsciem(&resp.output), "receipt musi pokrywać treść wyjścia");
 
@@ -346,7 +346,7 @@ async fn test_e2e_scenariusz_4_fallback_do_m0_gdy_tokenize_niedostepny_lub_ponad
 
         let r: Receipt = serde_json::from_str(&resp.receipt).expect("parsowanie receiptu");
         assert_eq!(r.poziom(), 0, "przy braku /tokenize poziom receiptu musi wynosić 0");
-        assert!(r.wiazania.is_none());
+        assert!(r.bindings.is_none());
         assert!(r.verify_self().is_ok());
         assert!(r.zgodny_z_wyjsciem(&resp.output));
     }
@@ -374,7 +374,7 @@ async fn test_e2e_scenariusz_4_fallback_do_m0_gdy_tokenize_niedostepny_lub_ponad
 
         let r: Receipt = serde_json::from_str(&resp.receipt).expect("parsowanie receiptu");
         assert_eq!(r.poziom(), 0, "przy overcap poziom receiptu musi wynosić 0");
-        assert!(r.wiazania.is_none());
+        assert!(r.bindings.is_none());
         assert!(r.verify_self().is_ok());
         assert!(r.zgodny_z_wyjsciem(&resp.output));
     }
@@ -402,7 +402,7 @@ async fn test_e2e_scenariusz_4_fallback_do_m0_gdy_tokenize_niedostepny_lub_ponad
 
         let r: Receipt = serde_json::from_str(&resp.receipt).expect("parsowanie receiptu");
         assert_eq!(r.poziom(), 0);
-        assert!(r.wiazania.is_none());
+        assert!(r.bindings.is_none());
         assert!(r.verify_self().is_ok());
     }
 
@@ -433,7 +433,7 @@ async fn test_e2e_scenariusz_4_fallback_do_m0_gdy_tokenize_niedostepny_lub_ponad
 
         let r: Receipt = serde_json::from_str(&resp.receipt).expect("parsowanie receiptu");
         assert_eq!(r.poziom(), 0);
-        assert!(r.wiazania.is_none());
+        assert!(r.bindings.is_none());
         assert!(r.verify_self().is_ok());
     }
 }

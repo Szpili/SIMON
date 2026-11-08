@@ -89,7 +89,7 @@ impl Scena {
             finished_at_us: 100_400_000,
             signer: self.node_key.public(),
             signature: None,
-            wiazania: None,
+            bindings: None,
         }
         .sign(&self.node_key)
         .expect("podpis receiptu");
@@ -214,7 +214,7 @@ fn klient_odrzuca_receipt_podpisany_obcym_kluczem() {
         finished_at_us: 100_400_000,
         signer: obcy.public(),
         signature: None,
-        wiazania: None,
+        bindings: None,
     }
     .sign(&obcy)
     .unwrap();

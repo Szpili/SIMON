@@ -257,7 +257,7 @@ mod testy {
             finished_at_us: 1,
             signer: k.public(),
             signature: None,
-            wiazania: None,
+            bindings: None,
         };
         let r = base
             .clone()

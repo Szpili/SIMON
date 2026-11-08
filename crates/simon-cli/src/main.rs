@@ -869,7 +869,7 @@ mod testy_cli {
             finished_at_us: 200,
             signer: klucz1.public(),
             signature: None,
-            wiazania: None,
+            bindings: None,
         };
         let signed = r.sign(&klucz1).unwrap();
         let sciezka = std::env::temp_dir().join(format!(

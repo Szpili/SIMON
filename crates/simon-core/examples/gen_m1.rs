@@ -31,7 +31,7 @@ fn main() {
         finished_at_us: 1,
         signer: k.public(),
         signature: None,
-        wiazania: None,
+        bindings: None,
     }
     .z_wiazaniem_m1(
         tokenizer_hash.clone(),

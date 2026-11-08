@@ -483,7 +483,7 @@ pub async fn policz(
     );
 
     let receipt_ma_m1 = serde_json::from_str::<simon_core::receipt::Receipt>(&receipt)
-        .map(|r| r.wiazania.is_some())
+        .map(|r| r.bindings.is_some())
         .unwrap_or(false);
 
     let (tokenizer_hash, prompt_token_ids, output_token_ids) = if receipt_ma_m1 {
@@ -979,7 +979,7 @@ fn zbuduj_podpisany_receipt(
         finished_at_us,
         signer: klucz.public(),
         signature: None,
-        wiazania: None,
+        bindings: None,
     };
 
     if let Some((tok_hash, p_ids, o_ids)) = m1_dane {
@@ -1413,7 +1413,7 @@ mod testy_receiptu {
         );
         let r1: Receipt = serde_json::from_str(&json_m1).expect("parsowanie receiptu M1");
         assert_eq!(r1.poziom(), 1);
-        assert!(r1.wiazania.is_some());
+        assert!(r1.bindings.is_some());
         assert!(r1.verify_self().is_ok());
         assert!(r1.zgodny_z_wyjsciem("odpowiedz"));
         assert!(r1.zweryfikuj_m1(tok_hash, &req.nonce, &p_ids, &o_ids).is_ok());
@@ -1433,7 +1433,7 @@ mod testy_receiptu {
         );
         let r0: Receipt = serde_json::from_str(&json_m0).expect("parsowanie receiptu M0");
         assert_eq!(r0.poziom(), 0);
-        assert!(r0.wiazania.is_none());
+        assert!(r0.bindings.is_none());
         assert!(r0.verify_self().is_ok());
         assert!(r0.zgodny_z_wyjsciem("odpowiedz"));
     }
