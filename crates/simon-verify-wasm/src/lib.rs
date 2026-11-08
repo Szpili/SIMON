@@ -182,7 +182,7 @@ pub fn ocena_m3(audyt_json: &str, k: u32, max_margin: f64, max_poza: f64) -> Str
     let polityka = simon_core::m3::Polityka {
         k: k as usize,
         max_margin,
-        max_poza,
+        max_outside: max_poza,
     };
     match simon_core::m3::ocena_json(audyt_json, &polityka) {
         Ok(w) => serde_json::to_string(&w).unwrap_or_else(|_| "{\"ok\":false}".into()),
@@ -308,7 +308,7 @@ mod testy {
         ]}"#;
         let w = super::ocena_m3(dobry, 2, 0.25, 0.02);
         assert_eq!(pole(&w, "ok"), serde_json::json!(true), "{w}");
-        assert_eq!(pole(&w, "w_topk"), serde_json::json!(2), "{w}");
+        assert_eq!(pole(&w, "in_topk"), serde_json::json!(2), "{w}");
 
         // Cheater: jeden token poza top-k.
         let zly = r#"{"kroki":[
@@ -317,6 +317,6 @@ mod testy {
         ]}"#;
         let w2 = super::ocena_m3(zly, 2, 0.25, 0.02);
         assert_eq!(pole(&w2, "ok"), serde_json::json!(false), "{w2}");
-        assert_eq!(pole(&w2, "poza_topk"), serde_json::json!(1), "{w2}");
+        assert_eq!(pole(&w2, "outside_topk"), serde_json::json!(1), "{w2}");
     }
 }

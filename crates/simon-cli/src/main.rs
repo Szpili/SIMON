@@ -523,11 +523,11 @@ fn weryfikuj_offline(opcje: &Opcje, zrodlo: &str) -> ExitCode {
         }
         if let Some(w) = m3_wynik.as_ref() {
             println!(
-                "audyt M3       : {} (kroków={}, w top-k={}, poza={}, najgorszy rank={}, margines={:.4})",
-                if w.ok { "OK" } else { "ODRZUCONY" },
-                w.krokow, w.w_topk, w.poza_topk, w.najgorszy_rank, w.najgorszy_margin
+                "audyt M3       : {} (steps={}, in top-k={}, outside={}, worst rank={}, margin={:.4})",
+                if w.ok { "OK" } else { "REJECTED" },
+                w.steps, w.in_topk, w.outside_topk, w.worst_rank, w.worst_margin
             );
-            if let Some(p) = &w.powod {
+            if let Some(p) = &w.reason {
                 println!("                 {p}");
             }
         }
@@ -641,13 +641,13 @@ fn audyt_podkomenda(args: &[String]) -> ExitCode {
         Ok(w) => {
             let d = simon_core::m3::decyzja(&w, poziom, &simon_core::m3::Progi::default());
             println!(
-                "audyt      : kroków={} w top-k={} poza-top-k={} najgorszy rank={} margines={:.4}",
-                w.krokow, w.w_topk, w.poza_topk, w.najgorszy_rank, w.najgorszy_margin
+                "audit      : steps={} in top-k={} outside-top-k={} worst rank={} margin={:.4}",
+                w.steps, w.in_topk, w.outside_topk, w.worst_rank, w.worst_margin
             );
-            println!("werdykt M3 : {}", if w.ok { "OK" } else { "NIE" });
-            println!("decyzja    : {d:?} (poziom receiptu {poziom})");
-            if let Some(p) = &w.powod {
-                println!("powód      : {p}");
+            println!("verdict M3 : {}", if w.ok { "OK" } else { "FAIL" });
+            println!("decision   : {d:?} (receipt level {poziom})");
+            if let Some(p) = &w.reason {
+                println!("reason     : {p}");
             }
             if matches!(d, simon_core::m3::Decyzja::HardFail) {
                 ExitCode::FAILURE
