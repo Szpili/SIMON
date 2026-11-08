@@ -16,8 +16,9 @@ use simon_core::receipt::Receipt;
 use simon_harness::request_response::{PromptReply, PromptRequest};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-#[path = "../src/wspolne.rs"]
-pub mod wspolne;
+#[path = "../src/common.rs"]
+pub mod common;
+pub use common as wspolne;
 
 #[path = "../src/node.rs"]
 pub mod node;

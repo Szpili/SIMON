@@ -10,10 +10,11 @@
 use std::process::ExitCode;
 
 mod agent;
+mod common;
 mod coord;
 mod mapreduce;
 mod node;
-mod wspolne;
+pub(crate) use common as wspolne;
 
 const USAGE: &str = r#"
 SIMON — rozproszona inferencja (M1)
