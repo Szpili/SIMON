@@ -1,16 +1,11 @@
-//! Macierz tamper (krytyk muse, 2026-10-04): „jeśli binding pada, M3/IFC/staking
-//! dziedziczą forgery". Testujemy, że **każde** pole związane w receipcie v2 jest
-//! objęte podpisem: zmiana jednego bitu → `verify_self()` = Err. Osobno: grant
-//! (double-use/expired/zły parametr) i replay nonce.
-//!
-//! To licencjonuje TYLKO: „v2 receipts są tamper-evident authorship/binding pod
-//! Ed25519 przy założeniu tajności klucza". NIE licencjonuje poprawności wykonania,
-//! tożsamości modelu ani poufności wobec executora.
+//! Tamper matrix test: verifies that every bound field in a v2 receipt
+//! is covered by signature (single bit flip -> verify_self() = Err).
+//! Also tests grant validation and replay nonce.
 
 use simon_core::crypto::Keypair;
-use simon_core::receipt::{odcisk_parametrow, odcisk_wyjscia, Precision, Receipt};
+use simon_core::receipt::{output_digest_for, params_digest, Precision, Receipt};
 
-fn bazowy_podpisany() -> (Receipt, Keypair) {
+fn base_signed() -> (Receipt, Keypair) {
     let k = Keypair::from_seed(&[11u8; 32]);
     let r = Receipt {
         job_id: "job-1".into(),
@@ -19,7 +14,7 @@ fn bazowy_podpisany() -> (Receipt, Keypair) {
         runtime: "llama.cpp/511f9c13".into(),
         precision: Precision::Fp16,
         activation_hash: "toploc:NIE_POLICZONY".into(),
-        output_digest: odcisk_wyjscia("job-1", "hello world").unwrap(),
+        output_digest: output_digest_for("job-1", "hello world").unwrap(),
         prompt_tokens: 12,
         completion_tokens: 34,
         started_at_us: 1_000_000,
@@ -28,12 +23,12 @@ fn bazowy_podpisany() -> (Receipt, Keypair) {
         signature: None,
         bindings: None,
     }
-    .z_wiazaniem_m1(
+    .with_m1_bindings(
         "tokhash".into(),
         "nonce-abc".into(),
         &[1, 2, 3, 4],
         &[5, 6, 7],
-        odcisk_parametrow(0, 1_000_000, 1, 0, 1_000_000).unwrap(),
+        params_digest(0, 1_000_000, 1, 0, 1_000_000).unwrap(),
         42,
         "llama.cpp/Q8_0/cpu".into(),
     )
@@ -45,9 +40,9 @@ fn bazowy_podpisany() -> (Receipt, Keypair) {
 
 #[test]
 fn kazde_pole_v2_jest_pod_podpisem() {
-    let (bazowy, _k) = bazowy_podpisany();
+    let (bazowy, _k) = base_signed();
     assert!(bazowy.verify_self().is_ok());
-    assert_eq!(bazowy.poziom(), 1);
+    assert_eq!(bazowy.level(), 1);
 
     // (nazwa, mutator)
     type Mutator = Box<dyn Fn(&mut Receipt)>;
@@ -106,39 +101,39 @@ fn kazde_pole_v2_jest_pod_podpisem() {
     }
     assert!(
         przeszly.is_empty(),
-        "te pola NIE są pod podpisem (tamper niewykryty): {przeszly:?}"
+        "these fields are NOT covered by signature (undetected tamper): {przeszly:?}"
     );
 
-    // podmiana samego podpisu też łamie
+    // modifying signature itself also fails
     let mut r = bazowy.clone();
     r.signature = Some(simon_core::crypto::Signature([0u8; 64]));
-    assert!(r.verify_self().is_err(), "podmieniony podpis musi być odrzucony");
+    assert!(r.verify_self().is_err(), "tampered signature must be rejected");
 }
 
 #[test]
 fn stary_receipt_to_authorship_bez_bindingu() {
-    // Legacy receipt (poziom 0) weryfikuje podpis, ale NIE niesie wiązania wejścia —
-    // więc `zweryfikuj_m1` musi go odrzucić (authorship-only, nie binding).
+    // Legacy receipt (level 0) verifies signature but does not carry input binding —
+    // verify_m1 must reject it (authorship-only, not binding).
     let r: Receipt =
         serde_json::from_str(include_str!("../../../przyklady/receipt.json").trim()).unwrap();
-    assert_eq!(r.poziom(), 0);
-    assert!(r.verify_self().is_ok(), "authorship legacy działa");
+    assert_eq!(r.level(), 0);
+    assert!(r.verify_self().is_ok(), "authorship legacy works");
     assert!(
-        r.zweryfikuj_m1("cokolwiek", "cokolwiek", &[1], &[2]).is_err(),
-        "poziom 0 nie ma wiązania — nie wolno go przedstawiać jako binding"
+        r.verify_m1("any", "any", &[1], &[2]).is_err(),
+        "level 0 has no binding — must not be presented as binding"
     );
 }
 
 #[test]
-fn zweryfikuj_m1_odrzuca_niepodpisany_receipt() {
-    let (bazowy, _) = bazowy_podpisany();
+fn verify_m1_rejects_unsigned_receipt() {
+    let (bazowy, _) = base_signed();
     let mut unsigned = bazowy.clone();
     unsigned.signature = None;
     assert!(
         unsigned
-            .zweryfikuj_m1("tokhash", "nonce-abc", &[1, 2, 3, 4], &[5, 6, 7])
+            .verify_m1("tokhash", "nonce-abc", &[1, 2, 3, 4], &[5, 6, 7])
             .is_err(),
-        "niepodpisany receipt nie może przejść zweryfikuj_m1"
+        "unsigned receipt cannot pass verify_m1"
     );
 }
 
@@ -190,7 +185,7 @@ fn grant_double_use_expired_zly_parametr() {
         simon_core::cap::verify_grant(&sufit, &z, "log_message", &par, &ok_uzyte),
         Err(simon_core::cap::GrantRejection::Used)
     );
-    // zły parametr
+    // invalid parameter
     let zly = serde_json::json!({"msg": "rm -rf /"});
     assert_eq!(
         simon_core::cap::verify_grant(&sufit, &z, "log_message", &zly, &ok),

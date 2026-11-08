@@ -32,7 +32,7 @@
   let pill = $state<'idle' | 'running' | 'valid' | 'rejected'>('idle');
   let showJson = $state(false);
   let busy = $state(false);
-  const level = $derived(receipt.bindings?.receipt_level ?? receipt.wiazania?.receipt_level ?? 0);
+  const level = $derived(receipt.bindings?.receipt_level ?? 0);
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   const short = (s: string) => (s.length > 26 ? s.slice(0, 12) + '…' + s.slice(-8) : s);
 

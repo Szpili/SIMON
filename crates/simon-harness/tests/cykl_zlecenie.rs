@@ -1,14 +1,9 @@
-//! Testy integracyjne: pełny cykl zlecenie → wykonanie → weryfikacja przez klienta.
+//! Integration tests: full cycle order -> execution -> client-side verification.
 //!
-//! To jest test KONTRAKTU między trzema warstwami:
-//!   harness (klient) → node (koordynator+wykonawca) → z powrotem do klienta
+//! Verifies the contract between three layers:
+//!   harness (client) -> node (coordinator + worker) -> back to client
 //!
-//! Sprawdza, że klient weryfikuje wynik SAM (RULES #6) — bez zaufania do koordynatora.
-//! Bez sieci: nody komunikują się przez pamięć. Transport (libp2p) dochodzi osobno
-//! na tych samych typach — jeśli ten test przechodzi, protokół jest spójny.
-
-
-
+//! Confirms the client verifies the outcome autonomously without trusting the coordinator.
 
 use simon_core::crypto::Keypair;
 use simon_core::receipt::{Precision, Receipt};
@@ -18,7 +13,7 @@ use simon_harness::client_protocol::{
 };
 use simon_node::{Capability, JobResult, RegisterMsg, Registry};
 
-/// Pełna ścieżka: klient zleca → node wykonuje → klient weryfikuje.
+/// Full path fixture: client orders -> node executes -> client verifies.
 struct Scena {
     client_key: Keypair,
     node_key: Keypair,
@@ -35,11 +30,10 @@ impl Scena {
 
         let cap = Capability {
             declared: serde_json::json!({"vram_gb": 12, "tok_s": 45}),
-            // RULES #2: przydział tylko po potwierdzonej mocy.
             attested: Some(serde_json::json!({"tok_s": 42.1})),
         };
         let msg = RegisterMsg::new(node_id.clone(), node_key.public(), cap);
-        assert!(registry.register(msg), "rejestracja node'a");
+        assert!(registry.register(msg), "node registration");
 
         Self {
             client_key,
@@ -50,29 +44,28 @@ impl Scena {
     }
 
     fn zlecenie(&self, _order_id: &str, fee: u64) -> JobOrder {
-        // M0.2: order_id jest LICZONY (digest + nonce), nie podawany.
+        // order_id computed from digest + nonce.
         let mut o = JobOrder::new(
             "sha256:qwen3.8-27b-w4a16",
-            b"policz cos",
+            b"compute something",
             fee,
             300,
             self.client_key.public().to_hex(),
         )
-        .expect("zlecenie");
-        // Podpis klienta nad odciskiem treści.
-        let digest = o.digest().expect("odcisk");
+        .expect("order");
+        let digest = o.digest().expect("digest");
         o.signature = Some(hex::encode(
             self.client_key.sign_digest(&digest).0,
         ));
         o
     }
 
-    /// Node wykonuje pracę i składa podpisany receipt.
+    /// Node completes work and submits signed receipt.
     fn wykonaj(&mut self, order: &JobOrder) -> JobResult {
         let job_id = format!("job-{}", order.order_id);
         assert!(
             self.registry.assign(&job_id, &self.node_id),
-            "przydział joba"
+            "job assignment"
         );
 
         let receipt = Receipt {
@@ -92,7 +85,7 @@ impl Scena {
             bindings: None,
         }
         .sign(&self.node_key)
-        .expect("podpis receiptu");
+        .expect("receipt signature");
 
         let result = JobResult::success(
             job_id,
@@ -100,15 +93,11 @@ impl Scena {
             serde_json::json!({"tokens": 128}),
             receipt,
         );
-        self.registry.complete(&result).expect("przyjęcie wyniku");
+        self.registry.complete(&result).expect("result accepted");
         result
     }
 
-    /// Klient weryfikuje wynik SAM — klucz node'a bierze z rejestru, nie z receiptu.
-    ///
-    /// `wiazanie` to `order_id`, które KOORDYNATOR wpisuje do `OrderCompleted`.
-    /// W prawdziwym protokole pochodzi z zewnątrz (koordynator wie, do czego
-    /// przypisał job). W teście podajemy je jawnie, żeby móc sprawdzić atak.
+    /// Client verifies result directly using registered public key.
     fn klient_weryfikuje(
         &self,
         wiazanie: &str,
@@ -120,7 +109,7 @@ impl Scena {
             .registry
             .nodes
             .get(&self.node_id)
-            .expect("node w rejestrze")
+            .expect("node in registry")
             .pubkey
             .clone();
 
@@ -137,7 +126,7 @@ impl Scena {
 }
 
 // ---------------------------------------------------------------------------
-// Testy
+// Tests
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -147,7 +136,7 @@ fn pelny_cykl_przechodzi() {
     let result = s.wykonaj(&order);
     assert!(
         s.klient_weryfikuje(&order.order_id, &order.order_id, &result).is_ok(),
-        "klient musi zweryfikować wynik samodzielnie"
+        "client must verify result autonomously"
     );
 }
 
@@ -155,7 +144,7 @@ fn pelny_cykl_przechodzi() {
 fn zlecenie_bez_oplaty_nie_generuje_emisji() {
     let s = Scena::nowa();
     let order = s.zlecenie("o-2", 0);
-    assert!(!order.is_funded(), "D83: fee_think == 0 → brak emisji");
+    assert!(!order.is_funded(), "fee_think == 0 -> no emissions");
 }
 
 #[test]
@@ -163,7 +152,7 @@ fn roboczy_burn_proof_nie_jest_produkcyjny() {
     let s = Scena::nowa();
     let order = s.zlecenie("o-3", 50);
     assert!(order.burn.synthetic);
-    assert!(!order.has_verifiable_burn(), "MVP nie udaje produkcji");
+    assert!(!order.has_verifiable_burn(), "MVP does not claim production burn");
 }
 
 #[test]
@@ -172,21 +161,14 @@ fn klient_odrzuca_wynik_dla_innego_zlecenia() {
     let order = s.zlecenie("o-4", 50);
     let result = s.wykonaj(&order);
 
-    // Wynik dotyczy o-4, ale klient czeka na o-INNE.
-    // UWAGA: job_id w receipcie NIE zawiera order_id (jest nadawany przez
-    // koordynatora), więc tej rozbieżności NIE da się złapać po samym receiptcie.
-    // Łapie ją `order_id` na poziomie OrderCompleted — to jest cała rola tego pola.
-    // Koordynator podstawia order_id, którego klient NIE zamawiał.
     assert!(
-        s.klient_weryfikuje("o-INNE", &order.order_id, &result).is_err(),
-        "wynik dla innego zlecenia musi być odrzucony"
+        s.klient_weryfikuje("o-OTHER", &order.order_id, &result).is_err(),
+        "result for another order must be rejected"
     );
 
-    // Kontrola niepustości: właściwe wiązanie MUSI przechodzić.
-    // Bez niej test przechodziłby także wtedy, gdyby weryfikacja była zepsuta.
     assert!(
         s.klient_weryfikuje(&order.order_id, &order.order_id, &result).is_ok(),
-        "kontrola: właściwe zlecenie musi przechodzić"
+        "sanity: matching order must pass"
     );
 }
 
@@ -195,7 +177,6 @@ fn klient_odrzuca_receipt_podpisany_obcym_kluczem() {
     let mut s = Scena::nowa();
     let order = s.zlecenie("o-5", 50);
 
-    // Node wykonuje, ale receipt podpisujemy OBCYM kluczem.
     let job_id = format!("job-{}", order.order_id);
     s.registry.assign(&job_id, &s.node_id);
 
@@ -228,7 +209,7 @@ fn klient_odrzuca_receipt_podpisany_obcym_kluczem() {
 
     assert!(
         s.klient_weryfikuje(&order.order_id, &order.order_id, &result).is_err(),
-        "wariant C: obcy klucz musi być odrzucony"
+        "foreign key must be rejected"
     );
 }
 
@@ -238,21 +219,18 @@ fn klient_odrzuca_podmieniona_tresc_receiptu() {
     let order = s.zlecenie("o-6", 50);
     let mut result = s.wykonaj(&order);
 
-    // Podmiana po podpisaniu.
     if let Some(r) = result.receipt.as_mut() {
         r.activation_hash = "toploc:FAKE".to_string();
     }
 
     assert!(
         s.klient_weryfikuje(&order.order_id, &order.order_id, &result).is_err(),
-        "podmiana treści receiptu musi być wykryta"
+        "tampered receipt content must be detected"
     );
 }
 
 #[test]
 fn wyscig_gossipsub_rozstrzygany_deterministycznie() {
-    // Sytuacja przy gossipsub: DWÓCH koordynatorów łapie to samo zlecenie.
-    // Bez reguły = podwójne rozliczenie (F2).
     let mk = |pk: &str| OrderAccepted {
         order_id: "o-7".into(),
         job_id: "job-o-7".into(),
@@ -268,10 +246,7 @@ fn wyscig_gossipsub_rozstrzygany_deterministycznie() {
     let k3 = mk("5c3d");
     let kandydaci = [k1, k2, k3];
 
-    let zwyciezca = OrderAccepted::winner(&kandydaci).expect("jest zwycięzca");
-    // Reguła: min H(order_id ‖ pubkey) — NIE min pubkey (P5 z Opusa).
-    // Przy min pubkey klucz "0a1b" wygrywałby, a klucz "0000…" przejmowałby
-    // każdy wyścig w sieci bez żadnej pracy.
+    let zwyciezca = OrderAccepted::winner(&kandydaci).expect("winner present");
     let ranking = |pk: &str| {
         use sha2::{Digest, Sha256};
         let mut h = Sha256::new();
@@ -283,23 +258,21 @@ fn wyscig_gossipsub_rozstrzygany_deterministycznie() {
         .into_iter()
         .min_by_key(|pk| ranking(pk))
         .unwrap();
-    assert_eq!(zwyciezca.coordinator_pubkey, oczekiwany, "wygrywa min H(order_id ‖ pubkey)");
+    assert_eq!(zwyciezca.coordinator_pubkey, oczekiwany, "winner is min H(order_id || pubkey)");
 
-    // Ten sam wynik niezależnie od kolejności odpowiedzi.
     for i in 0..kandydaci.len() {
         let mut obrocone = kandydaci.clone();
         obrocone.rotate_left(i);
         let w = OrderAccepted::winner(&obrocone).unwrap();
         assert_eq!(
             w.coordinator_pubkey, oczekiwany,
-            "kolejność odpowiedzi nie może zmieniać zwycięzcy"
+            "response order must not alter deterministic winner"
         );
     }
 }
 
 #[test]
 fn tematy_gossipsub_sa_czescia_kontraktu() {
-    // Zmiana tematu = nowa sieć. To jest część nieodwracalnego formatu.
     assert_eq!(TOPIC_JOB_ORDER, "simon/v1/job-order");
 }
 
@@ -312,23 +285,18 @@ fn porazka_nie_wymaga_receiptu() {
     assert!(s.registry.complete(&result).is_ok());
 }
 
-// ---------------------------------------------------------------------------
-// Pomocnicze: sprawdzenie, że typy serde działają (transport libp2p tego wymaga)
-// ---------------------------------------------------------------------------
-
 #[test]
 fn typy_sa_serializowalne_do_json() {
     let s = Scena::nowa();
     let order = s.zlecenie("o-json", 10);
 
-    let json = serde_json::to_string(&order).expect("JobOrder → JSON");
-    let back: JobOrder = serde_json::from_str(&json).expect("JSON → JobOrder");
+    let json = serde_json::to_string(&order).expect("JobOrder -> JSON");
+    let back: JobOrder = serde_json::from_str(&json).expect("JSON -> JobOrder");
     assert_eq!(back.order_id, order.order_id);
     assert_eq!(back.digest().unwrap(), order.digest().unwrap());
 
-    // Po round-trip odcisk musi być identyczny — inaczej podpis nie przetrwa sieci.
     assert_eq!(
         back.payload_digest, order.payload_digest,
-        "round-trip nie może zmieniać odcisku"
+        "round-trip must not alter payload digest"
     );
 }

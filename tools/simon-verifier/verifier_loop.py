@@ -1,35 +1,28 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Realny verifier-loop M3.
+"""M3 verifier loop.
 
-Podąża trajektorią node'a (teacher-forcing po tokenach) i zbiera top-k verifiera
-krok po kroku. Wynik (audyt) ocenia Rust: `simon audyt <plik>` → `m3::ocena` +
-`m3::decyzja` (Pass / SoftFail bez slasha / HardFail).
+Follows the node's trajectory (teacher forcing over tokens) and collects top-k verifier
+logprobs step by step. The result (audit) is evaluated by Rust: `simon audit <file>` -> `m3::evaluate` +
+`m3::decide` (Pass / SoftFail without slash / HardFail).
 
-Dlaczego llama.cpp: potrzebujemy `prompt` jako TABLICY tokenów i `n_probs` per krok.
-OpenAI-compatible vLLM tego nie wystawia. Dla joba produkcyjnego verifier to osobny
-llama.cpp z tym samym modelem co node.
-
-Wejście: zadanie JSON `{prompt_token_ids, output_token_ids, ...}` (to samo, co
-commit-uje M1 w receipcie). Endpoint: `http://127.0.0.1:<port>` (llama-server).
-
-Użycie:
-  python3 verifier_loop.py zadanie.json --endpoint http://127.0.0.1:18101 --out audyt.json
-  simon audyt audyt.json
+Usage:
+  python3 verifier_loop.py task.json --endpoint http://127.0.0.1:18101 --out audit.json
+  simon audit audit.json
 """
 from __future__ import annotations
 import argparse, json, re, sys, urllib.parse, urllib.request
 
 
 def _validate_endpoint(endpoint: str) -> str:
-    """Waliduje poprawność URL/multiaddr endpointu, odrzucając złośliwe znaki."""
+    """Validates URL/multiaddr endpoint format, rejecting forbidden characters."""
     if not endpoint or not isinstance(endpoint, str):
-        raise ValueError("Pusty endpoint")
+        raise ValueError("Empty endpoint")
     if re.search(r"[\s\x00-\x1f\x7f;<>\'\"\`\|\$\&\(\)]", endpoint):
-        raise ValueError(f"Nieprawidłowe znaki w adresie endpointu: {endpoint!r}")
+        raise ValueError(f"Invalid characters in endpoint address: {endpoint!r}")
     parsed = urllib.parse.urlparse(endpoint)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        raise ValueError(f"Nieobsługiwany format adresu endpointu (wymagany http:// lub https://): {endpoint!r}")
+        raise ValueError(f"Unsupported endpoint scheme (expected http:// or https://): {endpoint!r}")
     return endpoint
 
 
@@ -64,7 +57,7 @@ def petla(endpoint: str, prompt_ids: list, output_ids: list, k: int = 5) -> list
 
 
 def run_selfcheck() -> int:
-    """Weryfikuje logikę _topk i format kroków bez potrzeby odpytywania llama-server."""
+    """Verifies _topk logic and step formatting without querying llama-server."""
     mock_cp = {
         "id": 100,
         "logprob": -0.05,
@@ -74,7 +67,7 @@ def run_selfcheck() -> int:
         ]
     }
     top = _topk(mock_cp)
-    assert len(top) == 3, f"Oczekiwano 3 elementów w topk, otrzymano {len(top)}"
+    assert len(top) == 3, f"Expected 3 elements in topk, got {len(top)}"
     assert top[0] == (100, -0.05)
     kroki = [{"indeks": 0, "node_token": 100, "topk": top}]
     audyt_str = json.dumps({"kroki": kroki})
@@ -85,7 +78,7 @@ def run_selfcheck() -> int:
 
 
 def dry_run(prompt_ids: list, output_ids: list, k: int = 5) -> list:
-    """Generuje symulowany audyt kroki z syntetycznymi prawdopodobieństwami."""
+    """Generates simulated audit steps with synthetic probabilities."""
     kroki = []
     for t, tok in enumerate(output_ids):
         simulated_topk = [(int(tok), -0.01)] + [(int(tok) + i + 1, -2.0 - i) for i in range(k - 1)]
@@ -94,14 +87,14 @@ def dry_run(prompt_ids: list, output_ids: list, k: int = 5) -> list:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Realny verifier-loop M3.")
-    ap.add_argument("zadanie", nargs="?", default=None, help="JSON z prompt_token_ids i output_token_ids")
+    ap = argparse.ArgumentParser(description="M3 verifier loop.")
+    ap.add_argument("zadanie", nargs="?", default=None, help="JSON with prompt_token_ids and output_token_ids")
     ap.add_argument("--endpoint", "--node", dest="endpoint", default="http://127.0.0.1:18101",
-                    help="Endpoint llama-server lub adres węzła")
+                    help="llama-server endpoint or node address")
     ap.add_argument("--topk", type=int, default=5)
     ap.add_argument("--out", default="-", help="- = stdout")
-    ap.add_argument("--selfcheck", action="store_true", help="Uruchom wewnętrzny self-check i wyjdź")
-    ap.add_argument("--dry-run", action="store_true", help="Wygeneruj symulowany audyt bez łączenia z endpointem")
+    ap.add_argument("--selfcheck", action="store_true", help="Run internal self-check and exit")
+    ap.add_argument("--dry-run", action="store_true", help="Generate simulated audit without connecting to endpoint")
     a = ap.parse_args()
 
     if a.selfcheck:
@@ -110,7 +103,7 @@ def main() -> int:
     try:
         _validate_endpoint(a.endpoint)
     except ValueError as e:
-        print(f"Błąd walidacji endpointu: {e}", file=sys.stderr)
+        print(f"Endpoint validation error: {e}", file=sys.stderr)
         return 1
 
     if a.dry_run:
@@ -122,17 +115,17 @@ def main() -> int:
             prompt_ids = [1, 2, 3]
             output_ids = [4, 5, 6]
         kroki = dry_run(prompt_ids, output_ids, a.topk)
-        # "simulated" = syntetyczne logprob. m3::ocena_json (CLI `simon audyt`/--audyt i WASM) odrzuca taki plik.
+        # "simulated" = synthetic logprob. m3::evaluate_json (CLI `simon audyt`/--audyt and WASM) rejects such files.
         audyt = json.dumps({"simulated": True, "kroki": kroki}, ensure_ascii=False)
         if a.out == "-":
             print(audyt)
         else:
             open(a.out, "w", encoding="utf-8").write(audyt)
-            print(f"zapisano {a.out} ({len(kroki)} kroków dry-run)", file=sys.stderr)
+            print(f"saved {a.out} ({len(kroki)} dry-run steps)", file=sys.stderr)
         return 0
 
     if not a.zadanie:
-        ap.error("Wymagany argument 'zadanie' (ścieżka do pliku JSON) lub flaga --selfcheck / --dry-run")
+        ap.error("Required argument 'zadanie' (JSON file path) or --selfcheck / --dry-run flag")
 
     z = json.load(open(a.zadanie, encoding="utf-8"))
     kroki = petla(a.endpoint, z["prompt_token_ids"], z["output_token_ids"], a.topk)
@@ -141,7 +134,7 @@ def main() -> int:
         print(audyt)
     else:
         open(a.out, "w", encoding="utf-8").write(audyt)
-        print(f"zapisano {a.out} ({len(kroki)} kroków)", file=sys.stderr)
+        print(f"saved {a.out} ({len(kroki)} steps)", file=sys.stderr)
     return 0
 
 

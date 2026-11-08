@@ -1,27 +1,27 @@
-//! C-gate: przydział zlecenia musi filtrować po MODELU, nie tylko po mocy.
+//! C-gate: order routing must filter by MODEL, not just compute capacity.
 //!
-//! Stan przed poprawką (sprawdzone 2026-09-17):
-//!   - node NIE deklaruje, jaki ma model (`grep model` w rejestracji = 0),
-//!   - `assign()` sprawdza moc/stan, ale NIE model (0 trafień),
-//!   - ranking `winner()` to H(order_id ‖ coordinator_pubkey) = losowanie.
+//! Pre-fix state:
+//!   - node did not declare model,
+//!   - `assign()` verified capacity/state, but not model,
+//!   - ranking `winner()` was random H(order_id || coordinator_pubkey).
 //!
-//! Skutek: zlecenie na `bielik-awq` mogło trafić na node z `qwen3.8-27b`
-//! i dopiero bramka D67 klienta łapała rozjazd — PO policzeniu i PO zapłacie.
+//! Consequence: job for `bielik-awq` could route to node with `qwen3.8-27b`,
+//! caught only downstream at client D67 verification after payment.
 
 use simon_core::crypto::Keypair;
 use simon_node::{Capability, RegisterMsg, Registry};
 
-fn node_z_modelem(id: &str, model: &str, max_ctx: u32) -> RegisterMsg {
-    let klucz = Keypair::from_seed(&[id.len() as u8; 32]);
+fn node_with_model(id: &str, model: &str, max_ctx: u32) -> RegisterMsg {
+    let key = Keypair::from_seed(&[id.len() as u8; 32]);
     RegisterMsg::new(
         id,
-        klucz.public(),
+        key.public(),
         Capability {
             declared: serde_json::json!({
                 "model_hash": model,
                 "max_ctx": max_ctx,
             }),
-            // Atestacja: w tym teście koordynator „potwierdził" deklarację.
+            // Attestation: coordinator attested the declaration in this test.
             attested: Some(serde_json::json!({
                 "model_hash": model,
                 "max_ctx": max_ctx,
@@ -31,38 +31,46 @@ fn node_z_modelem(id: &str, model: &str, max_ctx: u32) -> RegisterMsg {
 }
 
 #[test]
-fn m26_zlecenie_trafia_tylko_na_node_z_modelem() {
-    let mut rejestr = Registry::new();
-    rejestr.register(node_z_modelem("node-bielik", "bielik-awq", 8192));
-    rejestr.register(node_z_modelem("node-qwen", "qwen3.8-27b", 36864));
+fn m26_order_routes_only_to_node_with_matching_model() {
+    let mut registry = Registry::new();
+    registry.register(node_with_model("node-bielik", "bielik-awq", 8192));
+    registry.register(node_with_model("node-qwen", "qwen3.8-27b", 36864));
 
-    // Zlecenie prosi o bielik-awq: kandydaci MUSZĄ być odfiltrowani PO MODELU.
-    let kandydaci = rejestr.candidates_for_model("bielik-awq", 0);
-    assert_eq!(kandydaci, vec!["node-bielik".to_string()],
-        "zlecenie na bielik-awq NIE MOŻE trafić na node z qwen");
-    assert_eq!(rejestr.kandydaci_dla_modelu("bielik-awq", 0), kandydaci);
+    // Order asks for bielik-awq: candidates MUST be filtered BY MODEL.
+    let candidates = registry.candidates_for_model("bielik-awq", 0);
+    assert_eq!(
+        candidates,
+        vec!["node-bielik".to_string()],
+        "job for bielik-awq MUST NOT route to node with qwen"
+    );
 
-    // Zlecenie prosi o qwen: tylko qwen.
-    let kandydaci = rejestr.candidates_for_model("qwen3.8-27b", 0);
-    assert_eq!(kandydaci, vec!["node-qwen".to_string()]);
+    // Order asks for qwen: only qwen.
+    let candidates = registry.candidates_for_model("qwen3.8-27b", 0);
+    assert_eq!(candidates, vec!["node-qwen".to_string()]);
 
-    // Model, którego nikt nie ma: pusta lista = jawna odmowa, nie cichy wybór.
-    let kandydaci = rejestr.candidates_for_model("llama-70b", 0);
-    assert!(kandydaci.is_empty(), "brak node'a z modelem = pusta lista, nie losowanie");
+    // Model no node hosts: empty list = explicit refusal, not random choice.
+    let candidates = registry.candidates_for_model("llama-70b", 0);
+    assert!(
+        candidates.is_empty(),
+        "missing node with model = empty list, not random assignment"
+    );
 }
 
 #[test]
-fn m26_zlecenie_trafia_tylko_gdzie_zmiesci_sie_kontekst() {
-    let mut rejestr = Registry::new();
-    rejestr.register(node_z_modelem("node-maly", "bielik-awq", 8192));
-    rejestr.register(node_z_modelem("node-duzy", "bielik-awq", 36864));
+fn m26_order_routes_only_where_context_fits() {
+    let mut registry = Registry::new();
+    registry.register(node_with_model("node-small", "bielik-awq", 8192));
+    registry.register(node_with_model("node-large", "bielik-awq", 36864));
 
-    // Zlecenie 20k tokenów: node z 8k limitu ODPADA.
-    let kandydaci = rejestr.candidates_for_model("bielik-awq", 20_000);
-    assert_eq!(kandydaci, vec!["node-duzy".to_string()],
-        "zlecenie 20k NIE MOŻE trafić na node z limitem 8k");
+    // 20k token job: 8k limit node is dropped.
+    let candidates = registry.candidates_for_model("bielik-awq", 20_000);
+    assert_eq!(
+        candidates,
+        vec!["node-large".to_string()],
+        "20k order MUST NOT route to node with 8k limit"
+    );
 
-    // Zlecenie 5k: oba pasują.
-    let kandydaci = rejestr.candidates_for_model("bielik-awq", 5_000);
-    assert_eq!(kandydaci.len(), 2, "w limicie obu node'ów");
+    // 5k token job: both fit.
+    let candidates = registry.candidates_for_model("bielik-awq", 5_000);
+    assert_eq!(candidates.len(), 2, "within limits of both nodes");
 }

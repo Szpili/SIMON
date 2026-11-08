@@ -17,9 +17,6 @@ pub struct SwarmBehaviour {
     pub identify: libp2p::identify::Behaviour,
 }
 
-pub type Zachowanie = SwarmBehaviour;
-pub type ZachowanieEvent = SwarmBehaviourEvent;
-
 /// Builds a libp2p swarm with a persistent identity key from seed (or random).
 pub fn build_swarm(
     listen: &[String],
@@ -82,14 +79,6 @@ pub fn build_swarm(
     Ok(swarm)
 }
 
-pub fn zbuduj_swarm(
-    listen: &[String],
-    bootstrap: &[String],
-    tozsamosc: Option<[u8; 32]>,
-) -> Result<libp2p::Swarm<SwarmBehaviour>, String> {
-    build_swarm(listen, bootstrap, tozsamosc)
-}
-
 /// Extracts `PeerId` from multiaddr ending with `/p2p/<id>`.
 pub fn multiaddr_with_peer(ma: &Multiaddr) -> Option<(libp2p::PeerId, Multiaddr)> {
     let mut peer = None;
@@ -101,10 +90,6 @@ pub fn multiaddr_with_peer(ma: &Multiaddr) -> Option<(libp2p::PeerId, Multiaddr)
     peer.map(|p| (p, ma.clone()))
 }
 
-pub fn multiaddr_z_peerdem(ma: &Multiaddr) -> Option<(libp2p::PeerId, Multiaddr)> {
-    multiaddr_with_peer(ma)
-}
-
 /// Network identity keypair derived from node seed (with domain separation).
 pub fn p2p_key_from_seed(seed: &[u8; 32]) -> Keypair {
     use sha2::{Digest, Sha256};
@@ -114,11 +99,6 @@ pub fn p2p_key_from_seed(seed: &[u8; 32]) -> Keypair {
     let mut bytes = [0u8; 32];
     bytes.copy_from_slice(&h.finalize());
     Keypair::ed25519_from_bytes(bytes).expect("32 bytes = valid key")
-}
-
-#[allow(dead_code)]
-pub fn klucz_p2p_z_seeda(seed: &[u8; 32]) -> Keypair {
-    p2p_key_from_seed(seed)
 }
 
 /// Deterministic key from seed (tests only).
@@ -133,12 +113,6 @@ pub fn deterministic_key(seed: u64) -> Keypair {
     Keypair::ed25519_from_bytes(bytes).expect("32 bytes = valid key")
 }
 
-#[cfg(test)]
-#[allow(dead_code)]
-pub fn deterministyczny_klucz(seed: u64) -> Keypair {
-    deterministic_key(seed)
-}
-
 /// Prints listen addresses for discovery.
 pub fn print_listen_addrs(swarm: &libp2p::Swarm<SwarmBehaviour>, role: &str) {
     let peer = swarm.local_peer_id();
@@ -146,10 +120,6 @@ pub fn print_listen_addrs(swarm: &libp2p::Swarm<SwarmBehaviour>, role: &str) {
     for addr in swarm.listeners() {
         println!("[simon] listen: {addr}");
     }
-}
-
-pub fn wypisz_adresy(swarm: &libp2p::Swarm<SwarmBehaviour>, rola: &str) {
-    print_listen_addrs(swarm, rola);
 }
 
 /// Maximum allowed tokens in M1 binding (DoS / memory exhaustion guard).
@@ -164,11 +134,6 @@ pub fn extract_token_ids(v: &serde_json::Value) -> Option<Vec<u32>> {
     arr.iter()
         .map(|x| x.as_u64().and_then(|n| u32::try_from(n).ok()))
         .collect::<Option<Vec<u32>>>()
-}
-
-#[allow(dead_code)]
-pub fn wyciagnij_id_tokenow(v: &serde_json::Value) -> Option<Vec<u32>> {
-    extract_token_ids(v)
 }
 
 /// Calls `/tokenize` endpoint of LLM backend and returns token IDs.
@@ -206,17 +171,9 @@ pub async fn tokenize_text(model_url: &str, text: &str) -> Option<Vec<u32>> {
     extract_token_ids(&val)
 }
 
-pub async fn tokenizuj_tekst(model_url: &str, tekst: &str) -> Option<Vec<u32>> {
-    tokenize_text(model_url, tekst).await
-}
-
 /// Computes default tokenizer digest for a given model hash/name.
 pub fn default_tokenizer_digest(model_hash: &str) -> Result<String, simon_core::SimonError> {
-    Ok(simon_core::receipt::odcisk_tokenizera(model_hash.as_bytes()))
-}
-
-pub fn domyslny_odcisk_tokenizera(model_hash: &str) -> Result<String, simon_core::SimonError> {
-    default_tokenizer_digest(model_hash)
+    Ok(simon_core::receipt::tokenizer_digest(model_hash.as_bytes()))
 }
 
 #[cfg(test)]
@@ -247,7 +204,7 @@ mod tests {
     #[test]
     fn test_default_tokenizer_digest() {
         let h1 = default_tokenizer_digest("mistral-7b").unwrap();
-        let h2 = simon_core::receipt::odcisk_tokenizera(b"mistral-7b");
+        let h2 = simon_core::receipt::tokenizer_digest(b"mistral-7b");
         assert_eq!(h1, h2);
         assert_ne!(h1, default_tokenizer_digest("qwen-27b").unwrap());
     }

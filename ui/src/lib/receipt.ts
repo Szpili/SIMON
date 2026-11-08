@@ -15,7 +15,6 @@ export interface M1Bindings {
   sampling_params_hash: string;
   rng_seed: number;
 }
-export type WiazaniaM1 = M1Bindings;
 
 export interface Receipt {
   job_id: string;
@@ -39,7 +38,6 @@ export interface Receipt {
   signature?: string;
   /** M1: optional input/state bindings (None = level 0 receipt). */
   bindings?: M1Bindings | null;
-  wiazania?: M1Bindings | null;
 }
 
 /** M1: client job inputs (tokens + tokenizer + nonce) for input gate. */
@@ -49,17 +47,14 @@ export interface M1Job {
   prompt_token_ids: number[];
   output_token_ids: number[];
 }
-export type ZadanieM1 = M1Job;
 
 /** M1 gate verdict. */
 export interface M1Verdict {
   ok: boolean;
   level: number;
-  poziom?: number;
   reason: string | null;
   powod?: string | null;
 }
-export type WerdyktM1 = M1Verdict;
 
 /** M3 audit: step = node token vs verifier top-k. */
 export interface M3Step {
@@ -67,7 +62,6 @@ export interface M3Step {
   node_token: number;
   topk: [number, number][];
 }
-export type KrokM3 = M3Step;
 
 /** M3 containment verdict. */
 export interface M3Verdict {
@@ -86,7 +80,6 @@ export interface M3Verdict {
   najgorszy_margin?: number;
   powod?: string | null;
 }
-export type WerdyktM3 = M3Verdict;
 
 /** Verdict returned by WASM (`simon-verify-wasm`). */
 export interface Verdict {

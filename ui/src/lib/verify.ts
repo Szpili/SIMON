@@ -3,7 +3,7 @@
 // Zero bespoke cryptography in JavaScript. The WASM module is loaded lazily
 // in the browser (adapter-static prerender cannot run WASM at build time).
 
-import type { Verdict, M1Verdict, M3Verdict, WerdyktM1, WerdyktM3 } from './receipt';
+import type { Verdict, M1Verdict, M3Verdict } from './receipt';
 
 type WasmModule = typeof import('./wasm/simon_verify.js');
 
@@ -30,7 +30,7 @@ export async function verifyReceipt(
   expectModel?: string
 ): Promise<Verdict> {
   const m = await load();
-  const fn = (m as any).verify_receipt ?? (m as any).weryfikuj;
+  const fn = (m as any).verify_receipt;
   const raw = fn(
     receiptJson,
     output ?? undefined,
@@ -43,7 +43,7 @@ export async function verifyReceipt(
 /** Canonical output digest (SIMON/OUTPUT/v1) computed by Rust. */
 export async function outputDigest(jobId: string, output: string): Promise<string | null> {
   const m = await load();
-  const fn = (m as any).output_digest ?? (m as any).odcisk_wyjscia;
+  const fn = (m as any).output_digest;
   return fn(jobId, output) ?? null;
 }
 
@@ -56,7 +56,7 @@ export async function verifyM1(
   outputTokens: number[]
 ): Promise<M1Verdict> {
   const m = await load();
-  const fn = (m as any).verify_m1 ?? (m as any).weryfikuj_m1;
+  const fn = (m as any).verify_m1;
   const raw = fn(
     receiptJson,
     tokenizerHash,
@@ -75,8 +75,7 @@ export async function evaluateM3(
   maxOutside = 0.02
 ): Promise<M3Verdict> {
   const m = await load();
-  const fn = (m as any).evaluate_m3 ?? (m as any).ocena_m3;
+  const fn = (m as any).evaluate_m3;
   const raw = fn(auditJson, k, maxMargin, maxOutside);
   return JSON.parse(raw) as M3Verdict;
 }
-export const ocenaM3 = evaluateM3;

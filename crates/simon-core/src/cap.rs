@@ -68,8 +68,6 @@ pub struct CapabilityCeiling {
     pub actions: BTreeMap<String, ActionDef>,
 }
 
-pub type Sufit = CapabilityCeiling;
-
 /// Reason for rejecting a model's action proposal.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "rejection", rename_all = "snake_case")]
@@ -246,30 +244,6 @@ pub struct CapabilityGrant {
     pub budget: Option<i64>,
     #[serde(rename = "signature", alias = "podpis", skip_serializing_if = "Option::is_none", default)]
     pub signature: Option<String>,
-}
-
-pub type Zezwolenie = CapabilityGrant;
-
-// Backward field compatibility
-impl CapabilityGrant {
-    pub fn akcja(&self) -> &str {
-        &self.action
-    }
-    pub fn parametry_digest(&self) -> &str {
-        &self.params_digest
-    }
-    pub fn wystawca(&self) -> &str {
-        &self.issuer
-    }
-    pub fn wazne_do_us(&self) -> u64 {
-        self.valid_until_us
-    }
-    pub fn budzet(&self) -> Option<i64> {
-        self.budget
-    }
-    pub fn podpis(&self) -> Option<&str> {
-        self.signature.as_deref()
-    }
 }
 
 /// Canonical digest of action parameters.

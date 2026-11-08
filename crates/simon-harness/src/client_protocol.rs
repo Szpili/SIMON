@@ -104,14 +104,11 @@ pub struct OrderAuthorization {
     pub signature: Option<String>,
 }
 
-pub type Autoryzacja = OrderAuthorization;
-
 /// Current format version (M0.4a).
 pub const FORMAT_V: u16 = 1;
 
 /// Clock tolerance in seconds for expiration validation (M0.4b).
 pub const CLOCK_TOLERANCE_SECS: u64 = 60;
-pub const TOLERANCJA_ZEGARA_SECS: u64 = CLOCK_TOLERANCE_SECS;
 
 impl OrderAuthorization {
     /// Authorization digest (signature excluded).
@@ -147,10 +144,6 @@ impl OrderAuthorization {
             return false;
         };
         pk.verify_digest(&d, &simon_core::Signature(arr)).is_ok()
-    }
-
-    pub fn podpis_zgadza_sie(&self) -> bool {
-        self.verify_signature()
     }
 
     /// Whether authorization is still valid within clock tolerance.
@@ -292,10 +285,6 @@ impl JobOrder {
         }
         auth.digest()
     }
-
-    pub fn zweryfikuj_autoryzacje(&self, now_unix: u64) -> Result<String, SimonError> {
-        self.verify_authorization(now_unix)
-    }
 }
 
 /// Registry of spent authorizations (replay protection).
@@ -303,8 +292,6 @@ impl JobOrder {
 pub struct SpentAuthorizationRegistry {
     spent: std::collections::HashSet<String>,
 }
-
-pub type RejestrZuzytychAutoryzacji = SpentAuthorizationRegistry;
 
 impl SpentAuthorizationRegistry {
     /// Checks and consumes authorization digest. Replays return error.
@@ -315,10 +302,6 @@ impl SpentAuthorizationRegistry {
             ));
         }
         Ok(())
-    }
-
-    pub fn zajmij(&mut self, auth_digest: &str) -> Result<(), SimonError> {
-        self.consume(auth_digest)
     }
 }
 
@@ -366,10 +349,6 @@ impl OrderAccepted {
             return false;
         };
         pk.verify_digest(&d, &simon_core::Signature(arr)).is_ok()
-    }
-
-    pub fn podpis_zgadza_sie(&self) -> bool {
-        self.verify_signature()
     }
 
     /// Resolves race when multiple coordinators accept the same order.
@@ -433,8 +412,6 @@ pub struct CoordinatorRegistry {
     keys: std::collections::HashSet<String>,
 }
 
-pub type RejestrKoordynatorow = CoordinatorRegistry;
-
 impl CoordinatorRegistry {
     pub fn with_keys(keys: &[String]) -> Self {
         Self {
@@ -442,16 +419,8 @@ impl CoordinatorRegistry {
         }
     }
 
-    pub fn z_kluczami(keys: &[String]) -> Self {
-        Self::with_keys(keys)
-    }
-
     pub fn contains(&self, pubkey_hex: &str) -> bool {
         self.keys.contains(pubkey_hex)
-    }
-
-    pub fn zawiera(&self, pubkey_hex: &str) -> bool {
-        self.contains(pubkey_hex)
     }
 
     pub fn admit<'a>(
@@ -467,14 +436,6 @@ impl CoordinatorRegistry {
             .collect()
     }
 
-    pub fn dopusc<'a>(
-        &self,
-        candidates: &'a [OrderAccepted],
-        order_id: &str,
-    ) -> Vec<&'a OrderAccepted> {
-        self.admit(candidates, order_id)
-    }
-
     pub fn winner_registered<'a>(
         &self,
         candidates: &'a [OrderAccepted],
@@ -486,14 +447,6 @@ impl CoordinatorRegistry {
                 .cmp(&OrderAccepted::ranking_internal(b))
                 .then_with(|| a.job_id.cmp(&b.job_id))
         })
-    }
-
-    pub fn winner_zrejestrowany<'a>(
-        &self,
-        candidates: &'a [OrderAccepted],
-        order_id: &str,
-    ) -> Option<&'a OrderAccepted> {
-        self.winner_registered(candidates, order_id)
     }
 }
 

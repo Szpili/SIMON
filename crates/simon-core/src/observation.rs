@@ -10,7 +10,6 @@ use crate::{
 
 /// Domain separator for client observations.
 pub const OBSERVATION_DOMAIN: &str = "SIMON/OBSERVATION/v1";
-pub const DOMENA_OBSERWACJI: &str = OBSERVATION_DOMAIN;
 
 /// Transport used for the job request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,7 +45,7 @@ impl ClientObservationV1 {
         unsigned.client_signature = None;
         content_digest(&serde_json::json!({
             "domena": OBSERVATION_DOMAIN,
-            "obserwacja": unsigned,
+            "observation": unsigned,
         }))
     }
 

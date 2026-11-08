@@ -46,8 +46,6 @@ pub struct M1Bindings {
     pub rng_seed: u64,
 }
 
-pub type WiazaniaM1 = M1Bindings;
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Receipt {
     pub job_id: String,
@@ -75,16 +73,9 @@ pub struct Receipt {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub signature: Option<Signature>,
 
-    /// M1: optional input/state bindings. Serialized as `wiazania` (wire/canonical digest compatibility) with `bindings` alias.
-    #[serde(rename = "wiazania", alias = "bindings", skip_serializing_if = "Option::is_none", default)]
+    /// M1: optional input/state bindings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bindings: Option<M1Bindings>,
-}
-
-// Backward alias for field access in transition
-impl Receipt {
-    pub fn wiazania(&self) -> Option<&M1Bindings> {
-        self.bindings.as_ref()
-    }
 }
 
 /// Domain separator for output digest.
@@ -116,8 +107,6 @@ pub fn output_digest_for(job_id: &str, output: &str) -> Result<String, SimonErro
     }))
 }
 
-pub use output_digest_for as odcisk_wyjscia;
-
 /// Computes the input prompt digest: tokenizer + client nonce + prompt_token_ids.
 pub fn prompt_digest(
     tokenizer_hash: &str,
@@ -132,8 +121,6 @@ pub fn prompt_digest(
     }))
 }
 
-pub use prompt_digest as odcisk_promptu;
-
 /// Computes the token output chain digest bound to prompt digest.
 pub fn token_chain_digest(
     prompt_digest: &str,
@@ -145,8 +132,6 @@ pub fn token_chain_digest(
         "tokens": output_token_ids,
     }))
 }
-
-pub use token_chain_digest as lancuch_tokenow;
 
 /// Computes sampling parameter digest.
 pub fn params_digest(
@@ -165,8 +150,6 @@ pub fn params_digest(
         "repeat_penalty_milli": repeat_penalty_milli,
     }))
 }
-
-pub use params_digest as odcisk_parametrow;
 
 /// Canonical sampling commitment structure without floats.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -223,8 +206,6 @@ pub fn tokenizer_digest(bytes: &[u8]) -> String {
     hex::encode(h.finalize())
 }
 
-pub use tokenizer_digest as odcisk_tokenizera;
-
 impl Receipt {
     /// Checks if this receipt matches the given output text.
     pub fn matches_output(&self, output: &str) -> bool {
@@ -234,17 +215,9 @@ impl Receipt {
         }
     }
 
-    pub fn zgodny_z_wyjsciem(&self, output: &str) -> bool {
-        self.matches_output(output)
-    }
-
     /// Proof level of this receipt (0 = legacy, 1 = M1).
     pub fn level(&self) -> u8 {
         self.bindings.as_ref().map(|w| w.receipt_level).unwrap_or(0)
-    }
-
-    pub fn poziom(&self) -> u8 {
-        self.level()
     }
 
     /// Builder adding M1 bindings.
@@ -273,28 +246,6 @@ impl Receipt {
             rng_seed,
         });
         Ok(self)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn z_wiazaniem_m1(
-        self,
-        tokenizer_hash: String,
-        client_nonce: String,
-        prompt_token_ids: &[u32],
-        output_token_ids: &[u32],
-        sampling_params_hash: String,
-        rng_seed: u64,
-        exec_profile: String,
-    ) -> Result<Self, SimonError> {
-        self.with_m1_bindings(
-            tokenizer_hash,
-            client_nonce,
-            prompt_token_ids,
-            output_token_ids,
-            sampling_params_hash,
-            rng_seed,
-            exec_profile,
-        )
     }
 
     /// Verifies M1 bindings.
@@ -340,16 +291,6 @@ impl Receipt {
             ));
         }
         Ok(())
-    }
-
-    pub fn zweryfikuj_m1(
-        &self,
-        tokenizer_hash: &str,
-        client_nonce: &str,
-        prompt_token_ids: &[u32],
-        output_token_ids: &[u32],
-    ) -> Result<(), SimonError> {
-        self.verify_m1(tokenizer_hash, client_nonce, prompt_token_ids, output_token_ids)
     }
 
     /// Content digest of the receipt without signature.

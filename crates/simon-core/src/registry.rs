@@ -19,8 +19,6 @@ pub enum VerificationStatus {
     ExecutionAuditFail,
 }
 
-pub type StatusWeryfikacji = VerificationStatus;
-
 /// Single completed work record from the client's perspective.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorkRecordV1 {
@@ -61,8 +59,6 @@ pub struct WorkRecordV1 {
     pub receipt_signature: Signature,
 }
 
-pub type RekordPracyV1 = WorkRecordV1;
-
 #[derive(Debug)]
 pub enum RegistryError {
     Duplicate { receipt_hash: String },
@@ -70,8 +66,6 @@ pub enum RegistryError {
     Serde(serde_json::Error),
     MissingDataDir,
 }
-
-pub type BladRejestru = RegistryError;
 
 impl std::fmt::Display for RegistryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -90,9 +84,6 @@ pub struct WorkRegistry {
     path: PathBuf,
     seen_receipts: HashSet<String>,
 }
-
-pub type RejestrPracy = WorkRegistry;
-pub type Rejestr = WorkRegistry;
 
 impl WorkRegistry {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, RegistryError> {

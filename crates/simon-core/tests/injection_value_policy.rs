@@ -1,13 +1,11 @@
-//! Testy na „10 sposobów złamania granicy w 10 minut" (ocena hackerska 2026-10-05).
-//! Sedno: sama nazwa akcji to za mało — liczą się **wartości** i ich **pochodzenie**.
-//! `waliduj` sprawdza kształt/zakres wartości; `przeplyw_ok` sprawdza provenance.
-//! Decyzja = koniunkcja: (akcja+wartości OK) ORAZ (provenance → sink dozwolone).
+//! Tests for value policies and data flow boundaries.
+//! Validates values against CapabilityCeiling AND provenance against DataSink.
 
 use serde_json::json;
 use simon_core::cap::{validate, ActionDef, ActionParam, CapabilityCeiling, ParamConstraint};
-use simon_core::przeplyw::{przeplyw_ok, Sink, Zaufanie};
+use simon_core::flow::{flow_ok, DataSink, TrustLevel};
 
-fn sufit() -> CapabilityCeiling {
+fn ceiling() -> CapabilityCeiling {
     let mut actions = std::collections::BTreeMap::new();
     actions.insert(
         "send_email".into(),
@@ -17,7 +15,7 @@ fn sufit() -> CapabilityCeiling {
                 ActionParam {
                     name: "to".into(),
                     required: true,
-                    // Allowlist adresatów — sama nazwa akcji NIE wystarcza.
+                    // Recipient allowlist — action name alone is insufficient.
                     constraint: ParamConstraint::Enum {
                         values: vec!["boss@example.com".into(), "team@example.com".into()],
                     },
@@ -33,76 +31,66 @@ fn sufit() -> CapabilityCeiling {
     CapabilityCeiling { actions }
 }
 
-/// Pełna decyzja dla akcji: kształt wartości (I2) ORAZ provenance do sinku (I4).
-fn czy_wolno(
+/// Full decision for action: value validation AND provenance to sink.
+fn is_allowed(
     s: &CapabilityCeiling,
-    akcja: &str,
-    wartosci: &serde_json::Value,
-    zrodlo: Zaufanie,
-    deklasacje: &[(Zaufanie, Sink)],
+    action: &str,
+    values: &serde_json::Value,
+    source: TrustLevel,
+    declassifications: &[(TrustLevel, DataSink)],
 ) -> bool {
-    if validate(s, akcja, wartosci).is_err() {
+    if validate(s, action, values).is_err() {
         return false;
     }
-    przeplyw_ok(zrodlo, Sink::ActionArgument, deklasacje)
+    flow_ok(source, DataSink::ActionArgument, declassifications)
 }
 
 #[test]
-fn value_allowlist_odrzuca_nieuprawnionego_adresata() {
-    // #1/#3 z listy: akcja dozwolona, ale WARTOŚĆ zła (format poprawny).
-    let s = sufit();
+fn value_allowlist_rejects_unauthorized_recipient() {
+    let s = ceiling();
     let w = json!({"to": "attacker@evil.com", "subject": "hi"});
-    assert!(!czy_wolno(&s, "send_email", &w, Zaufanie::Operator, &[]));
-    // a dozwolony adresat przechodzi (provenance = operator)
+    assert!(!is_allowed(&s, "send_email", &w, TrustLevel::Operator, &[]));
+
     let ok = json!({"to": "boss@example.com", "subject": "hi"});
-    assert!(czy_wolno(&s, "send_email", &ok, Zaufanie::Operator, &[]));
+    assert!(is_allowed(&s, "send_email", &ok, TrustLevel::Operator, &[]));
 }
 
 #[test]
-fn poprawna_wartosc_ale_z_niezaufanego_zrodla_jest_odrzucona() {
-    // #1/#4: wartość przechodzi allowlistę, ale pochodzi z treści niezaufanej
-    // (RAG/peer/tool/prompt-injection) → do argumentu akcji NIE wolno bez deklasacji.
-    let s = sufit();
+fn valid_value_from_untrusted_source_is_rejected() {
+    let s = ceiling();
     let w = json!({"to": "boss@example.com", "subject": "summary"});
-    for zrodlo in [
-        Zaufanie::RetrievedText,
-        Zaufanie::PeerText,
-        Zaufanie::ToolText,
-        Zaufanie::ModelDerived,
+    for source in [
+        TrustLevel::RetrievedText,
+        TrustLevel::PeerText,
+        TrustLevel::ToolText,
+        TrustLevel::ModelDerived,
     ] {
         assert!(
-            !czy_wolno(&s, "send_email", &w, zrodlo, &[]),
-            "{zrodlo:?} nie może sterować adresatem bez deklasacji"
+            !is_allowed(&s, "send_email", &w, source, &[]),
+            "{source:?} cannot control recipient without explicit declassification"
         );
-        // jawna deklasacja operatora otwiera TYLKO ten przepływ
-        assert!(czy_wolno(&s, "send_email", &w, zrodlo, &[(zrodlo, Sink::ActionArgument)]));
+        assert!(is_allowed(&s, "send_email", &w, source, &[(source, DataSink::ActionArgument)]));
     }
 }
 
 #[test]
-fn tool_result_injection_nie_steruje_akcja() {
-    // #2: wstrzyknięcie w wyniku narzędzia. ToolText → ActionArgument zawsze deny.
-    assert!(!przeplyw_ok(Zaufanie::ToolText, Sink::ActionArgument, &[]));
-    // log przyjmuje wszystko (to nie steruje akcją)
-    assert!(przeplyw_ok(Zaufanie::ToolText, Sink::Log, &[]));
+fn tool_result_injection_does_not_control_action() {
+    assert!(!flow_ok(TrustLevel::ToolText, DataSink::ActionArgument, &[]));
+    assert!(flow_ok(TrustLevel::ToolText, DataSink::Log, &[]));
 }
 
 #[test]
-fn subject_dlugosc_i_enumeracja() {
-    // obrony wartości: zbyt długi subject, nieznana akcja
-    let s = sufit();
-    let dlugi = json!({"to": "team@example.com", "subject": "x".repeat(101)});
-    assert!(!czy_wolno(&s, "send_email", &dlugi, Zaufanie::Operator, &[]));
-    assert!(!czy_wolno(&s, "shell", &json!({"cmd": "id"}), Zaufanie::Operator, &[]));
+fn subject_length_and_enumeration() {
+    let s = ceiling();
+    let long_subj = json!({"to": "team@example.com", "subject": "x".repeat(101)});
+    assert!(!is_allowed(&s, "send_email", &long_subj, TrustLevel::Operator, &[]));
+    assert!(!is_allowed(&s, "shell", &json!({"cmd": "id"}), TrustLevel::Operator, &[]));
 }
 
 #[test]
 fn single_use_grant_composes_with_value_policy() {
-    // #6 (permission race): grant single-use. Tu sprawdzamy tylko, że provenance musi
-    // być operatora; pełny grant (Zezwolenie) testuje `tamper_matrix.rs`.
-    let s = sufit();
+    let s = ceiling();
     let w = json!({"to": "boss@example.com", "subject": "ok"});
-    assert!(czy_wolno(&s, "send_email", &w, Zaufanie::Operator, &[]));
-    // jeśli wartość pochodzi z injection, nie wolno — niezależnie od tego, że akcja istnieje
-    assert!(!czy_wolno(&s, "send_email", &w, Zaufanie::ModelDerived, &[]));
+    assert!(is_allowed(&s, "send_email", &w, TrustLevel::Operator, &[]));
+    assert!(!is_allowed(&s, "send_email", &w, TrustLevel::ModelDerived, &[]));
 }

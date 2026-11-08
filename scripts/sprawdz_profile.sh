@@ -1,26 +1,26 @@
 #!/usr/bin/env bash
-# Inwariant: dwa RÓŻNE profile wykonania nie mogą dać tej samej przepustowości.
+# Invariant: two DIFFERENT execution profiles cannot yield identical throughput.
 #
-# Ten test złapałby incydent z 2026-09-18, gdy `gen_ms` liczono ze stałej
-# 65 tok/s i oba węzły raportowały identyczną liczbę mimo różnych kart.
-# Wymaga żywych węzłów — dlatego skrypt, nie `cargo test`.
+# This test catches incidents where generation time was calculated from a constant
+# throughput (e.g. 65 tok/s) and both nodes reported identical numbers despite different GPUs.
+# Requires live nodes.
 #
-# Użycie: scripts/sprawdz_profile.sh [plik-z-lista-wezlow.json]
+# Usage: scripts/sprawdz_profile.sh [nodes_list.json]
 set -euo pipefail
 
 SIMON="${SIMON_BIN:-$(dirname "$0")/../target/release/simon}"
-WEZLY="${1:-$HOME/.simon/nodes.json}"
-PROMPT="Napisz dwa zdania o weryfikacji obliczeń w sieci rozproszonej."
+NODES="${1:-$HOME/.simon/nodes.json}"
+PROMPT="Write two sentences about verifiable computation in distributed networks."
 
-[ -f "$WEZLY" ] || { echo "brak listy węzłów: $WEZLY" >&2; exit 2; }
+[ -f "$NODES" ] || { echo "missing nodes list: $NODES" >&2; exit 2; }
 
-python3 - "$SIMON" "$WEZLY" "$PROMPT" <<'PY'
+python3 - "$SIMON" "$NODES" "$PROMPT" <<'PY'
 import json, subprocess, sys
 
 simon, plik, prompt = sys.argv[1], sys.argv[2], sys.argv[3]
 wezly = json.load(open(plik))
 if len(wezly) < 2:
-    print("potrzebne co najmniej dwa węzły o różnych profilach", file=sys.stderr)
+    print("at least two nodes with different profiles required", file=sys.stderr)
     raise SystemExit(2)
 
 wyniki = []
@@ -36,11 +36,11 @@ for w in wezly:
         except json.JSONDecodeError:
             continue
     if not d or not d.get("ok"):
-        print(f"WĘZEŁ NIE ODPOWIEDZIAŁ: {w['nazwa']}", file=sys.stderr)
+        print(f"NODE DID NOT RESPOND: {w['nazwa']}", file=sys.stderr)
         raise SystemExit(2)
 
-    obs = d["obserwacja_klienta"]
-    # Przepustowość liczymy z czasu ZMIERZONEGO PRZEZ KLIENTA, nie z deklaracji.
+    obs = d.get("client_observation", d.get("obserwacja_klienta"))
+    # Throughput calculated from time MEASURED BY CLIENT, not from node declaration.
     tps = d["tokens_out"] / (obs["observed_time_to_complete_ms"] / 1000.0)
     wyniki.append({
         "nazwa": w["nazwa"], "runtime": d["receipt"]["runtime"],
@@ -48,8 +48,8 @@ for w in wezly:
         "deklarowany_gen_ms": d["node_declared_gen_ms"], "tps": tps,
     })
     print(f"  {w['nazwa']:38} {d['receipt']['runtime']:16} "
-          f"{tps:7.2f} tok/s  (zmierzone {obs['observed_time_to_complete_ms']} ms, "
-          f"deklarowane {d['node_declared_gen_ms']} ms)")
+          f"{tps:7.2f} tok/s  (measured {obs['observed_time_to_complete_ms']} ms, "
+          f"declared {d['node_declared_gen_ms']} ms)")
 
 blad = 0
 for i in range(len(wyniki)):
@@ -57,18 +57,16 @@ for i in range(len(wyniki)):
         a, b = wyniki[i], wyniki[j]
         skala = max(abs(a["tps"]), abs(b["tps"]))
         if skala and abs(a["tps"] - b["tps"]) / skala < 0.001:
-            print(f"\nBŁĄD: {a['nazwa']} i {b['nazwa']} dają IDENTYCZNĄ przepustowość "
-                  f"({a['tps']:.3f}). To sygnatura stałej udającej pomiar.", file=sys.stderr)
+            print(f"\nERROR: {a['nazwa']} and {b['nazwa']} produce IDENTICAL throughput "
+                  f"({a['tps']:.3f}). This is a signature of a constant posing as a measurement.", file=sys.stderr)
             blad = 1
 
-# Deklaracja node'a nie może się rozjeżdżać z czasem mierzonym u klienta
-# bardziej niż o narzut transportu; duża rozbieżność to sygnał, nie dowód.
+# Node declaration must not diverge from client-measured time by more than transport overhead.
 for w in wyniki:
     roznica = w["zmierzony_ms"] - w["deklarowany_gen_ms"]
     if roznica < 0:
-        print(f"\nUWAGA: {w['nazwa']} deklaruje DŁUŻSZY czas niż zmierzony u klienta "
-              f"({w['deklarowany_gen_ms']} > {w['zmierzony_ms']} ms) — niemożliwe bez kłamstwa "
-              f"albo błędu zegara.", file=sys.stderr)
+        print(f"\nWARNING: {w['nazwa']} declares LONGER time than measured at client "
+              f"({w['deklarowany_gen_ms']} > {w['zmierzony_ms']} ms) - impossible without clock issue.", file=sys.stderr)
         blad = 1
 
 raise SystemExit(blad)

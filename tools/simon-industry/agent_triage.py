@@ -40,7 +40,7 @@ except ImportError:
 
 DOMENA_GRANT_PARAMS = "SIMON/GRANT-PARAMS/v1"
 
-# Tylko pilności, które emituje rules.findings() — model nie wymyśla własnych.
+# Only urgencies emitted by rules.findings() - model cannot invent its own.
 ALLOWED_URGENCY = {
     "inspect before next shift",
     "plan tool change",
@@ -394,7 +394,7 @@ def execute_propose_work_order(args: dict, findings: list | None) -> dict:
     if part_id not in known_parts:
         raise ValueError(f"M7 Capability Ceiling Violation: part_id '{part_id}' not found in inventory catalog")
 
-    # Reguły decydują, model tylko powtarza (kontrola krzyżowa z rules.findings dla tej maszyny).
+    # Rules govern, model only reflects (cross-check with rules.findings for this machine).
     tryby_reguly = {f["mode"] for f in findings}
     if len(set(failure_modes)) != len(failure_modes):
         raise ValueError("M7 Capability Ceiling Violation: duplicate failure_modes")
@@ -402,9 +402,9 @@ def execute_propose_work_order(args: dict, findings: list | None) -> dict:
         raise ValueError(
             f"M7 Capability Ceiling Violation: failure_modes {sorted(set(failure_modes))} != rules {sorted(tryby_reguly)}"
         )
-    if urgency != findings[0]["urgency"]:  # findings są posortowane: najpilniejsze pierwsze
+    if urgency != findings[0]["urgency"]:  # findings are sorted: highest urgency first
         raise ValueError(f"M7 Capability Ceiling Violation: urgency '{urgency}' != rules '{findings[0]['urgency']}'")
-    # Zlecenie dotyczy NAJPILNIEJSZEGO ustalenia (rules.findings: najpilniejsze pierwsze): jego pilność i jego akcja.
+    # Work order applies to HIGHEST URGENCY finding (rules.findings: most urgent first): its urgency and action.
     glowny = PARTS_INVENTORY.get(findings[0]["mode"])
     if glowny is None:
         raise ValueError(f"M7 Capability Ceiling Violation: no catalog action for rule mode {findings[0]['mode']}")
@@ -461,7 +461,7 @@ def run_triage_agent(
         {
             "role": "user",
             "content": (
-                # pola z CSV do promptu tylko po oczyszczeniu: dane nie mogą nieść instrukcji
+                # CSV fields passed to prompt only after sanitization: data cannot carry instructions
                 f"Machine record UDI={udi} (Product {re.sub(r'[^A-Za-z0-9-]', '', str(telemetry.get('product_id')))[:16]}, "
                 f"Type {re.sub(r'[^A-Za-z]', '', str(telemetry.get('type')))[:2]}) "
                 f"triggered the following deterministic rule findings:\n"
@@ -524,7 +524,7 @@ def run_triage_agent(
             try:
                 tool_output = execute_tool(fn, fn_args, csv_path, telemetry.get("findings"))
             except (ValueError, PermissionError) as e:
-                # odrzucona propozycja wraca do modelu jako wynik narzędzia (ticket nie powstaje), nie wywraca procesu
+                # rejected proposal returns to model as tool result (no ticket created), does not abort process
                 tool_output = {"status": "REJECTED_BY_CEILING", "error": str(e)}
             if fn == "propose_work_order" and tool_output.get("status") == "GATED_BY_OPERATOR_CAPABILITY_CEILING":
                 gated_proposals.append(tool_output)
@@ -616,14 +616,14 @@ def selfcheck():
     except ValueError:
         rejected += 1
 
-    # 5e-5j. Reguły decydują: model nie może zmienić trybu, pilności ani akcji; brak ustaleń = brak zlecenia;
-    #        filtr wolnego tekstu odporny na spacje, pełną szerokość i synonimy wyłączenia.
+    # 5e-5j. Rules govern: model cannot alter mode, urgency or action; no findings = no work order;
+    #        free text filter robust to spacing, full-width characters, and shutdown synonyms.
     for zle, wyjatek in [
         ({**valid_args, "failure_modes": ["HDF", "PWF"]}, ValueError),
         ({**valid_args, "urgency": "plan tool change"}, ValueError),
         ({**valid_args, "action_code": "REPLACE_TOOL_INSERT", "part_id": "INS-CRB-100"}, ValueError),
         ({**valid_args, "summary": "Shut  down the spindle first."}, PermissionError),
-        ({**valid_args, "summary": "Then ｐｏｗｅｒ off the drive."}, PermissionError),
+        ({**valid_args, "summary": "Then \uff50\uff4f\uff57\uff45\uff52 off the drive."}, PermissionError),
         ({**valid_args, "summary": "De-energize the cabinet."}, PermissionError),
         ({**valid_args, "summary": "Shut-down and de-energising first."}, PermissionError),
         ({**valid_args, "summary": "shut\u200bdown now"}, PermissionError),
@@ -638,7 +638,7 @@ def selfcheck():
     except ValueError:
         rejected += 1
 
-    # dwa ustalenia (HDF najpilniejsze, potem TWF): akcja/część TWF z pilnością HDF to podmiana — odrzucone
+    # two findings (HDF most urgent, then TWF): TWF action/part with HDF urgency is substitution - rejected
     dwa = [{"mode": "HDF", "urgency": "inspect before next shift"}, {"mode": "TWF", "urgency": "plan tool change"}]
     try:
         execute_propose_work_order({**valid_args, "failure_modes": ["HDF", "TWF"],
@@ -646,7 +646,7 @@ def selfcheck():
     except ValueError:
         rejected += 1
     assert execute_propose_work_order({**valid_args, "failure_modes": ["HDF", "TWF"]}, dwa)["status"]
-    # zwykły krok serwisowy nie jest blokowany
+    # normal maintenance step is not blocked
     assert execute_propose_work_order({**valid_args, "summary": "Disconnect the faulty sensor cable and inspect it."}, reg)
 
     assert rejected == 15, f"Expected 15 ceiling rejections, got {rejected}"

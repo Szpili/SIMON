@@ -11,8 +11,8 @@
   "started_at_us": 0,
   "finished_at_us": 1,
   "signer": "197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d61",
-  "signature": "ccda436644126950cd1065859b5745cd1f2a796b0fc09acfbc5370d91dd583fdc7381c3e4cc8cbf47eaa66a979a93ada2c9638957f3b4252d1395428fbfb9a01",
-  "wiazania": {
+  "signature": "d6eb9351b56e8c8f88eb279c87a58316b7e2c254e854677b7363340703aef3a3e9759b84cce6b0003d2e7052d35538115c13b2de7ce1c37c9f2835b7510cbb0b",
+  "bindings": {
     "schema_version": 2,
     "receipt_level": 1,
     "exec_profile": "llama.cpp/Q4_K_M/cpu",

@@ -1,14 +1,11 @@
-//! C (M2.6-limit) — bramka limitu kontekstu po stronie node'a.
+//! C (M2.6-limit) - context limit gate on node side.
 //!
-//! Teza: zlecenie żądające więcej kontekstu, niż node ma, ma zostać
-//! odrzucone KONTROLOWANYM błędem (`ctx_ponad_limit`), a nie wywalić się
-//! błędem z vLLM.
-//!
-//! Ten test padał PRZED poprawką — nie było ani pola `max_ctx`, ani bramki.
+//! Orders requesting more context than the node supports are rejected with a controlled
+//! error code (`ctx_ponad_limit`) rather than failing ungracefully inside vLLM.
 
 use simon_harness::request_response::{PromptError, PromptReply, PromptRequest};
 
-/// Kopia bramki z node.rs — sprawdzamy regułę, nie I/O.
+/// Copy of gate logic from node.rs - tests rule, not I/O.
 fn bramka(request: &PromptRequest, max_ctx: u32) -> Option<PromptReply> {
     if max_ctx > 0 && request.max_ctx > max_ctx {
         Some(PromptReply::Error(PromptError {
@@ -16,7 +13,7 @@ fn bramka(request: &PromptRequest, max_ctx: u32) -> Option<PromptReply> {
             order_id: request.order_id.clone(),
             code: "ctx_ponad_limit".to_string(),
             description: format!(
-                "zlecenie żąda {} tokenów kontekstu, ten node ma limit {}",
+                "order requested {} context tokens, node limit is {}",
                 request.max_ctx, max_ctx
             ),
             actual_ctx: Some(request.max_ctx),
@@ -43,28 +40,26 @@ fn req(ctx: u32) -> PromptRequest {
 
 #[test]
 fn m26_zlecenie_ponad_limit_odrzucone() {
-    // Bielik na Franko ma 8192. Zlecenie żąda 32000.
     match bramka(&req(32_000), 8_192) {
         Some(PromptReply::Error(e)) => {
-            assert_eq!(e.code, "ctx_ponad_limit", "kontrolowany kod błędu");
+            assert_eq!(e.code, "ctx_ponad_limit", "controlled error code");
         }
-        _ => panic!("zlecenie ponad limit MUSI być odrzucone"),
+        _ => panic!("order exceeding limit must be rejected"),
     }
 }
 
 #[test]
 fn m26_zlecenie_w_limicie_przechodzi() {
-    assert!(bramka(&req(5_000), 8_192).is_none(), "w limicie = brak odrzucenia");
+    assert!(bramka(&req(5_000), 8_192).is_none(), "within limit = no rejection");
 }
 
 #[test]
 fn m26_dokladnie_na_limicie_przechodzi() {
-    assert!(bramka(&req(8_192), 8_192).is_none(), "równo z limitem = OK");
+    assert!(bramka(&req(8_192), 8_192).is_none(), "exactly on limit = OK");
 }
 
 #[test]
 fn m26_brak_znanego_limitu_nie_blokuje() {
-    // Gdy node nie odczytał max_model_len (max_ctx=0), NIE blokujemy —
-    // lepiej spróbować i dostać błąd vLLM, niż blokować wszystko.
-    assert!(bramka(&req(999_999), 0).is_none(), "nieznany limit = przepuszczamy");
+    // When node has no max_model_len (max_ctx=0), we do not block preemptively.
+    assert!(bramka(&req(999_999), 0).is_none(), "unknown limit = pass through");
 }

@@ -217,8 +217,6 @@ pub fn evaluate(steps: &[LogprobStep], p: &M3Policy) -> M3Verdict {
     }
 }
 
-pub use evaluate as ocena;
-
 /// Canonical audit digest over integers only (indices and token IDs).
 pub fn audit_digest(steps: &[LogprobStep]) -> Result<String, SimonError> {
     let simplified: Vec<(u32, u32, Vec<u32>)> = steps
@@ -250,8 +248,6 @@ pub fn evaluate_json(json: &str, p: &M3Policy) -> Result<M3Verdict, SimonError> 
     let a: ExecutionAudit = serde_json::from_value(v)?;
     Ok(evaluate(&a.steps, p))
 }
-
-pub use evaluate_json as ocena_json;
 
 /// Decision from M3 audit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

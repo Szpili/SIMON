@@ -69,16 +69,8 @@ impl Budget {
         }
     }
 
-    pub fn nowy(limity: ResourceLimits, teraz_us: u64) -> Self {
-        Self::new(limity, teraz_us)
-    }
-
     pub fn cancel(&mut self) {
         self.cancelled = true;
-    }
-
-    pub fn anuluj(&mut self) {
-        self.cancel();
     }
 
     pub fn check(&self, now_us: u64) -> Result<(), LimitExceeded> {

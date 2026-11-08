@@ -116,9 +116,9 @@ WZORCE: List[Tuple[str, re.Pattern]] = [
     ("SEKRET", _re(r"(?i)\b(?:api[_-]?key|apikey|api[_-]?secret|access[_-]?key(?:_id)?|secret[_-]?key|"
                    r"client[_-]?secret|private[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|"
                    r"aws_secret_access_key|secret|token|haslo|haslo_hash)\b\s*[:=]\s*[\"']?([^\s\"',;)]{8,})")),
-    # haslo w zdaniu: "haslo do bazy: X", "haslo to X", "password is X", "PIN 4321"
-    ("HASLO", _re(r"(?i)\b(?:has[lł]o|has[lł]a|password|passwd|pwd|passphrase)\b[^:=\n]{0,28}[:=]\s*[\"']?([^\s\"',;)]{4,})"
-                  r"|\b(?:has[lł]o|password)\b\s+(?:to|jest|is)\s+[\"']?([^\s\"',;)]{4,})"
+    # password in sentence: "haslo do bazy: X", "haslo to X", "password is X", "PIN 4321"
+    ("HASLO", _re(r"(?i)\b(?:has[l\u0142]o|has[l\u0142]a|password|passwd|pwd|passphrase)\b[^:=\n]{0,28}[:=]\s*[\"']?([^\s\"',;)]{4,})"
+                  r"|\b(?:has[l\u0142]o|password)\b\s+(?:to|jest|is)\s+[\"']?([^\s\"',;)]{4,})"
                   r"|\bpin\b[^.\n]{0,24}?\b\d{4}\b")),
     # kwota/IBAN najpierw - najdluzszy ciag strukturalny
     ("IBAN", _re(r"\bPL\s?\d{2}(?:\s?\d{4}){6}\b")),
@@ -181,7 +181,7 @@ class Anonimizer:
 
     def redact(self, tekst: str) -> Tuple[str, Dict[str, object]]:
         if not isinstance(tekst, str) or not tekst:
-            return tekst, {"encje": {}, "podstawienia": {}, "znaki_in": 0, "znaki_out": 0}   # ten sam kształt co niżej (2026-09-28: KeyError na pustym napisie z Claude Code)
+            return tekst, {"encje": {}, "podstawienia": {}, "znaki_in": 0, "znaki_out": 0}   # same shape as below (2026-09-28: KeyError on empty string from Claude Code)
         t = unicodedata.normalize("NFC", tekst)
         out = t
         for typ, rex in WZORCE:

@@ -92,8 +92,6 @@ pub struct TokenBucket {
     last_us: u64,
 }
 
-pub type Kubelek = TokenBucket;
-
 impl TokenBucket {
     pub fn new(capacity: f64, rate_per_sec: f64, now_us: u64) -> Self {
         Self {

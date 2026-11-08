@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     fn chunking_safe_on_multibyte_utf8_boundaries() {
-        let text = "ąćęłńóśźż".repeat(5);
+        let text = "\u{0105}\u{0107}\u{0119}\u{0142}\u{0144}\u{00f3}\u{015b}\u{017a}\u{017c}".repeat(5);
         let chunks = split_into_chunks(&text, 3);
         assert_eq!(chunks.concat(), text, "roundtrip must be lossless");
         for k in &chunks {
@@ -176,13 +176,13 @@ mod tests {
 
     #[test]
     fn test_estimate_tokens_multibyte_utf8() {
-        let text = "Zażółć gęślą jaźń";
+        let text = "\u{017b}a\u{017c}\u{00f3}\u{0142}\u{0107} g\u{0119}\u{015b}l\u{0105} ja\u{017a}\u{0144}";
         assert_eq!(estimate_tokens(text), 5);
     }
 
     #[test]
     fn test_split_into_chunks_multibyte_and_emojis() {
-        let text = "🚀zażółć🌟gęślą✨jaźń";
+        let text = "\u{1f680}za\u{017c}\u{00f3}\u{0142}\u{0107}\u{1f31f}g\u{0119}\u{015b}l\u{0105}\u{2728}ja\u{017a}\u{0144}";
         let chunks = split_into_chunks(text, 3);
         assert_eq!(chunks.concat(), text);
         for k in &chunks {

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Skład whitepapera SIMON do PDF (pandoc -> HTML -> weasyprint).
+"""SIMON whitepaper typesetting to PDF (pandoc -> HTML -> weasyprint).
 
-Użycie:  python3 build.py <plik.md> <wyjscie.pdf> <pl|en>
+Usage: python3 build.py <input.md> <output.pdf> <pl|en>
 """
 import re
 import subprocess
@@ -14,10 +14,10 @@ TEKSTY = {
     "pl": {
         "doctype": "Whitepaper",
         "tagline": "Rozproszony habitat dla otwartych wag modeli. "
-                   "Ludzie z GPU liczą inferencję, sieć weryfikuje, że policzyli naprawdę.",
-        "principle": "Zasada nadrzędna: <b>bez dowodu nie ma statusu</b> "
+                   "Ludzie z GPU licz\u0105 inferencj\u0119, sie\u0107 weryfikuje, \u017ce policzyli naprawd\u0119.",
+        "principle": "Zasada nadrz\u0119dna: <b>bez dowodu nie ma statusu</b> "
                      "(ZAPROJEKTOWANE / ZAIMPLEMENTOWANE / ZMIERZONE).",
-        "footer": "SIMON — Whitepaper",
+        "footer": "SIMON \u2014 Whitepaper",
     },
     "en": {
         "doctype": "Whitepaper",
@@ -29,7 +29,7 @@ TEKSTY = {
     },
 }
 
-# slowa-statusy -> plakietki (PL i EN)
+# status words -> badges (PL and EN)
 BADGES = [
     (r"\bZMIERZONE\b", "st-m"), (r"\bMEASURED\b", "st-m"),
     (r"\bZAIMPLEMENTOWANE\b", "st-i"), (r"\bIMPLEMENTED\b", "st-i"),
@@ -38,7 +38,7 @@ BADGES = [
 
 
 def rozdziel_naglowek(md: str):
-    """Oddziela blok metadanych na górze (idzie na okładkę) od treści."""
+    """Separates top metadata block (goes to cover) from body content."""
     linie = md.splitlines()
     tytul = linie[0].lstrip("# ").strip() if linie else "SIMON"
     meta, i = [], 1
@@ -51,7 +51,7 @@ def rozdziel_naglowek(md: str):
 
 
 def md_na_html(md: str) -> str:
-    # pandoc na tym hoście to zaślepka — używamy Python-Markdown (3.10).
+    # pandoc on this host is a stub - use Python-Markdown (3.10).
     import markdown
     return markdown.markdown(
         md,
@@ -61,13 +61,12 @@ def md_na_html(md: str) -> str:
 
 
 def znaczniki(html: str) -> str:
-    """Emoji nie maja pokrycia w fontach do druku (renderuja sie jako drobinki).
-    Zamiana na typograficzne znaczniki z klasami CSS."""
+    """Emojis lack print font coverage; replace with CSS typographic marks."""
     zamiany = [
-        ("❌", '<span class="mk mk-no">✗</span>'),        # X -> krzyzyk
-        ("✅", '<span class="mk mk-ok">✓</span>'),        # V -> ptaszek
-        ("⚠️", '<span class="mk mk-warn">!</span>'),     # ostrzezenie (z VS16)
-        ("⚠", '<span class="mk mk-warn">!</span>'),           # ostrzezenie (bez VS16)
+        ("❌", '<span class="mk mk-no">✗</span>'),
+        ("✅", '<span class="mk mk-ok">✓</span>'),
+        ("⚠️", '<span class="mk mk-warn">!</span>'),
+        ("⚠", '<span class="mk mk-warn">!</span>'),
     ]
     for zrodlo, cel in zamiany:
         html = html.replace(zrodlo, cel)
@@ -75,7 +74,7 @@ def znaczniki(html: str) -> str:
 
 
 def plakietki(html: str) -> str:
-    """Otacza slowa-statusy plakietka, ale NIE w naglowkach ani w <code>."""
+    """Wraps status words in badge tags, excluding headers and <code>."""
     czesci = re.split(r"(<code>.*?</code>|<h[1-6][^>]*>.*?</h[1-6]>)", html, flags=re.S)
     for idx, cz in enumerate(czesci):
         if cz.startswith("<code>") or re.match(r"<h[1-6]", cz):
@@ -89,14 +88,13 @@ def plakietki(html: str) -> str:
 def okladka(tytul: str, meta: list, jezyk: str) -> str:
     t = TEKSTY[jezyk]
     mark = (TU / "assets" / "simon-mark.svg").read_text()
-    # metadane: "**Klucz:** wartosc" -> wiersz
     wiersze = []
     for m in meta:
         m = re.sub(r"\*\*(.+?):\*\*", r"<b>\1:</b>", m)
         m = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", m)
         m = re.sub(r"`(.+?)`", r"<code>\1</code>", m)
         if m.lower().startswith("<b>zasada") or m.lower().startswith("<b>governing"):
-            continue  # zasada ma wlasny box
+            continue
         wiersze.append(m)
     return f"""<section class="cover">
   <div class="mark">{mark}</div>
@@ -114,7 +112,7 @@ def okladka(tytul: str, meta: list, jezyk: str) -> str:
 
 
 def main():
-    zrodlo, wyjscie, jezyk = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+    zrodlo, output_pdf, jezyk = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
     md = zrodlo.read_text(encoding="utf-8")
     tytul, meta, tresc = rozdziel_naglowek(md)
 
@@ -131,8 +129,8 @@ def main():
 
     tmp_html = TU / f".build-{jezyk}.html"
     tmp_html.write_text(html, encoding="utf-8")
-    subprocess.run(["weasyprint", "-u", str(TU) + "/", str(tmp_html), str(wyjscie)], check=True)
-    print(f"OK -> {wyjscie}  ({wyjscie.stat().st_size/1024:.0f} kB)")
+    subprocess.run(["weasyprint", "-u", str(TU) + "/", str(tmp_html), str(output_pdf)], check=True)
+    print(f"OK -> {output_pdf}  ({output_pdf.stat().st_size/1024:.0f} kB)")
 
 
 if __name__ == "__main__":

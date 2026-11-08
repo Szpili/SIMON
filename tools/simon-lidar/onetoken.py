@@ -10,18 +10,18 @@ the probe cells. Cheap: a few output tokens per query, no agent loop.
 import argparse, collections, itertools, json, math, re, sys, unicodedata, urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-ONLY = {"en": "Answer with one word only.", "pl": "Odpowiedz jednym słowem."}
+ONLY = {"en": "Answer with one word only.", "pl": "Odpowiedz jednym s\u0142owem."}
 TASKS = {
-    "num100": {"en": "Name a random number between 1 and 100.", "pl": "Podaj losową liczbę od 1 do 100."},
-    "num10": {"en": "Name a random number between 1 and 10.", "pl": "Podaj losową liczbę od 1 do 10."},
+    "num100": {"en": "Name a random number between 1 and 100.", "pl": "Podaj losow\u0105 liczb\u0119 od 1 do 100."},
+    "num10": {"en": "Name a random number between 1 and 10.", "pl": "Podaj losow\u0105 liczb\u0119 od 1 do 10."},
     "favnum": {"en": "What is your favorite number?", "pl": "Jaka jest Twoja ulubiona liczba?"},
-    "letter": {"en": "Name a random letter of the alphabet.", "pl": "Podaj losową literę alfabetu."},
-    "word": {"en": "Say a random word.", "pl": "Powiedz losowe słowo."},
+    "letter": {"en": "Name a random letter of the alphabet.", "pl": "Podaj losow\u0105 liter\u0119 alfabetu."},
+    "word": {"en": "Say a random word.", "pl": "Powiedz losowe s\u0142owo."},
     "color": {"en": "Name a random color.", "pl": "Podaj losowy kolor."},
-    "favcolor": {"en": "What is your favorite color?", "pl": "Jaki jest Twój ulubiony kolor?"},
-    "animal": {"en": "Name a random animal.", "pl": "Podaj losowe zwierzę."},
+    "favcolor": {"en": "What is your favorite color?", "pl": "Jaki jest Tw\u00f3j ulubiony kolor?"},
+    "animal": {"en": "Name a random animal.", "pl": "Podaj losowe zwierz\u0119."},
     "city": {"en": "Name a random city.", "pl": "Podaj losowe miasto."},
-    "coin": {"en": "Flip a coin. Heads or tails?", "pl": "Rzuć monetą. Orzeł czy reszka?"},
+    "coin": {"en": "Flip a coin. Heads or tails?", "pl": "Rzu\u0107 monet\u0105. Orze\u0142 czy reszka?"},
 }
 CELLS = [(t, l) for t in TASKS for l in ("en", "pl")]
 MIN_VALID = 10  # the paper's floor for a usable cell

@@ -132,27 +132,10 @@ pub fn verify_receipt(
     })
 }
 
-/// Compatibility alias for `verify_receipt`.
-#[wasm_bindgen]
-pub fn weryfikuj(
-    receipt_json: &str,
-    output: Option<String>,
-    expected_job_id: Option<String>,
-    expected_model: Option<String>,
-) -> String {
-    verify_receipt(receipt_json, output, expected_job_id, expected_model)
-}
-
 /// Canonical output digest matching receipt expectation.
 #[wasm_bindgen]
 pub fn output_digest(job_id: &str, output: &str) -> Option<String> {
-    simon_core::receipt::odcisk_wyjscia(job_id, output).ok()
-}
-
-/// Compatibility alias for `output_digest`.
-#[wasm_bindgen]
-pub fn odcisk_wyjscia(job_id: &str, output: &str) -> Option<String> {
-    output_digest(job_id, output)
+    simon_core::receipt::output_digest_for(job_id, output).ok()
 }
 
 /// Gate M1: whether the receipt binds EXACTLY this tokenizer, nonce, prompt, and output tokens.
@@ -168,9 +151,8 @@ pub fn verify_m1(
         Ok(r) => r,
         Err(e) => {
             return serde_json::json!({
-                "ok": false, "level": 0, "poziom": 0,
+                "ok": false, "level": 0,
                 "reason": format!("unparseable receipt: {e}"),
-                "powod": format!("nieparsowalny receipt: {e}")
             })
             .to_string()
         }
@@ -179,9 +161,8 @@ pub fn verify_m1(
         Ok(v) => v,
         Err(e) => {
             return serde_json::json!({
-                "ok": false, "level": r.level(), "poziom": r.level(),
+                "ok": false, "level": r.level(),
                 "reason": format!("prompt_token_ids_json: {e}"),
-                "powod": format!("prompt_token_ids_json: {e}")
             })
             .to_string()
         }
@@ -190,9 +171,8 @@ pub fn verify_m1(
         Ok(v) => v,
         Err(e) => {
             return serde_json::json!({
-                "ok": false, "level": r.level(), "poziom": r.level(),
+                "ok": false, "level": r.level(),
                 "reason": format!("output_token_ids_json: {e}"),
-                "powod": format!("output_token_ids_json: {e}")
             })
             .to_string()
         }
@@ -201,38 +181,16 @@ pub fn verify_m1(
         Ok(()) => serde_json::json!({
             "ok": true,
             "level": r.level(),
-            "poziom": r.level(),
             "reason": null,
-            "powod": null
         })
         .to_string(),
         Err(e) => serde_json::json!({
             "ok": false,
             "level": r.level(),
-            "poziom": r.level(),
             "reason": e.to_string(),
-            "powod": e.to_string()
         })
         .to_string(),
     }
-}
-
-/// Compatibility alias for `verify_m1`.
-#[wasm_bindgen]
-pub fn weryfikuj_m1(
-    receipt_json: &str,
-    tokenizer_hash: &str,
-    client_nonce: &str,
-    prompt_token_ids_json: &str,
-    output_token_ids_json: &str,
-) -> String {
-    verify_m1(
-        receipt_json,
-        tokenizer_hash,
-        client_nonce,
-        prompt_token_ids_json,
-        output_token_ids_json,
-    )
 }
 
 /// Gate M3: evaluates execution audit (containment in top-k + margin).
@@ -249,12 +207,6 @@ pub fn evaluate_m3(audit_json: &str, k: u32, max_margin: f64, max_outside: f64) 
             serde_json::json!({"ok": false, "reason": format!("invalid audit: {e}"), "powod": format!("invalid audit: {e}")}).to_string()
         }
     }
-}
-
-/// Compatibility alias for `evaluate_m3`.
-#[wasm_bindgen]
-pub fn ocena_m3(audit_json: &str, k: u32, max_margin: f64, max_outside: f64) -> String {
-    evaluate_m3(audit_json, k, max_margin, max_outside)
 }
 
 #[cfg(test)]
@@ -313,7 +265,7 @@ mod tests {
             runtime: "llama.cpp/0.3".into(),
             precision: Precision::Fp16,
             activation_hash: "toploc:NIE_POLICZONY".into(),
-            output_digest: simon_core::receipt::odcisk_wyjscia("j", "x").unwrap(),
+            output_digest: simon_core::receipt::output_digest_for("j", "x").unwrap(),
             prompt_tokens: 3,
             completion_tokens: 3,
             started_at_us: 0,
