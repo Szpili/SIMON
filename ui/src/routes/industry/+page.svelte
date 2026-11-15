@@ -94,9 +94,9 @@
       simVerdict = v;
     } catch (e) {
       simVerdict = {
-        parsuje_sie: false,
-        podpis_ok: false,
-        tresc_ok: false,
+        parses: false,
+        signature_ok: false,
+        content_ok: false,
         job_id_ok: false,
         model_ok: false,
         ok: false,
@@ -106,7 +106,7 @@
         runtime: null,
         signer: null,
         output_digest: null,
-        powod: String(e)
+        reason: String(e)
       };
     } finally {
       simVerdictLoading = false;
@@ -217,7 +217,7 @@
     for (const r of [...tickets, ...held]) {
       if (!r.receipt || !r.signed_output) continue;
       verifyReceipt(JSON.stringify(r.receipt), r.signed_output)
-        .then((v) => (verdict[r.record] = { ok: v.ok, why: v.powod }))
+        .then((v) => (verdict[r.record] = { ok: v.ok, why: v.reason }))
         .catch((e) => (verdict[r.record] = { ok: false, why: String(e) }));
     }
     if (activeRecord) {
@@ -384,24 +384,24 @@
         <div class="mt-3 space-y-2">
           <div class="flex flex-wrap items-center justify-between gap-2 border-b border-line/40 py-1">
             <span class="text-neutral-400">JSON Parse Gate:</span>
-            <span class={simVerdict?.parsuje_sie ? 'text-valid' : 'text-bad'}>{simVerdict?.parsuje_sie ? 'PASSED' : 'FAILED'}</span>
+            <span class={simVerdict?.parses ? 'text-valid' : 'text-bad'}>{simVerdict?.parses ? 'PASSED' : 'FAILED'}</span>
           </div>
           <div class="flex flex-wrap items-center justify-between gap-2 border-b border-line/40 py-1">
             <span class="text-neutral-400">Ed25519 Signature Gate (signature_ok):</span>
-            <span class={simVerdict?.podpis_ok ? 'text-valid' : 'text-bad'}>
-              {simVerdict?.podpis_ok ? 'VALID (Signed by Node Keypair)' : 'FAILED (Signature Forgery Blocked)'}
+            <span class={simVerdict?.signature_ok ? 'text-valid' : 'text-bad'}>
+              {simVerdict?.signature_ok ? 'VALID (Signed by Node Keypair)' : 'FAILED (Signature Forgery Blocked)'}
             </span>
           </div>
           <div class="flex flex-wrap items-center justify-between gap-2 border-b border-line/40 py-1">
             <span class="text-neutral-400">Output Digest Gate (SIMON/OUTPUT/v1 digest_ok):</span>
-            <span class={simVerdict?.tresc_ok ? 'text-valid' : 'text-bad'}>
-              {simVerdict?.tresc_ok ? 'VALID (SHA-256 Digest Matches)' : 'FAILED (text differs from signed digest)'}
+            <span class={simVerdict?.content_ok ? 'text-valid' : 'text-bad'}>
+              {simVerdict?.content_ok ? 'VALID (SHA-256 Digest Matches)' : 'FAILED (text differs from signed digest)'}
             </span>
           </div>
           <div class="flex flex-wrap items-center justify-between gap-2 border-b border-line/40 py-1">
             <span class="text-neutral-400">Overall Gate Verdict:</span>
             <span class="font-bold {simVerdict?.ok ? 'text-valid' : 'text-bad'}">
-              {simVerdict?.ok ? 'SIGNATURE & DIGEST VALID' : `DENY TICKET: ${simVerdict?.powod ?? 'Verification failed'}`}
+              {simVerdict?.ok ? 'SIGNATURE & DIGEST VALID' : `DENY TICKET: ${simVerdict?.reason ?? 'Verification failed'}`}
             </span>
           </div>
         </div>

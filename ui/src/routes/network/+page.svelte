@@ -40,7 +40,7 @@
         pending.add(j.job_id);
         // Signature only: the monitor never ships the answer, so output binding cannot be checked here.
         verifyReceipt(JSON.stringify(j.receipt), null)
-          .then((v) => (sig[j.job_id] = { ok: v.parsuje_sie && v.podpis_ok, why: v.powod }))
+          .then((v) => (sig[j.job_id] = { ok: v.parses && v.signature_ok, why: v.reason }))
           .catch((e) => (sig[j.job_id] = { ok: false, why: String(e) }))
           .finally(() => pending.delete(j.job_id));
       }

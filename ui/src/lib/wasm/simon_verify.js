@@ -1,21 +1,20 @@
 /* @ts-self-types="./simon_verify.d.ts" */
 
 /**
- * Bramka M3: ocenia audyt wykonania (containment w top-k + margines).
- * `audyt_json` = `{"kroki":[{indeks,node_token,topk:[[id,lp],..]}]}`.
- * @param {string} audyt_json
+ * Gate M3: evaluates execution audit (containment in top-k + margin).
+ * @param {string} audit_json
  * @param {number} k
  * @param {number} max_margin
- * @param {number} max_poza
+ * @param {number} max_outside
  * @returns {string}
  */
-export function ocena_m3(audyt_json, k, max_margin, max_poza) {
+export function evaluate_m3(audit_json, k, max_margin, max_outside) {
     let deferred2_0;
     let deferred2_1;
     try {
-        const ptr0 = passStringToWasm0(audyt_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const ptr0 = passStringToWasm0(audit_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.ocena_m3(ptr0, len0, k, max_margin, max_poza);
+        const ret = wasm.evaluate_m3(ptr0, len0, k, max_margin, max_outside);
         deferred2_0 = ret[0];
         deferred2_1 = ret[1];
         return getStringFromWasm0(ret[0], ret[1]);
@@ -25,18 +24,17 @@ export function ocena_m3(audyt_json, k, max_margin, max_poza) {
 }
 
 /**
- * Odcisk treści wyniku, liczący się z receiptem — do podglądu/diagnostyki.
- * Ten sam wzór co w `odcisk_wyjscia` rdzenia.
+ * Canonical output digest matching receipt expectation.
  * @param {string} job_id
  * @param {string} output
  * @returns {string | undefined}
  */
-export function odcisk_wyjscia(job_id, output) {
+export function output_digest(job_id, output) {
     const ptr0 = passStringToWasm0(job_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     const len0 = WASM_VECTOR_LEN;
     const ptr1 = passStringToWasm0(output, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     const len1 = WASM_VECTOR_LEN;
-    const ret = wasm.odcisk_wyjscia(ptr0, len0, ptr1, len1);
+    const ret = wasm.output_digest(ptr0, len0, ptr1, len1);
     let v3;
     if (ret[0] !== 0) {
         v3 = getStringFromWasm0(ret[0], ret[1]).slice();
@@ -46,45 +44,7 @@ export function odcisk_wyjscia(job_id, output) {
 }
 
 /**
- * Weryfikuje receipt (JSON) wobec opcjonalnej treści odpowiedzi oraz
- * opcjonalnego oczekiwanego `job_id` / `model_hash`. Zwraca JSON z osobnymi
- * bramkami — UI wyłącznie prezentuje wynik.
- *
- * * `receipt_json` — receipt w formacie SIMON (JSON),
- * * `output`       — treść odpowiedzi, którą rzekomo opisuje receipt
- *                    (bez niej bramka treści jest `null` = nie sprawdzona),
- * * `oczekiwany_job_id` / `oczekiwany_model` — opcjonalne bramki zgodności.
- * @param {string} receipt_json
- * @param {string | null} [output]
- * @param {string | null} [oczekiwany_job_id]
- * @param {string | null} [oczekiwany_model]
- * @returns {string}
- */
-export function weryfikuj(receipt_json, output, oczekiwany_job_id, oczekiwany_model) {
-    let deferred5_0;
-    let deferred5_1;
-    try {
-        const ptr0 = passStringToWasm0(receipt_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        var ptr1 = isLikeNone(output) ? 0 : passStringToWasm0(output, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        var len1 = WASM_VECTOR_LEN;
-        var ptr2 = isLikeNone(oczekiwany_job_id) ? 0 : passStringToWasm0(oczekiwany_job_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        var len2 = WASM_VECTOR_LEN;
-        var ptr3 = isLikeNone(oczekiwany_model) ? 0 : passStringToWasm0(oczekiwany_model, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        var len3 = WASM_VECTOR_LEN;
-        const ret = wasm.weryfikuj(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
-        deferred5_0 = ret[0];
-        deferred5_1 = ret[1];
-        return getStringFromWasm0(ret[0], ret[1]);
-    } finally {
-        wasm.__wbindgen_free(deferred5_0, deferred5_1, 1);
-    }
-}
-
-/**
- * Bramka M1: czy receipt wiąże DOKŁADNIE ten tokenizer, nonce, prompt i wyjście
- * (po tokenach). Tokeny podajemy jako JSON-owe tablice u32. Czysty CPU — bez
- * wag i bez GPU. To ta sama logika co `Receipt::zweryfikuj_m1` w rdzeniu.
+ * Gate M1: whether the receipt binds EXACTLY this tokenizer, nonce, prompt, and output tokens.
  * @param {string} receipt_json
  * @param {string} tokenizer_hash
  * @param {string} client_nonce
@@ -92,7 +52,7 @@ export function weryfikuj(receipt_json, output, oczekiwany_job_id, oczekiwany_mo
  * @param {string} output_token_ids_json
  * @returns {string}
  */
-export function weryfikuj_m1(receipt_json, tokenizer_hash, client_nonce, prompt_token_ids_json, output_token_ids_json) {
+export function verify_m1(receipt_json, tokenizer_hash, client_nonce, prompt_token_ids_json, output_token_ids_json) {
     let deferred6_0;
     let deferred6_1;
     try {
@@ -106,12 +66,42 @@ export function weryfikuj_m1(receipt_json, tokenizer_hash, client_nonce, prompt_
         const len3 = WASM_VECTOR_LEN;
         const ptr4 = passStringToWasm0(output_token_ids_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len4 = WASM_VECTOR_LEN;
-        const ret = wasm.weryfikuj_m1(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4);
+        const ret = wasm.verify_m1(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4);
         deferred6_0 = ret[0];
         deferred6_1 = ret[1];
         return getStringFromWasm0(ret[0], ret[1]);
     } finally {
         wasm.__wbindgen_free(deferred6_0, deferred6_1, 1);
+    }
+}
+
+/**
+ * Verifies a receipt (JSON) against optional response output and
+ * optional expected `job_id` / `model_hash`. Returns JSON with individual gates.
+ * @param {string} receipt_json
+ * @param {string | null} [output]
+ * @param {string | null} [expected_job_id]
+ * @param {string | null} [expected_model]
+ * @returns {string}
+ */
+export function verify_receipt(receipt_json, output, expected_job_id, expected_model) {
+    let deferred5_0;
+    let deferred5_1;
+    try {
+        const ptr0 = passStringToWasm0(receipt_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        var ptr1 = isLikeNone(output) ? 0 : passStringToWasm0(output, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len1 = WASM_VECTOR_LEN;
+        var ptr2 = isLikeNone(expected_job_id) ? 0 : passStringToWasm0(expected_job_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len2 = WASM_VECTOR_LEN;
+        var ptr3 = isLikeNone(expected_model) ? 0 : passStringToWasm0(expected_model, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len3 = WASM_VECTOR_LEN;
+        const ret = wasm.verify_receipt(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
+        deferred5_0 = ret[0];
+        deferred5_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred5_0, deferred5_1, 1);
     }
 }
 
