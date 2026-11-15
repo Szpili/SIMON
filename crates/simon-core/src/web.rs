@@ -112,13 +112,13 @@ pub fn allowed_web(p: &UrlFields, pol: &WebPolicy) -> Result<(), WebError> {
 
 pub use allowed_web as dozwolony_web;
 
-/// Anti-DNS rebind check: resolved IP must not be private, and must match declared.
-pub fn allowed_dns(declared_ip: &str, resolved_ip: &str) -> Result<(), WebError> {
-    if is_private_ip(resolved_ip) {
-        return Err(WebError::PrivateHost);
-    }
-    if declared_ip != resolved_ip {
+/// Anti-DNS rebind check: the resolved IP must equal the IP we connect to, and must not be private.
+pub fn allowed_dns(resolved_ip: &str, connect_ip: &str) -> Result<(), WebError> {
+    if resolved_ip != connect_ip {
         return Err(WebError::DnsMismatch);
+    }
+    if is_private_ip(connect_ip) {
+        return Err(WebError::PrivateHost);
     }
     Ok(())
 }
@@ -127,11 +127,10 @@ pub use allowed_dns as dozwolony_dns;
 
 /// Validates container image name for code execution against allowlist.
 pub fn allowed_code(image: &str, allowed_images: &[String]) -> Result<(), WebError> {
-    if allowed_images.iter().any(|i| i == image) {
-        Ok(())
-    } else {
-        Err(WebError::ImageNotAllowed)
+    if image.is_empty() || !allowed_images.iter().any(|i| i == image) {
+        return Err(WebError::ImageNotAllowed);
     }
+    Ok(())
 }
 
 pub use allowed_code as dozwolony_code;
@@ -189,11 +188,59 @@ mod tests {
     #[test]
     fn dns_rebind_and_images() {
         assert!(allowed_dns("93.184.216.34", "93.184.216.34").is_ok());
-        assert_eq!(allowed_dns("93.184.216.34", "10.0.0.5"), Err(WebError::PrivateHost));
+        assert_eq!(allowed_dns("93.184.216.34", "10.0.0.5"), Err(WebError::DnsMismatch));
         assert_eq!(allowed_dns("10.0.0.5", "10.0.0.5"), Err(WebError::PrivateHost));
 
         let images = vec!["sha256:python3.11-slim-locked".to_string()];
         assert!(allowed_code("sha256:python3.11-slim-locked", &images).is_ok());
         assert_eq!(allowed_code("sha256:other", &images), Err(WebError::ImageNotAllowed));
+        assert_eq!(allowed_code("", &images), Err(WebError::ImageNotAllowed));
+    }
+
+    // Restored from main (dropped in the language unification, same assertions).
+
+    fn url(scheme: &str, host: &str, port: u16, method: &str) -> UrlFields {
+        UrlFields { scheme: scheme.into(), host: host.into(), port, method: method.into(), userinfo: false }
+    }
+
+    #[test]
+    fn web_allows_lowercase_method_and_subdomains() {
+        let pol = sample_policy();
+        assert!(allowed_web(&url("https", "en.wikipedia.org", 443, "get"), &pol).is_ok());
+        assert!(allowed_web(&url("https", "sub.api.example.com", 443, "GET"), &pol).is_ok());
+    }
+
+    #[test]
+    fn web_rejects_scheme_port_method_userinfo() {
+        let pol = sample_policy();
+        assert_eq!(allowed_web(&url("http", "api.example.com", 443, "GET"), &pol), Err(WebError::Scheme));
+        assert_eq!(allowed_web(&url("https", "api.example.com", 8080, "GET"), &pol), Err(WebError::Port));
+        assert_eq!(allowed_web(&url("https", "api.example.com", 443, "POST"), &pol), Err(WebError::Method));
+        let mut u = url("https", "api.example.com", 443, "GET");
+        u.userinfo = true;
+        assert_eq!(allowed_web(&u, &pol), Err(WebError::Userinfo));
+    }
+
+    #[test]
+    fn web_rejects_every_private_range_and_lookalike_hosts() {
+        let pol = sample_policy();
+        for host in ["169.254.169.254", "127.0.0.1", "::ffff:127.0.0.1", "fc00::1", "fe80::1", "[::1]"] {
+            assert_eq!(allowed_web(&url("https", host, 443, "GET"), &pol), Err(WebError::PrivateHost), "{host}");
+        }
+        // "api.example.com.evil.net" is NOT a subdomain of api.example.com
+        assert_eq!(
+            allowed_web(&url("https", "api.example.com.evil.net", 443, "GET"), &pol),
+            Err(WebError::Host)
+        );
+    }
+
+    #[test]
+    fn host_allowed_with_a_leading_dot_pattern() {
+        let p = vec![".example.com".to_string()];
+        assert!(host_allowed("example.com", &p));
+        assert!(host_allowed("api.example.com", &p));
+        assert!(host_allowed("sub.api.example.com", &p));
+        assert!(!host_allowed("other.org", &p));
+        assert!(!host_allowed("notexample.com", &p));
     }
 }
