@@ -1,0 +1,5 @@
+# Pinned: rustc 1.100.0 fails clippy -D warnings ("unreachable call") in the
+# code that libp2p's #[derive(NetworkBehaviour)] generates. Raise on purpose.
+[toolchain]
+channel = "1.99.1"
+components = ["clippy", "rustfmt"]
