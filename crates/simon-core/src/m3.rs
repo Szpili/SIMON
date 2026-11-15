@@ -379,4 +379,116 @@ mod tests {
             Decision::InsufficientBasis
         );
     }
+
+    // Restored from main (dropped in the language unification, same assertions).
+
+    #[test]
+    fn decision_blocks_slash_at_level_0_with_a_non_empty_audit() {
+        let steps = vec![LogprobStep { index: 0, node_token: 1, topk: topk(&[(1, -0.1)]) }];
+        let w = evaluate(&steps, &M3Policy::default());
+        assert_eq!(decide(&w, 0, &M3Thresholds::default()), Decision::InsufficientBasis);
+    }
+
+    #[test]
+    fn mean_nll_is_computed_from_the_node_token() {
+        // Step 0: node token in top-k with logprob -2.0, so NLL 2.0.
+        // Step 1: node token is absent from top-k, so not_in_list grows.
+        let steps = vec![
+            LogprobStep { index: 0, node_token: 1, topk: topk(&[(1, -2.0), (2, -2.5)]) },
+            LogprobStep { index: 1, node_token: 9, topk: topk(&[(1, -0.1)]) },
+        ];
+        let w = evaluate(&steps, &M3Policy::default());
+        assert!((w.mean_nll - 2.0).abs() < 1e-9, "{w:?}");
+        assert_eq!(w.not_in_list, 1);
+        assert_eq!(w.outside_topk, 1);
+        assert_eq!(w.in_topk, 1);
+    }
+
+    #[test]
+    fn too_few_steps_is_insufficient_evidence_not_pass() {
+        // 3 matching steps < min_steps=8: "not proven" is not "honest".
+        let steps: Vec<LogprobStep> = (0..3)
+            .map(|i| LogprobStep { index: i, node_token: 1, topk: topk(&[(1, -0.1)]) })
+            .collect();
+        let w = evaluate(&steps, &M3Policy::default());
+        assert!(w.ok, "the audit itself is ok: {w:?}");
+        assert_eq!(decide(&w, 1, &M3Thresholds::default()), Decision::InsufficientEvidence);
+    }
+
+    #[test]
+    fn one_deviation_is_soft_fail_without_slash() {
+        // 1 suspicious step in 30 (3.3%): above max_outside (2%), below the hard threshold (5%).
+        let mut steps: Vec<LogprobStep> = (0..29)
+            .map(|i| LogprobStep { index: i, node_token: 1, topk: topk(&[(1, -0.1)]) })
+            .collect();
+        steps.push(LogprobStep { index: 29, node_token: 999, topk: topk(&[(1, -0.1), (2, -0.2)]) });
+        let w = evaluate(&steps, &M3Policy::default());
+        assert!(!w.ok, "{w:?}");
+        assert_eq!(decide(&w, 1, &M3Thresholds::default()), Decision::SoftFail);
+    }
+
+    #[test]
+    fn m3_does_not_authorize_slash_on_many_deviations() {
+        // 10/50 = 20% suspicious: still SoftFail, never HardFail (2026-10-06).
+        // Slash only on decidable violations, never on M3 distance.
+        let steps: Vec<LogprobStep> = (0..50)
+            .map(|i| LogprobStep {
+                index: i,
+                node_token: if i < 10 { 999 } else { 1 },
+                topk: topk(&[(1, -0.1)]),
+            })
+            .collect();
+        let w = evaluate(&steps, &M3Policy::default());
+        assert!(!w.ok, "{w:?}");
+        assert_eq!(decide(&w, 1, &M3Thresholds::default()), Decision::SoftFail);
+    }
+
+    #[test]
+    fn audit_digest_is_deterministic_and_sensitive() {
+        let a = vec![LogprobStep { index: 0, node_token: 1, topk: topk(&[(1, -0.1), (2, -0.2)]) }];
+        let b = a.clone();
+        let mut c = a.clone();
+        c[0].node_token = 3;
+        assert_eq!(audit_digest(&a).unwrap(), audit_digest(&b).unwrap());
+        assert_ne!(audit_digest(&a).unwrap(), audit_digest(&c).unwrap());
+    }
+
+    #[test]
+    fn nan_or_inf_in_topk_is_rejected() {
+        let steps = vec![LogprobStep {
+            index: 0,
+            node_token: 528,
+            topk: topk(&[(528, f64::NAN), (28742, -1.0)]),
+        }];
+        let w = evaluate(&steps, &M3Policy::default());
+        assert!(!w.ok);
+        assert_eq!(w.outside_topk, 1);
+        assert_eq!(w.not_in_list, 1);
+        assert!(w.reason.unwrap().contains("non-finite"));
+
+        let steps_inf = vec![LogprobStep {
+            index: 0,
+            node_token: 528,
+            topk: topk(&[(528, f64::INFINITY)]),
+        }];
+        let w_inf = evaluate(&steps_inf, &M3Policy::default());
+        assert!(!w_inf.ok);
+        assert_eq!(w_inf.outside_topk, 1);
+        assert_eq!(w_inf.not_in_list, 1);
+    }
+
+    #[test]
+    fn unsorted_topk_is_sorted_before_judging() {
+        // Node token 1 has -2.5 and another token has -0.5. Without sorting, token 1
+        // at the head of the list would pass as rank 1 with margin 0.0.
+        let steps = vec![LogprobStep {
+            index: 0,
+            node_token: 1,
+            topk: topk(&[(1, -2.5), (2, -0.5)]),
+        }];
+        let w = evaluate(&steps, &M3Policy::default());
+        assert!(!w.ok);
+        assert_eq!(w.worst_rank, 2);
+        assert!((w.worst_margin - 2.0).abs() < 1e-6);
+    }
 }

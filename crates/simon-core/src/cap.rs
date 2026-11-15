@@ -467,4 +467,142 @@ mod tests {
             Err(GrantRejection::Expired)
         );
     }
+
+    // Restored from main (dropped in the language unification, same assertions).
+
+    fn ctx<'a>(now_us: u64, issuer: &'a str, revoked: &'a [String], used: &'a [String]) -> GrantContext<'a> {
+        GrantContext { now_us, expected_issuer: issuer, revoked, used }
+    }
+
+    fn signed_grant(kp: &Keypair, id: &str, par: &Value, budget: Option<i64>) -> CapabilityGrant {
+        CapabilityGrant {
+            id: id.into(),
+            action: "log_message".into(),
+            params_digest: action_params_digest("log_message", par).unwrap(),
+            issuer: String::new(),
+            valid_until_us: 1_000_000,
+            budget,
+            signature: None,
+        }
+        .sign(kp)
+        .unwrap()
+    }
+
+    #[test]
+    fn grant_fails_on_revoked_used_issuer_and_signature() {
+        let s = test_ceiling();
+        let kp = Keypair::from_seed(&[5u8; 32]);
+        let pk_hex = kp.public().to_hex();
+        let other_hex = Keypair::from_seed(&[6u8; 32]).public().to_hex();
+        let par = serde_json::json!({"msg": "hello"});
+        let g = signed_grant(&kp, "g-1", &par, Some(10));
+        let listed: Vec<String> = vec!["g-1".into()];
+
+        assert!(verify_grant(&s, &g, "log_message", &par, &ctx(500_000, &pk_hex, &[], &[])).is_ok());
+        assert_eq!(
+            verify_grant(&s, &g, "log_message", &par, &ctx(500_000, &pk_hex, &listed, &[])),
+            Err(GrantRejection::Revoked)
+        );
+        // single-use
+        assert_eq!(
+            verify_grant(&s, &g, "log_message", &par, &ctx(500_000, &pk_hex, &[], &listed)),
+            Err(GrantRejection::Used)
+        );
+        assert_eq!(
+            verify_grant(&s, &g, "log_message", &par, &ctx(500_000, &other_hex, &[], &[])),
+            Err(GrantRejection::Issuer)
+        );
+        let mut forged = g.clone();
+        forged.signature = Some("00".repeat(64));
+        assert_eq!(
+            verify_grant(&s, &forged, "log_message", &par, &ctx(500_000, &pk_hex, &[], &[])),
+            Err(GrantRejection::Signature)
+        );
+    }
+
+    #[test]
+    fn enum_bad_type_range_and_length() {
+        let s = test_ceiling();
+        assert!(matches!(
+            validate_json(&s, r#"{"tool":"set_mode","args":{"mode":"yolo"}}"#),
+            Err(Rejection::NotInEnum { .. })
+        ));
+        assert!(matches!(
+            validate_json(&s, r#"{"tool":"set_mode","args":{"mode":"safe","limit":99}}"#),
+            Err(Rejection::OutOfRange { .. })
+        ));
+        assert!(matches!(
+            validate_json(&s, r#"{"tool":"log_message","args":{"msg":42}}"#),
+            Err(Rejection::BadType { .. })
+        ));
+        let long = "a".repeat(201);
+        assert!(matches!(
+            validate_json(&s, &format!(r#"{{"tool":"log_message","args":{{"msg":"{long}"}}}}"#)),
+            Err(Rejection::TooLong { .. })
+        ));
+        // optional `limit` omitted
+        assert!(validate_json(&s, r#"{"tool":"set_mode","args":{"mode":"fast"}}"#).is_ok());
+    }
+
+    #[test]
+    fn non_object_params_rejected() {
+        let s = test_ceiling();
+        assert!(matches!(
+            validate(&s, "log_message", &serde_json::json!("a string, not an object")),
+            Err(Rejection::BadType { .. })
+        ));
+        assert!(matches!(
+            validate(&s, "log_message", &serde_json::json!([1, 2, 3])),
+            Err(Rejection::BadType { .. })
+        ));
+    }
+
+    #[test]
+    fn missing_args_means_no_params() {
+        let mut s = test_ceiling();
+        s.actions.insert(
+            "status".to_string(),
+            ActionDef {
+                name: "status".into(),
+                params: vec![ActionParam {
+                    name: "details".into(),
+                    required: false,
+                    constraint: ParamConstraint::Text { max_len: 10 },
+                }],
+            },
+        );
+        // no required params and the model omitted `args`: serde gives Null
+        assert!(validate_json(&s, r#"{"tool":"status"}"#).is_ok());
+        // Null does not stand in for a required param
+        assert!(matches!(
+            validate_json(&s, r#"{"tool":"set_mode"}"#),
+            Err(Rejection::MissingParam { .. })
+        ));
+        // a scalar and an array are still rejected
+        assert!(matches!(
+            validate_json(&s, r#"{"tool":"status","args":"x"}"#),
+            Err(Rejection::BadType { .. })
+        ));
+        assert!(matches!(
+            validate_json(&s, r#"{"tool":"status","args":[]}"#),
+            Err(Rejection::BadType { .. })
+        ));
+        // explicit `null` equals omitted `args`
+        assert!(validate_json(&s, r#"{"tool":"status","args":null}"#).is_ok());
+    }
+
+    #[test]
+    fn zero_or_negative_budget_rejected() {
+        let s = test_ceiling();
+        let kp = Keypair::from_seed(&[5u8; 32]);
+        let pk_hex = kp.public().to_hex();
+        let par = serde_json::json!({"msg": "hello"});
+        let k = ctx(500_000, &pk_hex, &[], &[]);
+
+        let zero = signed_grant(&kp, "g-zero", &par, Some(0));
+        assert_eq!(verify_grant(&s, &zero, "log_message", &par, &k), Err(GrantRejection::Expired));
+
+        let negative = signed_grant(&kp, "g-neg", &par, Some(-1));
+        assert_eq!(verify_grant(&s, &negative, "log_message", &par, &k), Err(GrantRejection::Expired));
+    }
 }

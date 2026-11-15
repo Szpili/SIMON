@@ -153,6 +153,45 @@ impl WorkRegistry {
         Ok(())
     }
 
+    pub fn read_all(&self) -> Result<Vec<WorkRecordV1>, RegistryError> {
+        if !self.path.exists() {
+            return Ok(Vec::new());
+        }
+        let file = std::fs::File::open(&self.path).map_err(RegistryError::Io)?;
+        let mut out = Vec::new();
+        for line in BufReader::new(file).lines() {
+            let line = line.map_err(RegistryError::Io)?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            out.push(serde_json::from_str(&line).map_err(RegistryError::Serde)?);
+        }
+        Ok(out)
+    }
+
+    /// RAW, separate counters. No conversion on purpose: the settlement unit
+    /// is not decided at this stage (M5.3).
+    pub fn summary(&self) -> Result<Summary, RegistryError> {
+        let mut s = Summary::default();
+        for r in &self.read_all()? {
+            s.jobs += 1;
+            if r.identity_epoch == 0 {
+                s.ephemeral_epoch += 1;
+            }
+            s.prompt_tokens += r.prompt_tokens_total;
+            s.completion_tokens += r.completion_tokens;
+            s.client_time_ms += r.client_observed_total_ms;
+            match r.verification_status {
+                VerificationStatus::OutputBound => s.output_bound += 1,
+                VerificationStatus::SignatureValid => s.signature_only += 1,
+                VerificationStatus::ExecutionAuditPass => s.execution_audit_pass += 1,
+                VerificationStatus::ExecutionAuditFail => s.execution_audit_fail += 1,
+                VerificationStatus::ExecutionAuditPending => s.execution_audit_pending += 1,
+            }
+        }
+        Ok(s)
+    }
+
     pub fn dopisz(&mut self, rekord: &WorkRecordV1) -> Result<(), RegistryError> {
         self.append(rekord)
     }
@@ -160,6 +199,21 @@ impl WorkRegistry {
     pub fn otworz<P: AsRef<Path>>(sciezka: P) -> Result<Self, RegistryError> {
         Self::open(sciezka)
     }
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Summary {
+    pub jobs: u64,
+    /// Records from the ephemeral epoch: ownership cannot be recovered.
+    pub ephemeral_epoch: u64,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub client_time_ms: u64,
+    pub signature_only: u64,
+    pub output_bound: u64,
+    pub execution_audit_pending: u64,
+    pub execution_audit_pass: u64,
+    pub execution_audit_fail: u64,
 }
 
 #[cfg(test)]
@@ -230,5 +284,22 @@ mod tests {
         let json = serde_json::to_string(&r).unwrap();
         assert!(!json.contains("prompt_tokens_cached"));
         assert!(!json.contains("prompt_commitment"));
+        assert!(!json.contains("model_manifest_hash"));
+        assert!(!json.contains("tokenizer_manifest_hash"));
+    }
+
+    // Restored from main (dropped in the language unification, same assertions).
+    #[test]
+    fn summary_counts_raw_separate_counters() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut reg = WorkRegistry::open(dir.path().join("records.jsonl")).unwrap();
+        reg.append(&sample_record("c1")).unwrap();
+        reg.append(&sample_record("c2")).unwrap();
+        let s = reg.summary().unwrap();
+        assert_eq!(s.jobs, 2);
+        assert_eq!(s.prompt_tokens, 20);
+        assert_eq!(s.completion_tokens, 40);
+        assert_eq!(s.output_bound, 2);
+        assert_eq!(s.execution_audit_pass, 0, "there is NO execution audit, it must not be counted");
     }
 }
