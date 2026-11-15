@@ -95,5 +95,7 @@ mod tests {
         assert!(flow_ok(RetrievedText, ActionArgument, &dekl));
         assert!(!flow_ok(RetrievedText, NextJobInstruction, &dekl));
         assert!(!flow_ok(ToolText, ActionArgument, &dekl));
+        assert!(requires_declassification(RetrievedText, ActionArgument));
+        assert!(!requires_declassification(Operator, ActionArgument));
     }
 }

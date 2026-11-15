@@ -114,27 +114,6 @@ impl WorkRegistry {
         })
     }
 
-    pub fn default_path() -> Result<PathBuf, RegistryError> {
-        let home = std::env::var_os("HOME").map(PathBuf::from);
-
-        #[cfg(target_os = "macos")]
-        let base = home.map(|h| h.join("Library/Application Support/SIMON"));
-
-        #[cfg(target_os = "windows")]
-        let base = std::env::var_os("LOCALAPPDATA")
-            .map(PathBuf::from)
-            .map(|h| h.join("SIMON"));
-
-        #[cfg(all(unix, not(target_os = "macos")))]
-        let base = std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .or_else(|| home.map(|h| h.join(".local/share")))
-            .map(|h| h.join("simon"));
-
-        base.map(|b| b.join("registry/work_records.jsonl"))
-            .ok_or(RegistryError::MissingDataDir)
-    }
-
     pub fn append(&mut self, record: &WorkRecordV1) -> Result<(), RegistryError> {
         if self.seen_receipts.contains(&record.receipt_hash) {
             return Err(RegistryError::Duplicate {

@@ -136,6 +136,8 @@ mod tests {
         let b = Budget::new(ResourceLimits::default(), 0);
         assert!(b.check(100_000_000).is_ok());
         assert_eq!(b.check(120_000_001), Err(LimitExceeded::Deadline));
+        let mut b = b;
+        assert_eq!(b.add_tokens(1, 120_000_001), Err(LimitExceeded::Deadline));
     }
 
     #[test]
@@ -163,5 +165,6 @@ mod tests {
         assert_eq!(b.add_tokens(10, 0), Err(LimitExceeded::Cancelled));
         assert_eq!(b.add_bytes(10, 0), Err(LimitExceeded::Cancelled));
         assert_eq!(b.tool_step(0), Err(LimitExceeded::Cancelled));
+        assert_eq!((b.tokens, b.bytes, b.steps), (0, 0, 0), "cancelled calls must not count usage");
     }
 }

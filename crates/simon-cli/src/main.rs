@@ -72,8 +72,19 @@ EXAMPLES:
     # agent (client) connecting to node
     simon --role agent --bootstrap /ip4/<IP_NODE>/tcp/9001 --prompt "compute 2+2"
 
+    # agent, large file (M3.x map-reduce): the prompt applies to each chunk
+    simon --role agent --bootstrap /ip4/<IP_NODE>/tcp/9001 \
+        --file large_document.txt --prompt "summarize the key facts" \
+        --chunk-tokens 4000 --map-max-tokens 200
+
+    # agent, B2 chain: CODER (node 1) -> TESTER (node 2), no manual copy
+    simon --role agent --bootstrap /ip4/<IP_CODER>/tcp/9001 \
+        --prompt "write a Rust function that adds two numbers" \
+        --then-bootstrap /ip4/<IP_TESTER>/tcp/9002 \
+        --then-prompt "find an edge case for this function"
+
     # offline verification
-    simon verify examples/receipt.json --output examples/response.txt
+    simon verify przyklady/receipt.json --output przyklady/odpowiedz.txt
 
 NOTE (RULES #1): prompt travels over point-to-point channel (/simon/prompt/1),
 never gossipsub. Only metadata travels over gossipsub.
@@ -238,7 +249,8 @@ impl Opcje {
                 "--expect-job-id" => expect_job_id = Some(wartosc(&mut i, "--expect-job-id")?),
                 "--expect-model" => expect_model = Some(wartosc(&mut i, "--expect-model")?),
                 "--expect-output" => expect_output = Some(wartosc(&mut i, "--expect-output")?),
-                "--registry" => registry = Some(wartosc(&mut i, "--registry")?),
+                // "--rejestr": old Polish name, kept so existing scripts still work.
+                "--registry" | "--rejestr" => registry = Some(wartosc(&mut i, "--registry")?),
                 "--identity-file" => identity_file = Some(wartosc(&mut i, "--identity-file")?),
                 "--tokens" => tokens = Some(wartosc(&mut i, "--tokens")?),
                 "--audyt" => audyt = Some(wartosc(&mut i, "--audyt")?),

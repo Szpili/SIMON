@@ -134,6 +134,8 @@ mod tests {
         assert!(w.accept(100).is_ok());
         assert_eq!(w.accept(100), Err(ProtocolError::ReplayNonce));
         assert!(w.accept(105).is_ok());
+        assert!(w.accept(103).is_ok()); // in the window, not seen yet
+        assert_eq!(w.accept(103), Err(ProtocolError::ReplayNonce));
         assert!(w.accept(96).is_ok());
         assert_eq!(w.accept(95), Err(ProtocolError::NonceTooOld));
         assert_eq!(w.accept(80), Err(ProtocolError::NonceTooOld));
@@ -167,5 +169,8 @@ mod tests {
         assert!(b.allow(1_000_000).is_ok());
         assert_eq!(b.allow(500_000), Ok(()));
         assert_eq!(b.allow(500_000), Err(ProtocolError::RateLimit));
+        // 0.5 s after the real maximum (1_000_000): no new token. If the jump
+        // back reset the clock to 500_000, this call would see 1 s and pass.
+        assert_eq!(b.allow(1_500_000), Err(ProtocolError::RateLimit));
     }
 }
