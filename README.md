@@ -103,7 +103,7 @@ also names what is not done.
 | Concurrent jobs on one node (`--max-jobs`, a queue, an explicit busy error) | working, measured on MI300X |
 | Model-identity verifier: agent behaviour (LIDAR-style) + single-token output distributions (`tools/simon-lidar`) | pilot, small N: family and size separate, quantization only in the single-token layer, no false alarm on another GPU (`docs/VERIFIER-PILOT.md`) |
 | AMD ROCm node (MI300X) | working and measured (see below) |
-| Gemma 4 26B-A4B nodes: RTX 3090 (QAT q4_0, llama.cpp) and AMD Instinct MI300X (BF16, vLLM 0.27.1, ROCm) | live in the demo; MI300X telemetry from rocm-smi on `/network` |
+| Gemma 4 26B-A4B nodes: RTX 3090 (QAT q4_0, llama.cpp) and AMD Instinct MI300X (BF16, vLLM 0.27.1, ROCm) | live in the hackathon demo until 2026-10-18, with MI300X telemetry from rocm-smi on `/network`. The MI300X droplet does not run now. |
 | Maintenance tickets with an audit trail (`tools/simon-industry`, `/industry`) | working: 14/15 published, 1 held for review, on a predeclared sample |
 | Slashing rules for dishonest nodes | unresolved (see below) |
 
