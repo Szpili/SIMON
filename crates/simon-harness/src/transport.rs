@@ -1,14 +1,9 @@
-//! Warstwa transportu: swarm libp2p + gossipsub (decyzja Karola 2026-09-16).
+//! Transport layer: libp2p swarm + gossipsub.
 //!
-//! „Ma być jak torrent inference" — klient ROZGŁASZA zlecenie do swarmu,
-//! nie pyta konkretnego serwera. Discovery przez Kademlię (DHT), bez trackera.
+//! Clients broadcast orders to the swarm via gossipsub, discovery via Kademlia DHT.
 //!
-//! Ten moduł to WYŁĄCZNIE transport i cykl życia swarmu. Cała logika protokołu
-//! (walidacja, wyścig, weryfikacja receiptu) siedzi w `client_protocol` — tutaj
-//! jest tylko przewiezienie bajtów.
-//!
-//! UWAGA (karpathy): nie dodajemy tu logiki. Transport ma przewozić, nie decydować.
-
+//! This module provides strictly transport and swarm lifecycle. Protocol logic
+//! (validation, coordinator racing, receipt verification) lives in client_protocol.
 
 use std::time::Duration;
 
@@ -19,15 +14,12 @@ use libp2p::swarm::{NetworkBehaviour, SwarmEvent};
 use libp2p::{identify, noise, ping, yamux, Multiaddr, PeerId, SwarmBuilder};
 use tokio::sync::mpsc;
 
-/// Tematy gossipsub jako stałe — część nieodwracalnego kontraktu sieci.
+/// Gossipsub topics as constants - part of the immutable network contract.
 pub const TOPIC_JOB_ORDER: &str = "simon/v1/job-order";
 pub const TOPIC_ORDER_ACCEPTED: &str = "simon/v1/order-accepted";
 pub const TOPIC_ORDER_COMPLETED: &str = "simon/v1/order-completed";
 
-/// Zachowanie swarmu: gossipsub + Kademlia (discovery) + identify + ping.
-///
-/// `ping` daje RTT do D6 (optymalizacja po pingu). `identify` pozwala poznać
-/// adresy peerów, `kad` rozgłasza i szuka ich bez serwera centralnego.
+/// Swarm behaviour: gossipsub + Kademlia (discovery) + identify + ping.
 #[derive(NetworkBehaviour)]
 pub struct SimonBehaviour {
     pub gossipsub: gossipsub::Behaviour,
@@ -36,29 +28,27 @@ pub struct SimonBehaviour {
     pub ping: ping::Behaviour,
 }
 
-/// Zdarzenie wyjęte z swarmu — to, co interesuje warstwę wyżej.
+/// Events emitted by the swarm to upper layers.
 #[derive(Debug)]
 pub enum SimonEvent {
-    /// Przyszedł bajt z tematu. Dekodowanie robi warstwa wyżej.
+    /// Incoming message payload on a topic.
     Message { topic: String, data: Vec<u8>, from: PeerId },
-    /// Nowy peer dołączył do swarmu.
+    /// New peer joined the swarm.
     PeerConnected(PeerId),
-    /// Peer wyszedł.
+    /// Peer disconnected.
     PeerDisconnected(PeerId),
-    /// Znamy nowy adres (discovery).
+    /// Discovered peer address.
     AddressDiscovered(PeerId, Multiaddr),
-    /// Swarm zaczął nasłuchiwać na tym adresie (potrzebne do dialowania w testach
-    /// i do bootstrapu — bez tego nie wiemy, pod jakim portem realnie słuchamy).
+    /// Swarm listening on address.
     Listening(Multiaddr),
 }
 
-/// Buduje zachowanie swarmu z domyślnymi parametrami gossipsub.
+/// Builds swarm behaviour with default gossipsub parameters.
 pub fn build_behaviour(keypair: &libp2p::identity::Keypair) -> Result<SimonBehaviour, String> {
-    // gossipsub: publikujemy podpisywane wiadomości (transport sam w sobie
-    // nie jest zaufany — RULES #6). Duże wiadomości (receipt z aktywacjami)
-    // nie mieszczą się w domyślnym limicie, więc podnosimy go.
+    // gossipsub: publish signed messages (transport is untrusted).
+    // Raised payload limit accommodates receipts with TopLoc activation digests.
     let config = gossipsub::ConfigBuilder::default()
-        .max_transmit_size(4 * 1024 * 1024) // 4 MB — receipt z TopLoc + output
+        .max_transmit_size(4 * 1024 * 1024) // 4 MB - receipt with TopLoc + output
         .validation_mode(gossipsub::ValidationMode::Strict)
         .heartbeat_interval(Duration::from_secs(1))
         .build()
@@ -88,27 +78,26 @@ pub fn build_behaviour(keypair: &libp2p::identity::Keypair) -> Result<SimonBehav
     })
 }
 
-/// Uruchamia pętlę swarmu. Zwraca kanał do wysyłania poleceń.
+/// Starts the swarm loop. Returns handle to send commands.
 ///
-/// `listen` — adresy nasłuchu (np. `/ip4/0.0.0.0/tcp/0` = dowolny port).
-/// Polecenia do swarmu idą przez kanał (Swarm nie jest Send-friendly wprost).
+/// `listen` - listen addresses (e.g. `/ip4/0.0.0.0/tcp/0` = any port).
 pub struct SwarmHandle {
     pub peer_id: PeerId,
     cmd_tx: mpsc::UnboundedSender<SwarmCommand>,
 }
 
-/// Polecenia, które warstwa wyżej może wysłać do swarmu.
+/// Commands sent to the swarm loop.
 #[derive(Debug)]
 pub enum SwarmCommand {
-    /// Rozgłoś bajty na temat.
+    /// Publish bytes to a topic.
     Publish { topic: String, data: Vec<u8> },
-    /// Subskrybuj temat.
+    /// Subscribe to a topic.
     Subscribe(String),
-    /// Połącz się z konkretnym adresem (do testów i bootstrapu).
+    /// Dial a specific multiaddr.
     Dial(Multiaddr),
-    /// Dodaj adres do tablicy routingu Kademlii.
+    /// Add address to Kademlia routing table.
     AddAddress(PeerId, Multiaddr),
-    /// Zamknij pętlę.
+    /// Shutdown swarm loop.
     Shutdown,
 }
 
@@ -119,25 +108,25 @@ impl SwarmHandle {
                 topic: topic.to_string(),
                 data,
             })
-            .map_err(|e| format!("swarm zamknięty: {e}"))
+            .map_err(|e| format!("swarm closed: {e}"))
     }
 
     pub fn subscribe(&self, topic: &str) -> Result<(), String> {
         self.cmd_tx
             .send(SwarmCommand::Subscribe(topic.to_string()))
-            .map_err(|e| format!("swarm zamknięty: {e}"))
+            .map_err(|e| format!("swarm closed: {e}"))
     }
 
     pub fn dial(&self, addr: Multiaddr) -> Result<(), String> {
         self.cmd_tx
             .send(SwarmCommand::Dial(addr))
-            .map_err(|e| format!("swarm zamknięty: {e}"))
+            .map_err(|e| format!("swarm closed: {e}"))
     }
 
     pub fn add_address(&self, peer: PeerId, addr: Multiaddr) -> Result<(), String> {
         self.cmd_tx
             .send(SwarmCommand::AddAddress(peer, addr))
-            .map_err(|e| format!("swarm zamknięty: {e}"))
+            .map_err(|e| format!("swarm closed: {e}"))
     }
 
     pub fn shutdown(&self) {
@@ -145,10 +134,10 @@ impl SwarmHandle {
     }
 }
 
-/// Tworzy swarm i zwraca (uchwyt, strumień zdarzeń).
+/// Creates swarm and returns (handle, event receiver stream).
 ///
-/// To jest jedyna funkcja, która realnie dotyka sieci. Cała reszta protokołu
-/// jest testowalna bez niej (patrz `tests/cykl_zlecenie.rs`).
+/// This is the primary function interacting directly with the network.
+/// The remainder of the protocol is testable in-memory (see `tests/cykl_zlecenie.rs`).
 pub async fn spawn_swarm(
     listen: Vec<Multiaddr>,
 ) -> Result<(SwarmHandle, mpsc::UnboundedReceiver<SimonEvent>), String> {
@@ -245,15 +234,12 @@ pub async fn spawn_swarm(
     Ok((SwarmHandle { peer_id, cmd_tx }, evt_rx))
 }
 
-/// Deterministyczny identyfikator zlecenia dla rozstrzygania wyścigu.
+/// Deterministic job id for racing resolution.
 ///
-/// Przy gossipsub wielu koordynatorów widzi to samo zlecenie. Ta funkcja daje
-/// im wszystkim ten sam `job_id` z `order_id` — bez uzgadniania.
-/// (Właściwy przydział robi VRF; to tylko identyfikator.)
+/// In gossipsub multiple coordinators observe the same order.
+/// This function derives the same job_id from order_id deterministically.
 pub fn deterministic_job_id(order_id: &str) -> String {
-    // SHA-256, NIE DefaultHasher. DefaultHasher nie ma gwarantowanego algorytmu
-    // między wersjami Rusta — Szpon i Frank na różnych rustc policzyłyby różne
-    // job_id dla tego samego zlecenia. W jednym procesie (testy) tego nie widać.
+    // SHA-256 for cross-platform stability across rustc builds.
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
     h.update(order_id.as_bytes());
@@ -268,9 +254,9 @@ mod tests {
     fn job_id_jest_deterministyczny() {
         let a = deterministic_job_id("o-1");
         let b = deterministic_job_id("o-1");
-        assert!(a.starts_with("job-"), "prefiks job-");
-        assert_eq!(a.len(), 4 + 64, "sha256 hex = 64 znaki");
-        assert_eq!(a, b, "ten sam order_id musi dać ten sam job_id");
+        assert!(a.starts_with("job-"), "prefix job-");
+        assert_eq!(a.len(), 4 + 64, "sha256 hex = 64 chars");
+        assert_eq!(a, b, "same order_id must give same job_id");
         assert_ne!(a, deterministic_job_id("o-2"));
     }
 

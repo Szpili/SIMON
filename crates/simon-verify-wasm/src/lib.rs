@@ -1,17 +1,17 @@
-//! Weryfikacja receiptu SIMON — JEDNO ŹRÓDŁO PRAWDY, eksport do WASM.
+//! Receipt verification for SIMON — SINGLE SOURCE OF TRUTH, exported to WASM.
 //!
-//! Ten crate świadomie NIE zawiera własnej kryptografii. Woła dokładnie te
-//! same bramki co `simon --verify-receipt` w CLI i co rdzeń:
+//! This crate deliberately does NOT contain its own cryptography. It calls
+//! the exact same gates as `simon --verify-receipt` in the CLI and core:
 //!
-//!   1. `Receipt::verify_self()`      — Ed25519 po odcisku CAŁEGO receiptu
-//!      (nie po `sha256(output)`),
-//!   2. `Receipt::zgodny_z_wyjsciem()` — domenowo rozdzielony, związany z
-//!      `job_id` odcisk treści (`SIMON/OUTPUT/v1`),
-//!   3. opcjonalnie zgodność `job_id` / `model_hash`.
+//!   1. `Receipt::verify_self()`      — Ed25519 over the digest of the ENTIRE receipt
+//!      (not over `sha256(output)`),
+//!   2. `Receipt::matches_output()`  — domain-separated, bound to `job_id`
+//!      content digest (`SIMON/OUTPUT/v1`),
+//!   3. optionally checks `job_id` / `model_hash` match.
 //!
-//! Dzięki temu UI (przeglądarka, bez serwera) pokazuje tylko werdykt, a nie
-//! liczy hashy po swojemu — koniec rozjazdu `ui/src/lib/crypto.ts` vs
-//! `simon-core`.
+//! This ensures the UI (browser, serverless) only displays the verdict and
+//! does not compute hashes independently — eliminating drift between
+//! `ui/src/lib/crypto.ts` and `simon-core`.
 
 #![allow(clippy::doc_overindented_list_items)]
 
@@ -20,28 +20,38 @@ use simon_core::receipt::Receipt;
 use wasm_bindgen::prelude::*;
 
 #[derive(Serialize)]
-struct Werdykt {
-    parsuje_sie: bool,
-    podpis_ok: bool,
-    tresc_ok: Option<bool>,
-    job_id_ok: Option<bool>,
-    model_ok: Option<bool>,
-    ok: bool,
-    job_id: Option<String>,
-    node_id: Option<String>,
-    model_hash: Option<String>,
-    runtime: Option<String>,
-    signer: Option<String>,
-    output_digest: Option<String>,
-    powod: Option<String>,
+pub struct Verdict {
+    pub parses: bool,
+    pub signature_ok: bool,
+    pub content_ok: Option<bool>,
+    pub job_id_ok: Option<bool>,
+    pub model_ok: Option<bool>,
+    pub ok: bool,
+    pub job_id: Option<String>,
+    pub node_id: Option<String>,
+    pub model_hash: Option<String>,
+    pub runtime: Option<String>,
+    pub signer: Option<String>,
+    pub output_digest: Option<String>,
+    pub reason: Option<String>,
+
+    // Backwards-compatibility aliases for UI
+    #[serde(rename = "parsuje_sie")]
+    pub parsuje_sie: bool,
+    #[serde(rename = "podpis_ok")]
+    pub podpis_ok: bool,
+    #[serde(rename = "tresc_ok")]
+    pub tresc_ok: Option<bool>,
+    #[serde(rename = "powod")]
+    pub powod: Option<String>,
 }
 
-impl Werdykt {
-    fn odrzucony(powod: String) -> Self {
+impl Verdict {
+    fn rejected(reason: String) -> Self {
         Self {
-            parsuje_sie: false,
-            podpis_ok: false,
-            tresc_ok: None,
+            parses: false,
+            signature_ok: false,
+            content_ok: None,
             job_id_ok: None,
             model_ok: None,
             ok: false,
@@ -51,54 +61,60 @@ impl Werdykt {
             runtime: None,
             signer: None,
             output_digest: None,
-            powod: Some(powod),
+            reason: Some(reason.clone()),
+            parsuje_sie: false,
+            podpis_ok: false,
+            tresc_ok: None,
+            powod: Some(reason),
         }
     }
 }
 
-fn jako_json(w: &Werdykt) -> String {
-    serde_json::to_string(w).unwrap_or_else(|_| {
-        "{\"parsuje_sie\":false,\"podpis_ok\":false,\"ok\":false,\"powod\":\"serializacja\"}"
+fn as_json(v: &Verdict) -> String {
+    serde_json::to_string(v).unwrap_or_else(|_| {
+        "{\"parses\":false,\"signature_ok\":false,\"ok\":false,\"reason\":\"serialization\",\"parsuje_sie\":false,\"podpis_ok\":false,\"powod\":\"serializacja\"}"
             .to_string()
     })
 }
 
-/// Weryfikuje receipt (JSON) wobec opcjonalnej treści odpowiedzi oraz
-/// opcjonalnego oczekiwanego `job_id` / `model_hash`. Zwraca JSON z osobnymi
-/// bramkami — UI wyłącznie prezentuje wynik.
-///
-/// * `receipt_json` — receipt w formacie SIMON (JSON),
-/// * `output`       — treść odpowiedzi, którą rzekomo opisuje receipt
-///                    (bez niej bramka treści jest `null` = nie sprawdzona),
-/// * `oczekiwany_job_id` / `oczekiwany_model` — opcjonalne bramki zgodności.
+/// Verifies a receipt (JSON) against optional response output and
+/// optional expected `job_id` / `model_hash`. Returns JSON with individual gates.
 #[wasm_bindgen]
-pub fn weryfikuj(
+pub fn verify_receipt(
     receipt_json: &str,
     output: Option<String>,
-    oczekiwany_job_id: Option<String>,
-    oczekiwany_model: Option<String>,
+    expected_job_id: Option<String>,
+    expected_model: Option<String>,
 ) -> String {
     let r: Receipt = match serde_json::from_str(receipt_json.trim()) {
         Ok(r) => r,
-        Err(e) => return jako_json(&Werdykt::odrzucony(format!("nieparsowalny receipt: {e}"))),
+        Err(e) => return as_json(&Verdict::rejected(format!("unparseable receipt: {e}"))),
     };
 
-    let podpis_ok = r.verify_self().is_ok();
-    let tresc_ok = output.as_deref().map(|o| r.zgodny_z_wyjsciem(o));
-    let job_id_ok = oczekiwany_job_id.as_deref().map(|j| j == r.job_id);
-    let model_ok = oczekiwany_model
-        .as_deref()
-        .map(|m| m == r.model_hash);
+    let signature_ok = r.verify_self().is_ok();
+    let content_ok = output.as_deref().map(|o| r.matches_output(o));
+    let job_id_ok = expected_job_id.as_deref().map(|j| j == r.job_id);
+    let model_ok = expected_model.as_deref().map(|m| m == r.model_hash);
 
-    let ok = podpis_ok
-        && tresc_ok != Some(false)
+    let ok = signature_ok
+        && content_ok != Some(false)
         && job_id_ok != Some(false)
         && model_ok != Some(false);
 
-    jako_json(&Werdykt {
-        parsuje_sie: true,
-        podpis_ok,
-        tresc_ok,
+    let reason: Option<String> = if ok {
+        None
+    } else if !signature_ok {
+        Some("Ed25519 signature does not match the receipt digest".into())
+    } else if content_ok == Some(false) {
+        Some("output digest (job_id + output) does not match the receipt".into())
+    } else {
+        Some("not all checks passed".into())
+    };
+
+    as_json(&Verdict {
+        parses: true,
+        signature_ok,
+        content_ok,
         job_id_ok,
         model_ok,
         ok,
@@ -108,30 +124,23 @@ pub fn weryfikuj(
         runtime: Some(r.runtime.clone()),
         signer: Some(r.signer.to_hex()),
         output_digest: Some(r.output_digest.clone()),
-        powod: if ok {
-            None
-        } else if !podpis_ok {
-            Some("Ed25519 signature does not match the receipt digest".into())
-        } else if tresc_ok == Some(false) {
-            Some("output digest (job_id + output) does not match the receipt".into())
-        } else {
-            Some("not all checks passed".into())
-        },
+        reason: reason.clone(),
+        parsuje_sie: true,
+        podpis_ok: signature_ok,
+        tresc_ok: content_ok,
+        powod: reason,
     })
 }
 
-/// Odcisk treści wyniku, liczący się z receiptem — do podglądu/diagnostyki.
-/// Ten sam wzór co w `odcisk_wyjscia` rdzenia.
+/// Canonical output digest matching receipt expectation.
 #[wasm_bindgen]
-pub fn odcisk_wyjscia(job_id: &str, output: &str) -> Option<String> {
-    simon_core::receipt::odcisk_wyjscia(job_id, output).ok()
+pub fn output_digest(job_id: &str, output: &str) -> Option<String> {
+    simon_core::receipt::output_digest_for(job_id, output).ok()
 }
 
-/// Bramka M1: czy receipt wiąże DOKŁADNIE ten tokenizer, nonce, prompt i wyjście
-/// (po tokenach). Tokeny podajemy jako JSON-owe tablice u32. Czysty CPU — bez
-/// wag i bez GPU. To ta sama logika co `Receipt::zweryfikuj_m1` w rdzeniu.
+/// Gate M1: whether the receipt binds EXACTLY this tokenizer, nonce, prompt, and output tokens.
 #[wasm_bindgen]
-pub fn weryfikuj_m1(
+pub fn verify_m1(
     receipt_json: &str,
     tokenizer_hash: &str,
     client_nonce: &str,
@@ -142,8 +151,8 @@ pub fn weryfikuj_m1(
         Ok(r) => r,
         Err(e) => {
             return serde_json::json!({
-                "ok": false, "poziom": 0,
-                "powod": format!("nieparsowalny receipt: {e}")
+                "ok": false, "level": 0,
+                "reason": format!("unparseable receipt: {e}"),
             })
             .to_string()
         }
@@ -152,8 +161,8 @@ pub fn weryfikuj_m1(
         Ok(v) => v,
         Err(e) => {
             return serde_json::json!({
-                "ok": false, "poziom": r.poziom(),
-                "powod": format!("prompt_token_ids_json: {e}")
+                "ok": false, "level": r.level(),
+                "reason": format!("prompt_token_ids_json: {e}"),
             })
             .to_string()
         }
@@ -162,81 +171,87 @@ pub fn weryfikuj_m1(
         Ok(v) => v,
         Err(e) => {
             return serde_json::json!({
-                "ok": false, "poziom": r.poziom(),
-                "powod": format!("output_token_ids_json: {e}")
+                "ok": false, "level": r.level(),
+                "reason": format!("output_token_ids_json: {e}"),
             })
             .to_string()
         }
     };
-    match r.zweryfikuj_m1(tokenizer_hash, client_nonce, &p, &o) {
-        Ok(()) => serde_json::json!({"ok": true, "poziom": r.poziom(), "powod": null}).to_string(),
-        Err(e) => serde_json::json!({"ok": false, "poziom": r.poziom(), "powod": e.to_string()})
-            .to_string(),
+    match r.verify_m1(tokenizer_hash, client_nonce, &p, &o) {
+        Ok(()) => serde_json::json!({
+            "ok": true,
+            "level": r.level(),
+            "reason": null,
+        })
+        .to_string(),
+        Err(e) => serde_json::json!({
+            "ok": false,
+            "level": r.level(),
+            "reason": e.to_string(),
+        })
+        .to_string(),
     }
 }
 
-/// Bramka M3: ocenia audyt wykonania (containment w top-k + margines).
-/// `audyt_json` = `{"kroki":[{indeks,node_token,topk:[[id,lp],..]}]}`.
+/// Gate M3: evaluates execution audit (containment in top-k + margin).
 #[wasm_bindgen]
-pub fn ocena_m3(audyt_json: &str, k: u32, max_margin: f64, max_poza: f64) -> String {
-    let polityka = simon_core::m3::Polityka {
+pub fn evaluate_m3(audit_json: &str, k: u32, max_margin: f64, max_outside: f64) -> String {
+    let policy = simon_core::m3::M3Policy {
         k: k as usize,
         max_margin,
-        max_poza,
+        max_outside,
     };
-    match simon_core::m3::ocena_json(audyt_json, &polityka) {
+    match simon_core::m3::evaluate_json(audit_json, &policy) {
         Ok(w) => serde_json::to_string(&w).unwrap_or_else(|_| "{\"ok\":false}".into()),
         Err(e) => {
-            serde_json::json!({"ok": false, "powod": format!("invalid audit: {e}")}).to_string()
+            serde_json::json!({"ok": false, "reason": format!("invalid audit: {e}"), "powod": format!("invalid audit: {e}")}).to_string()
         }
     }
 }
 
 #[cfg(test)]
-mod testy {
-    use super::weryfikuj;
+mod tests {
+    use super::{evaluate_m3, verify_m1, verify_receipt};
 
-    // Prawdziwy receipt z repo (nie wymyślony): przyklady/receipt.json +
-    // przyklady/odpowiedz.txt. To jest ten sam plik, który dostaje sędzia.
     const RECEIPT: &str = include_str!("../../../przyklady/receipt.json");
     const OUTPUT: &str = include_str!("../../../przyklady/odpowiedz.txt");
 
-    fn pole(json: &str, klucz: &str) -> serde_json::Value {
+    fn get_field(json: &str, key: &str) -> serde_json::Value {
         serde_json::from_str::<serde_json::Value>(json)
             .expect("JSON")
-            .get(klucz)
+            .get(key)
             .cloned()
             .unwrap_or(serde_json::Value::Null)
     }
 
     #[test]
-    fn poprawny_receipt_przechodzi() {
-        let w = weryfikuj(RECEIPT, Some(OUTPUT.to_string()), None, None);
-        assert_eq!(pole(&w, "ok"), serde_json::json!(true), "{w}");
-        assert_eq!(pole(&w, "podpis_ok"), serde_json::json!(true), "{w}");
-        assert_eq!(pole(&w, "tresc_ok"), serde_json::json!(true), "{w}");
+    fn valid_receipt_passes() {
+        let w = verify_receipt(RECEIPT, Some(OUTPUT.to_string()), None, None);
+        assert_eq!(get_field(&w, "ok"), serde_json::json!(true), "{w}");
+        assert_eq!(get_field(&w, "signature_ok"), serde_json::json!(true), "{w}");
+        assert_eq!(get_field(&w, "content_ok"), serde_json::json!(true), "{w}");
+        assert_eq!(get_field(&w, "podpis_ok"), serde_json::json!(true), "{w}");
+        assert_eq!(get_field(&w, "tresc_ok"), serde_json::json!(true), "{w}");
     }
 
     #[test]
-    fn jedna_spacja_lamie_tresc_ale_nie_podpis() {
-        let w = weryfikuj(RECEIPT, Some(format!("{OUTPUT} ")), None, None);
-        assert_eq!(pole(&w, "ok"), serde_json::json!(false), "{w}");
-        assert_eq!(pole(&w, "tresc_ok"), serde_json::json!(false), "{w}");
-        // Podpis jest nad odciskiem całego receiptu, więc dodanie spacji do
-        // TREŚCI (nie do receiptu) go nie łamie — i właśnie dlatego bramka
-        // treści musi istnieć.
-        assert_eq!(pole(&w, "podpis_ok"), serde_json::json!(true), "{w}");
+    fn single_space_breaks_content_not_signature() {
+        let w = verify_receipt(RECEIPT, Some(format!("{OUTPUT} ")), None, None);
+        assert_eq!(get_field(&w, "ok"), serde_json::json!(false), "{w}");
+        assert_eq!(get_field(&w, "content_ok"), serde_json::json!(false), "{w}");
+        assert_eq!(get_field(&w, "signature_ok"), serde_json::json!(true), "{w}");
     }
 
     #[test]
-    fn nieparsowalny_receipt_jest_odrzucony() {
-        let w = weryfikuj("{}", Some("cokolwiek".into()), None, None);
-        assert_eq!(pole(&w, "ok"), serde_json::json!(false), "{w}");
-        assert_eq!(pole(&w, "parsuje_sie"), serde_json::json!(false), "{w}");
+    fn unparseable_receipt_is_rejected() {
+        let w = verify_receipt("{}", Some("anything".into()), None, None);
+        assert_eq!(get_field(&w, "ok"), serde_json::json!(false), "{w}");
+        assert_eq!(get_field(&w, "parses"), serde_json::json!(false), "{w}");
+        assert_eq!(get_field(&w, "parsuje_sie"), serde_json::json!(false), "{w}");
     }
 
     #[test]
-    fn m1_wiazanie_przechodzi_i_tamper_lamie() {
+    fn m1_binding_passes_and_tamper_breaks() {
         use simon_core::crypto::Keypair;
         use simon_core::receipt::{Precision, Receipt};
 
@@ -250,18 +265,18 @@ mod testy {
             runtime: "llama.cpp/0.3".into(),
             precision: Precision::Fp16,
             activation_hash: "toploc:NIE_POLICZONY".into(),
-            output_digest: simon_core::receipt::odcisk_wyjscia("j", "x").unwrap(),
+            output_digest: simon_core::receipt::output_digest_for("j", "x").unwrap(),
             prompt_tokens: 3,
             completion_tokens: 3,
             started_at_us: 0,
             finished_at_us: 1,
             signer: k.public(),
             signature: None,
-            wiazania: None,
+            bindings: None,
         };
         let r = base
             .clone()
-            .z_wiazaniem_m1(
+            .with_m1_bindings(
                 "TH".into(),
                 "NONCE".into(),
                 &prompt,
@@ -275,18 +290,18 @@ mod testy {
             .unwrap();
         let rj = serde_json::to_string(&r).unwrap();
 
-        // poprawnie
-        let ok = super::weryfikuj_m1(&rj, "TH", "NONCE", "[1,2,3]", "[7,8,9]");
-        assert_eq!(pole(&ok, "ok"), serde_json::json!(true), "{ok}");
-        assert_eq!(pole(&ok, "poziom"), serde_json::json!(1), "{ok}");
-        // podmieniony output token
-        let bad = super::weryfikuj_m1(&rj, "TH", "NONCE", "[1,2,3]", "[7,8,999]");
-        assert_eq!(pole(&bad, "ok"), serde_json::json!(false), "{bad}");
-        // zły nonce
-        let bad2 = super::weryfikuj_m1(&rj, "TH", "INNY", "[1,2,3]", "[7,8,9]");
-        assert_eq!(pole(&bad2, "ok"), serde_json::json!(false), "{bad2}");
-        // niepodpisany receipt
-        let rj_unsigned = serde_json::to_string(&base.z_wiazaniem_m1(
+        // Valid
+        let ok = verify_m1(&rj, "TH", "NONCE", "[1,2,3]", "[7,8,9]");
+        assert_eq!(get_field(&ok, "ok"), serde_json::json!(true), "{ok}");
+        assert_eq!(get_field(&ok, "level"), serde_json::json!(1), "{ok}");
+        // Tampered output token
+        let bad = verify_m1(&rj, "TH", "NONCE", "[1,2,3]", "[7,8,999]");
+        assert_eq!(get_field(&bad, "ok"), serde_json::json!(false), "{bad}");
+        // Wrong nonce
+        let bad2 = verify_m1(&rj, "TH", "OTHER", "[1,2,3]", "[7,8,9]");
+        assert_eq!(get_field(&bad2, "ok"), serde_json::json!(false), "{bad2}");
+        // Unsigned receipt
+        let rj_unsigned = serde_json::to_string(&base.with_m1_bindings(
             "TH".into(),
             "NONCE".into(),
             &prompt,
@@ -295,28 +310,28 @@ mod testy {
             7,
             "llama.cpp/Q4_K_M/cpu".into(),
         ).unwrap()).unwrap();
-        let bad_unsigned = super::weryfikuj_m1(&rj_unsigned, "TH", "NONCE", "[1,2,3]", "[7,8,9]");
-        assert_eq!(pole(&bad_unsigned, "ok"), serde_json::json!(false), "{bad_unsigned}");
+        let bad_unsigned = verify_m1(&rj_unsigned, "TH", "NONCE", "[1,2,3]", "[7,8,9]");
+        assert_eq!(get_field(&bad_unsigned, "ok"), serde_json::json!(false), "{bad_unsigned}");
     }
 
     #[test]
-    fn m3_uczciwy_audyt_przechodzi_a_cheater_nie() {
-        // Uczciwy: node w top-2, margines ≤ 0,25.
-        let dobry = r#"{"kroki":[
-            {"indeks":0,"node_token":528,"topk":[[528,-1.20],[28742,-1.37]]},
-            {"indeks":1,"node_token":302,"topk":[[28725,-0.90],[302,-0.96]]}
+    fn m3_honest_audit_passes_and_cheater_fails() {
+        // Honest: node in top-2, margin <= 0.25
+        let good = r#"{"steps":[
+            {"index":0,"node_token":528,"topk":[[528,-1.20],[28742,-1.37]]},
+            {"index":1,"node_token":302,"topk":[[28725,-0.90],[302,-0.96]]}
         ]}"#;
-        let w = super::ocena_m3(dobry, 2, 0.25, 0.02);
-        assert_eq!(pole(&w, "ok"), serde_json::json!(true), "{w}");
-        assert_eq!(pole(&w, "w_topk"), serde_json::json!(2), "{w}");
+        let w = evaluate_m3(good, 2, 0.25, 0.02);
+        assert_eq!(get_field(&w, "ok"), serde_json::json!(true), "{w}");
+        assert_eq!(get_field(&w, "in_topk"), serde_json::json!(2), "{w}");
 
-        // Cheater: jeden token poza top-k.
-        let zly = r#"{"kroki":[
-            {"indeks":0,"node_token":528,"topk":[[528,-1.20]]},
-            {"indeks":1,"node_token":999999,"topk":[[28725,-0.90],[302,-0.96]]}
+        // Cheater: one token outside top-k
+        let bad = r#"{"steps":[
+            {"index":0,"node_token":528,"topk":[[528,-1.20]]},
+            {"index":1,"node_token":999999,"topk":[[28725,-0.90],[302,-0.96]]}
         ]}"#;
-        let w2 = super::ocena_m3(zly, 2, 0.25, 0.02);
-        assert_eq!(pole(&w2, "ok"), serde_json::json!(false), "{w2}");
-        assert_eq!(pole(&w2, "poza_topk"), serde_json::json!(1), "{w2}");
+        let w2 = evaluate_m3(bad, 2, 0.25, 0.02);
+        assert_eq!(get_field(&w2, "ok"), serde_json::json!(false), "{w2}");
+        assert_eq!(get_field(&w2, "outside_topk"), serde_json::json!(1), "{w2}");
     }
 }

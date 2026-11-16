@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
-"""Składa slajdy w jeden plik HTML i renderuje PDF (format wymagany przez lablab).
+"""Assembles slides into a single HTML file and renders PDF.
 
-Slajdy są źródłem prawdy — każdy to jedna sekcja na płótnie 1920×1080.
-Ten sam zestaw plików zasila deck w Artifacts i ten PDF, więc nie mogą się
-rozjechać.
+Slides are the source of truth - each is one section on a 1920x1080 canvas.
 
-Użycie:
+Usage:
     python3 buduj_slajdy.py            # HTML + PDF
-    python3 buduj_slajdy.py --arkusz   # dodatkowo arkusz miniatur do przeglądu
+    python3 buduj_slajdy.py --arkusz   # slide contact sheet for review
 """
 import json
 import pathlib
@@ -24,7 +22,7 @@ CZCIONKI = ("https://fonts.googleapis.com/css2?family=Fira+Sans:wght@400;500;700
 def zloz_html(do_druku: bool) -> str:
     deck = json.loads((SLAJDY / "deck.json").read_text())
     sekcje = "".join((SLAJDY / f"{s}.html").read_text() for s in deck["order"])
-    # @page w px, bo płótno slajdu jest w px — inaczej Chrome przeskaluje i utnie.
+    # @page in px matching slide canvas - avoids Chrome scaling issues.
     druk = """
       @page { size: 1920px 1080px; margin: 0 }
       section { page-break-after: always; break-after: page }
@@ -37,7 +35,7 @@ def zloz_html(do_druku: bool) -> str:
   body {{ margin:0 }} {tlo}
   section {{ width:1920px; height:1080px; box-sizing:border-box;
              overflow:hidden; position:relative }}
-  aside {{ display:none }}   /* notatki prelegenta nie idą na slajd */
+  aside {{ display:none }}   /* speaker notes omitted from slide */
   {druk}
 </style></head><body>{sekcje}</body></html>"""
 
@@ -46,7 +44,7 @@ def przegladarka() -> str:
     for b in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"):
         if shutil.which(b):
             return b
-    raise SystemExit("brak Chrome/Chromium — nie zrobię PDF-a")
+    raise SystemExit("missing Chrome/Chromium - cannot render PDF")
 
 
 def main() -> None:
@@ -59,7 +57,7 @@ def main() -> None:
                    capture_output=True, timeout=300, check=False)
     druk.unlink(missing_ok=True)
     if not pdf.exists():
-        raise SystemExit("PDF się nie wygenerował")
+        raise SystemExit("PDF failed to generate")
     print(f"OK -> {pdf.name} ({pdf.stat().st_size // 1024} kB)")
 
     if "--arkusz" in sys.argv:
@@ -81,7 +79,7 @@ def main() -> None:
             d.text(((i % 2) * mini[0] + 6, (i // 2) * mini[1] + 4), f"{i}:{sid}", fill="#0f0")
         ark.save(KAT / "arkusz-slajdow.png")
         pelny.unlink(missing_ok=True)
-        print(f"OK -> arkusz-slajdow.png")
+        print("OK -> arkusz-slajdow.png")
 
 
 if __name__ == "__main__":

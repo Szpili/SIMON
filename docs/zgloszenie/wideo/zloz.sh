@@ -1,10 +1,7 @@
 #!/usr/bin/env bash
-# Składa wideo zgłoszeniowe: plansza tytułowa + ujęcia + plansza końcowa.
+# Assembles submission video: title card + takes + end card.
 #
-# Plansze robimy z okładki, którą już mamy — jedna tożsamość wizualna dla
-# całego zgłoszenia, zero generowania czegokolwiek.
-#
-# Użycie:
+# Usage:
 #   ./zloz.sh surowe/ujecie-2-*.mp4 surowe/ujecie-3-*.mp4 ...
 set -euo pipefail
 
@@ -13,10 +10,10 @@ OKLADKA="$KAT/../okladka-1920x1080.png"
 ROBOCZY="$(mktemp -d)"
 trap 'rm -rf "$ROBOCZY"' EXIT
 
-[ -f "$OKLADKA" ] || { echo "brak okładki: $OKLADKA" >&2; exit 1; }
-[ $# -ge 1 ] || { echo "podaj nagrane ujęcia w kolejności" >&2; exit 1; }
+[ -f "$OKLADKA" ] || { echo "missing cover: $OKLADKA" >&2; exit 1; }
+[ $# -ge 1 ] || { echo "provide recorded takes in order" >&2; exit 1; }
 
-# Plansze: 4 s obrazu z wejściem i wyjściem przez fade.
+# Cards: 4s video with fade in and fade out.
 plansza() {
     ffmpeg -hide_banner -loglevel error -y -loop 1 -t 4 -i "$OKLADKA" \
         -vf "scale=1920:1080,fade=in:0:20,fade=out:70:20,format=yuv420p" \
@@ -25,17 +22,15 @@ plansza() {
 plansza "$ROBOCZY/tytul.mp4"
 plansza "$ROBOCZY/koniec.mp4"
 
-# Ujęcia normalizujemy do wspólnych parametrów — inaczej konkatenacja
-# strumieni o różnym fps albo formacie pikseli daje zacinający się plik.
+# Normalize takes to matching parameters.
 LISTA="$ROBOCZY/lista.txt"
 echo "file '$ROBOCZY/tytul.mp4'" > "$LISTA"
 i=0
 for u in "$@"; do
-    [ -f "$u" ] || { echo "brak pliku: $u" >&2; exit 1; }
+    [ -f "$u" ] || { echo "missing file: $u" >&2; exit 1; }
     i=$((i + 1))
     N="$ROBOCZY/u$i.mp4"
-    # Ciche ujęcia dostają ścieżkę ciszy, żeby konkatenacja nie zgubiła audio
-    # tam, gdzie któreś ujęcie MA narrację.
+    # Silent takes get silence audio track so concat preserves audio.
     ffmpeg -hide_banner -loglevel error -y -i "$u" \
         -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=48000 \
         -shortest -map 0:v:0 -map "1:a:0?" \
@@ -59,4 +54,4 @@ ffprobe -hide_banner -v error -show_entries format=duration,size \
     -of default=noprint_wrappers=1 "$WYJSCIE"
 echo "-> $WYJSCIE"
 echo
-echo "Sprawdź długość: lablab lubi 2-5 minut. Dłuższe wideo nikt nie dogląda do końca."
+echo "Check duration: recommended target is 2-5 minutes."

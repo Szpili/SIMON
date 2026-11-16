@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""FP-pod-uczciwą-zmiennością (pre-rejestracja: docs/FP-PREREGISTRATION.md).
+"""FP-under-honest-variance matrix (preregistration: docs/FP-PREREGISTRATION.md).
 
-Dla każdej uczciwej konfiguracji C i każdego promptu p:
-  node = C generuje N tokenów WŁASNĄ trajektorią (greedy),
-  reference (config 1) teacher-forcingiem ocenia sekwencję node'a,
-  contain2 = czy token node'a jest w top-2 referencji w marginesie,
+For each honest configuration C and each prompt p:
+  node = C generates N tokens with its OWN trajectory (greedy),
+  reference (config 1) evaluates the node sequence via teacher forcing,
+  contain2 = whether the node token is in the top-2 reference tokens within margin,
   flagged = (1 - contain2_frac) > max_poza.
 
-PASS = żaden uczciwy config nie flaguje żadnego promptu. Metryka = contain2 (shipowana),
-jednostka = tekst promptu, ≥30 RÓŻNYCH promptów.
+PASS = no honest config flags any prompt. Metric = contain2 (shipped),
+unit = prompt text, >=30 DISTINCT prompts.
 
-Użycie:
+Usage:
   python3 fp_matrix.py --ref http://127.0.0.1:PORT \
       --cfg "cpu=http://127.0.0.1:PORT" --cfg "cpu_b512=..." ... \
       --prompts prompts_fp.txt --tokens 20 --topk 5 --max-poza 0.02 --margin 0.25 --out fp.jsonl
@@ -33,7 +33,7 @@ def contain2_step(node_token, ref_topk, k=2, margin=0.25):
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ref", required=True)
-    ap.add_argument("--cfg", action="append", required=True, help="nazwa=url (można wiele)")
+    ap.add_argument("--cfg", action="append", required=True, help="name=url (can repeat)")
     ap.add_argument("--prompts", default="prompts_fp.txt")
     ap.add_argument("--tokens", type=int, default=20)
     ap.add_argument("--topk", type=int, default=5)
@@ -50,14 +50,14 @@ def main() -> int:
         configs.insert(0, ("ref", a.ref))
 
     prompty = [p.strip() for p in open(a.prompts, encoding="utf-8") if p.strip()]
-    print(f"promptów: {len(prompty)}  configów: {len(configs)}  max_poza={a.max_poza} margin={a.margin}")
+    print(f"prompts: {len(prompty)}  configs: {len(configs)}  max_poza={a.max_poza} margin={a.margin}")
 
     f = open(a.out, "w", encoding="utf-8")
-    # sanity: tokenizery muszą być identyczne
+    # sanity: tokenizers must match
     for nazwa, url in configs:
         ok, pole = ms.tokenizer_ok(a.ref, url)
         if not ok:
-            print(f"STOP: tokenizer DIFF dla {nazwa} ({pole})"); return 2
+            print(f"STOP: tokenizer DIFF for {nazwa} ({pole})"); return 2
 
     podsumowanie = {}
     for nazwa, url in configs:
@@ -87,14 +87,14 @@ def main() -> int:
               f"max={podsumowanie.get(nazwa,(0,0,0))[1]:.4f} flagged={flagowane}/{len(frs)}")
     f.close()
 
-    # PASS/FAIL wg pre-rejestracji
+    # PASS/FAIL per preregistration
     fail = [(n, v[2]) for n, v in podsumowanie.items() if v[2] > 0]
-    print("\n=== WERDYKT (pre-rejestracja) ===")
+    print("\n=== VERDICT (preregistration) ===")
     if fail:
-        print(f"FAIL: uczciwe configi flagowane: {fail} → M3 zostaje TELEMETRIĄ, bez eskalacji.")
+        print(f"FAIL: honest configs flagged: {fail} -> M3 remains TELEMETRY, no escalation.")
     else:
-        print(f"PASS: żaden z {len(podsumowanie)} configów nie flagował promptu "
-              f"(0/{len(prompty)} → FP ≤ ~9% przy 95%).")
+        print(f"PASS: none of {len(podsumowanie)} configs flagged any prompt "
+              f"(0/{len(prompty)} -> FP <= ~9% at 95%).")
     print(f"JSONL: {a.out}")
     return 1 if fail else 0
 

@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Model-substitution SENSITIVITY test (nie proof).
+"""Model-substitution SENSITIVITY test (not proof).
 
-Wg oceny hackerskiej 2026-10-05:
-- `reference`, nie `verifier` (gdy honest == reference, dystans 0 jest tautologiczny).
-- Exact tokenizer metadata check PRZED startem (chat_template, BOS, EOS, add_bos/eos).
-- **Fixed sequence** do teacher-forcing (nie każdy model generuje swoją).
-- Metryki: top-2 overlap, top-5 overlap, KL(ref||other), entropy diff, contain@1/@2.
-- Random-token jako OSOBNY negative control.
-- JSONL z surowymi danymi; AUROC + histogram overlap; brak targetu „AUROC≥0.9 jako claim".
+Under hacker evaluation guidelines:
+- `reference`, not `verifier` (when honest == reference, distance 0 is tautological).
+- Exact tokenizer metadata check BEFORE starting (chat_template, BOS, EOS, add_bos/eos).
+- Fixed sequence for teacher forcing (not every model generates its own).
+- Metrics: top-2 overlap, top-5 overlap, KL(ref||other), entropy diff, contain@1/@2.
+- Random-token as SEPARATE negative control.
+- JSONL with raw data; AUROC + histogram overlap; no target claim "AUROC >= 0.9".
 
-Użycie:
+Usage:
   python3 model_substitution.py --ref http://127.0.0.1:18201 --sub http://127.0.0.1:18200 \
       --n 3 --tokens 20 --topk 5 --out /tmp/sub.jsonl
 """
@@ -18,8 +18,8 @@ from __future__ import annotations
 import argparse, json, math, sys, time, urllib.request, urllib.error
 
 def _post(base, path, body, timeout=900, proby=4):
-    # llama.cpp potrafi zwrócić 500 (np. "Content-only format") na pojedynczym żądaniu —
-    # retry z backoffem, żeby długi run nie padał na jednym kroku.
+    # llama.cpp can return 500 (e.g. "Content-only format") on single requests -
+    # retry with backoff so long runs do not fail on a single step.
     ostatni = None
     for k in range(proby):
         try:
@@ -55,7 +55,7 @@ def _topk(krok, k):
     return sorted(((i, lp) for i, lp in tops.items() if i is not None), key=lambda kv: -(kv[1] or -1e9))[:k]
 
 def gen_reference(base, prompt_ids, n, k):
-    """Greedy generacja referencji: zwraca (sequence, per_step_topk)."""
+    """Greedy generation of reference: returns (sequence, per_step_topk)."""
     d = _post(base, "/completion", {"prompt": prompt_ids, "n_predict": n, "temperature": 0,
                                     "top_k": 1, "seed": 42, "ignore_eos": True, "cache_prompt": False,
                                     "stream": False, "n_probs": k})
@@ -65,7 +65,7 @@ def gen_reference(base, prompt_ids, n, k):
     return seq, tops
 
 def force_eval(base, prompt_ids, seq, k):
-    """Teacher-forcing na STAŁEJ sekwencji: dla każdego kroku top-k przy kontekście prompt+seq[:t]."""
+    """Teacher-forcing on FIXED sequence: for each step top-k given context prompt+seq[:t]."""
     out = []
     for t in range(len(seq)):
         d = _post(base, "/completion", {"prompt": list(prompt_ids) + list(seq[:t]), "n_predict": 1,
@@ -76,7 +76,7 @@ def force_eval(base, prompt_ids, seq, k):
     return out
 
 def _kl(ref, other):
-    # przybliżone KL(ref||other) po unii top-k, z renormalizacją
+    # approximate KL(ref||other) over union of top-k, with renormalization
     ids = set(i for i, _ in ref) | set(i for i, _ in other)
     def renorm(tops):
         d = {i: math.exp(lp) for i, lp in tops}
@@ -104,13 +104,13 @@ def metryki(ref_t, other_t, k):
     }
 
 def auroc(pos, neg):
-    """pos=substitute scores (im niższy overlap tym bardziej 'pozytywny'), neg=honest."""
+    """pos=substitute scores (lower overlap is more 'positive'), neg=honest."""
     if not pos or not neg:
         return float("nan")
     wins = 0.0
     for p in pos:
         for n in neg:
-            wins += 1.0 if p < n else (0.5 if p == n else 0.0)   # niższy = bardziej podejrzany
+            wins += 1.0 if p < n else (0.5 if p == n else 0.0)   # lower = more suspicious
     return wins / (len(pos) * len(neg))
 
 PROMPTY = [
@@ -152,9 +152,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ref", required=True)
     ap.add_argument("--sub", required=True)
-    # honest cross-device: ten sam model/GGUF/commit co --ref, ale inne urządzenie/offload.
-    # Bez tego `honest == reference` jest tautologiczne (dystans 0).
-    ap.add_argument("--honest", default=None, help="endpoint honest (domyślnie = --ref)")
+    # honest cross-device: same model/GGUF/commit as --ref, but different device/offload.
+    # Without this, `honest == reference` is tautological (distance 0).
+    ap.add_argument("--honest", default=None, help="endpoint honest (default = --ref)")
     ap.add_argument("--n", type=int, default=3)
     ap.add_argument("--tokens", type=int, default=20)
     ap.add_argument("--topk", type=int, default=5)
@@ -166,31 +166,30 @@ def main():
     ok2, p2 = tokenizer_ok(a.ref, honest_ep)
     ok = ok1 and ok2
     pole = p1 or p2
-    print(f"tokenizer exact: {'OK' if ok else 'DIFF w '+str(pole)}")
+    print(f"tokenizer exact: {'OK' if ok else 'DIFF in '+str(pole)}")
     if not ok:
-        print("STOP: tokenizery różne — nie mieszaj."); return 2
-    print(f"honest endpoint: {honest_ep} ({'cross-device' if honest_ep != a.ref else 'SAME as reference - tautologiczne'})")
+        print("STOP: tokenizers differ - cannot mix."); return 2
+    print(f"honest endpoint: {honest_ep} ({'cross-device' if honest_ep != a.ref else 'SAME as reference - tautological'})")
 
     f = open(a.out, "w", encoding="utf-8")
     honest_scores, sub_scores = [], []
-    honest_c2, sub_c2 = [], []   # contain2 = shipowana metryka m3::ocena
-    pominięte = 0
+    honest_c2, sub_c2 = [], []   # contain2 = shipped metric m3::evaluate
+    pominiete = 0
     for pid in range(a.n):
         try:
             prompt = PROMPTY[pid % len(PROMPTY)]
             pids = _post(a.ref, "/tokenize", {"content": prompt})["tokens"]
             seq, _ = gen_reference(a.ref, pids, a.tokens, a.topk)
-            # REGIME-MATCHED: ref_top przez force_eval (cache_prompt:True, 1-token), tak jak ramiona.
-            # (fable 2026-10-06: wcześniej ref_top był batched n_predict=20 → mieszał device z prefill-vs-cache.)
+            # REGIME-MATCHED: ref_top via force_eval (cache_prompt:True, 1-token), matching branches.
             ref_top = force_eval(a.ref, pids, seq, a.topk)
-            honest_top = force_eval(honest_ep, pids, seq, a.topk)  # honest (cross-device albo ref)
+            honest_top = force_eval(honest_ep, pids, seq, a.topk)  # honest (cross-device or ref)
             sub_top = force_eval(a.sub, pids, seq, a.topk)         # substitute
-            # random-token control: losowe tokeny zamiast modelu
+            # random-token control: random tokens instead of model output
             import random; random.seed(pid)
             rand_tokens = [random.randint(0, 100000) for _ in seq]
             rand_top = force_eval(a.sub, pids, rand_tokens, a.topk)
-        except Exception as e:  # noqa: BLE001 — pojedynczy prompt/server-500 nie zabija runu
-            pominięte += 1
+        except Exception as e:  # noqa: BLE001
+            pominiete += 1
             print(f"p{pid}: SKIP ({str(e)[:80]})")
             continue
 
@@ -214,10 +213,10 @@ def main():
               f"random top2={r['top2_overlap']:.3f}")
 
     f.close()
-    print(f"pominięte prompty: {pominięte}")
-    # SHIPOWANA metryka to contain2 (m3::ocena), nie top2_overlap (fable 2026-10-06).
+    print(f"skipped prompts: {pominiete}")
+    # Shipped metric is contain2 (m3::evaluate), not top2_overlap.
     print(f"\nAUROC by top2_overlap          = {auroc(sub_scores, honest_scores):.3f}")
-    print(f"AUROC by contain2 (SHIPOWANE)  = {auroc(sub_c2, honest_c2):.3f}")
+    print(f"AUROC by contain2 (SHIPPED)    = {auroc(sub_c2, honest_c2):.3f}")
     print(f"mean top2: honest={sum(honest_scores)/len(honest_scores):.3f}  "
           f"substitute={sum(sub_scores)/len(sub_scores):.3f}  |  "
           f"mean contain2: honest={sum(honest_c2)/max(1,len(honest_c2)):.3f} "

@@ -1,13 +1,9 @@
-//! Test integracyjny: DWA swarmy w jednym procesie, realne połączenie TCP.
+//! Integration test: two swarms in a single process communicating over TCP.
 //!
-//! To jest etap 1 z planu: sprawdza, że transport realnie działa, ZANIM
-//! cokolwiek zainstalujemy na Franku i Macu. Bez tego testu instalacja byłaby
-//! zgadywaniem.
-//!
-//! Sprawdza trzy rzeczy:
-//!   1. czy dwa nody się znajdują i łączą (gossipsub handshake),
-//!   2. czy wiadomość opublikowana przez jednego dochodzi do drugiego,
-//!   3. czy round-trip bajtów NIE psuje odcisku zlecenia (podpis musi przetrwać).
+//! Verifies:
+//!   1. peer discovery and connection (gossipsub handshake),
+//!   2. message delivery across topic subscriptions,
+//!   3. round-trip serialization preservation of order digest.
 
 use std::time::Duration;
 
@@ -16,7 +12,7 @@ use simon_core::crypto::Keypair;
 use simon_harness::client_protocol::{JobOrder, TOPIC_JOB_ORDER};
 use simon_harness::transport::{spawn_swarm, SimonEvent};
 
-/// Zbiera eventy z swarmu przez `limit` czasu, zwraca te, które pasują.
+/// Collects swarm events within timeout limit.
 async fn zbieraj(
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<SimonEvent>,
     limit: Duration,
@@ -37,7 +33,7 @@ async fn zbieraj(
     out
 }
 
-/// Czeka na połączenie peera (gossipsub wymaga established connection + handshake).
+/// Waits for a peer connection event.
 async fn czekaj_na_peera(
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<SimonEvent>,
     limit: Duration,
@@ -68,36 +64,30 @@ async fn dwa_swarmy_lacza_sie_i_przekazuja_zlecenie() {
     node_a.subscribe(TOPIC_JOB_ORDER).expect("subscribe A");
     node_b.subscribe(TOPIC_JOB_ORDER).expect("subscribe B");
 
-    // Adres nasluchu A — system przydzielil port, wiec musimy go ODCZYTAC,
-    // a nie zgadywac (dialowanie na port 0 nie ma sensu).
+    // Discover ephemeral listen address of A.
     let addr_a = czekaj_na_adres(&mut ev_a, Duration::from_secs(10)).await;
     assert!(
         addr_a.is_some(),
-        "swarm A nie zglosil adresu nasluchu — nie ma jak go dialowac"
+        "swarm A did not report listen address"
     );
     let addr_a = addr_a.unwrap();
 
-    // B dialuje A. PeerId A dokladamy jako /p2p/, zeby polaczenie bylo
-    // przypisane do wlasciwej tozsamosci (inaczej gossipsub nie zrobi handshake).
+    // B dials A with peer ID.
     let z_p2p: Multiaddr = format!("{addr_a}/p2p/{}", node_a.peer_id)
         .parse()
-        .expect("adres z p2p");
+        .expect("address with p2p");
     node_b.dial(z_p2p).expect("dial");
 
-    // Gossipsub wymaga established connection ORAZ handshake protokolu.
     let polaczenie = czekaj_na_peera(&mut ev_b, Duration::from_secs(20)).await;
     assert!(
         polaczenie.is_some(),
-        "swarmy nie nawiazaly polaczenia — gossipsub nie zadziala bez established peer"
+        "swarms failed to establish connection"
     );
 
-    // Gossipsub potrzebuje chwili na mesh formation po polaczeniu.
-    // Bez tej zwloki publish moze trafic w pusty mesh (zmierzone: 0 odbiorcow).
+    // Allow time for gossipsub mesh formation.
     tokio::time::sleep(Duration::from_millis(1500)).await;
 
-    // Zlecenie do rozgloszenia.
     let key = Keypair::generate();
-    // M0.2: order_id liczony z treści + nonce.
     let order = JobOrder::new(
         "sha256:model",
         b"test lan",
@@ -105,9 +95,9 @@ async fn dwa_swarmy_lacza_sie_i_przekazuja_zlecenie() {
         300,
         key.public().to_hex(),
     )
-    .expect("zlecenie");
-    let bajty = serde_json::to_vec(&order).expect("serializacja");
-    let odcisk_przed = order.digest().expect("odcisk przed");
+    .expect("order");
+    let bajty = serde_json::to_vec(&order).expect("serialization");
+    let odcisk_przed = order.digest().expect("digest before");
 
     node_a.publish(TOPIC_JOB_ORDER, bajty).expect("publish");
 
@@ -119,24 +109,22 @@ async fn dwa_swarmy_lacza_sie_i_przekazuja_zlecenie() {
 
     assert!(
         odebrane.is_some(),
-        "zlecenie nie dotarlo do drugiego swarmu (eventy: {})",
+        "order message did not reach second swarm (events: {})",
         eventy.len()
     );
 
-    // KLUCZOWE: round-trip przez siec NIE MOZE zmienic odcisku.
     let odebrane_bajty = odebrane.unwrap();
-    let odtworzone: JobOrder = serde_json::from_slice(&odebrane_bajty).expect("deserializacja");
+    let odtworzone: JobOrder = serde_json::from_slice(&odebrane_bajty).expect("deserialization");
     assert_eq!(
         odtworzone.digest().unwrap(),
         odcisk_przed,
-        "odcisk zlecenia zmienil sie przez siec — podpis by nie przeszedl"
+        "order digest changed over network roundtrip"
     );
 
     node_a.shutdown();
     node_b.shutdown();
 }
 
-/// Czeka na adres nasluchu lokalnego (pomija adresy IPv6/wildcard).
 async fn czekaj_na_adres(
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<SimonEvent>,
     limit: Duration,
@@ -167,19 +155,17 @@ async fn dwa_swarmy_maja_rozne_peer_id() {
     let (b, _eb) = spawn_swarm(vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()])
         .await
         .expect("B");
-    assert_ne!(a.peer_id, b.peer_id, "każdy node ma własną tożsamość");
+    assert_ne!(a.peer_id, b.peer_id, "each node must have distinct peer identity");
     a.shutdown();
     b.shutdown();
 }
 
 #[tokio::test]
 async fn publikacja_bez_subskrybenta_nie_panikuje() {
-    // Gossipsub bez peerów nie ma gdzie wysłać — to NIE jest błąd.
-    // Kontrakt: publikacja na pusty swarm kończy się cicho (Err w logu), nie paniką.
     let (a, _ea) = spawn_swarm(vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()])
         .await
         .expect("A");
     let wynik = a.publish(TOPIC_JOB_ORDER, b"test".to_vec());
-    assert!(wynik.is_ok(), "kolejka przyjęła publikację");
+    assert!(wynik.is_ok(), "publish to empty mesh accepted into queue");
     a.shutdown();
 }

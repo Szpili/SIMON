@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""SIMON mały guard — dla słabego sprzętu (CPU), bez GPU.
+"""SIMON small guard - for lightweight hardware (CPU), no GPU required.
 
-Warstwy:
-  1. REGUŁY (deterministyczne, `pii_pl.Anonimizer`): PII strukturalne (PESEL/NIP/REGON/IBAN/
-     TEL/EMAIL/…) + SEKRETY (KLUCZ_API/TOKEN/HASLO/CONNSTR/…). 0 ms, sumy kontrolne.
-  2. MODEL (Bielik-Guard 0.1B/0.5B, apache-2.0): toksyczność w 5 kategoriach
-     (hate/vulgar/sex/crime/self-harm). ~0,1–0,3 s na CPU, ~0,5–1,7 GB.
+Layers:
+  1. RULES (deterministic, `pii_pl.Anonimizer`): structural PII (PESEL/NIP/REGON/IBAN/
+     TEL/EMAIL/...) + SECRETS (API_KEY/TOKEN/PASSWORD/CONNSTR/...). 0 ms, checksums.
+  2. MODEL (Bielik-Guard 0.1B/0.5B, apache-2.0): toxicity across 5 categories
+     (hate/vulgar/sex/crime/self-harm). ~0.1-0.3 s on CPU, ~0.5-1.7 GB.
 
-CZEGO NIE ROBI (uczciwie): NIE łapie prompt injection (to warstwa semantyczna LLM 11B/agent —
-patrz brain `szyfrowanie-promptow-pgp-vs-injection`, `anon-guard-simon-bielik`). Guard widzi
-treść ⇒ RULES #1: kto hostuje guard, ten widzi prompt.
+Scope: does NOT catch semantic prompt injection (that is LLM 11B/agent layer).
+Guard inspects content => RULES #1: host who runs guard sees prompt.
 
-Użycie:
-  python3 guard_small.py "tekst do sprawdzenia"
-  echo "tekst" | python3 guard_small.py --stdin
+Usage:
+  python3 guard_small.py "text to verify"
+  echo "text" | python3 guard_small.py --stdin
   python3 guard_small.py --serve --port 19301          # POST /guard {"text": "..."}
   python3 guard_small.py --bench ~/.openclaw/workspace/anon-guard/test-bielik-guard.py
 """
@@ -115,7 +114,7 @@ def _bench(guard: Guard, sciezka: str) -> None:
     except SystemExit:
         pass
     cases = getattr(m, "CASES", [])
-    # metryki reguł: PII/SEKRET; INJECTION reguły nie łapią (raportujemy wprost)
+    # rule metrics: PII/SEKRET; INJECTION rules do not catch (reported explicitly)
     tp = {k: 0 for k in ("PII", "SEKRET", "INJECTION", "CZYSTE")}
     fp = 0
     lat_r = lat_m = 0.0
@@ -128,10 +127,10 @@ def _bench(guard: Guard, sciezka: str) -> None:
         elif klasa == "CZYSTE" and r["ryzyko"]: fp += 1
     from collections import Counter
     n = Counter(c[1] for c in cases)
-    print(f"przypadków={len(cases)}  {dict(n)}")
-    print(f"REGUŁY: PII {tp['PII']}/{n['PII']}  SEKRET {tp['SEKRET']}/{n['SEKRET']}  "
-          f"INJECTION {tp['INJECTION']}/{n['INJECTION']}  CZYSTE FP {fp}/{n['CZYSTE']}")
-    print(f"latencja średnia: reguły {lat_r/len(cases):.2f} ms, model {lat_m/len(cases):.1f} ms")
+    print(f"cases={len(cases)}  {dict(n)}")
+    print(f"RULES: PII {tp['PII']}/{n['PII']}  SEKRET {tp['SEKRET']}/{n['SEKRET']}  "
+          f"INJECTION {tp['INJECTION']}/{n['INJECTION']}  CLEAN FP {fp}/{n['CZYSTE']}")
+    print(f"avg latency: rules {lat_r/len(cases):.2f} ms, model {lat_m/len(cases):.1f} ms")
 
 
 def main() -> int:
@@ -149,7 +148,7 @@ def main() -> int:
     if a.serve:
         g = Guard(a.dir, a.prog, use_model=not a.no_model)
         srv = ThreadingHTTPServer(("127.0.0.1", a.port), _handler(g))
-        print(f"guard na http://127.0.0.1:{a.port}/guard (loopback; RULES #1: widzi treść)", flush=True)
+        print(f"guard on http://127.0.0.1:{a.port}/guard (loopback; RULES #1: sees prompt)", flush=True)
         srv.serve_forever()
         return 0
 

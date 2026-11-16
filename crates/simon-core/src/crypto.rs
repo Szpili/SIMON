@@ -1,8 +1,7 @@
-//! Kryptografia SIMON — Ed25519 (plan §1: `ed25519-dalek`, NIE secp256k1).
+//! SIMON Cryptography - Ed25519 (ed25519-dalek).
 //!
-//! Klucz publiczny = tożsamość node'a (D15: reputacja per OPERATOR).
-//! D81: krzywa służy WYŁĄCZNIE do podpisów — bezpieczeństwo łańcucha stoi
-//! na krypto + stake, nigdy na ilości policzonej inferencji.
+//! Public key = node identity (reputation per OPERATOR).
+//! Curve used EXCLUSIVELY for signatures - network security rests on crypto + stake.
 
 use ed25519_dalek::{Signature as DalekSignature, Signer};
 #[cfg(not(target_arch = "wasm32"))]
@@ -10,26 +9,23 @@ use rand::rngs::OsRng;
 
 use crate::SimonError;
 
-/// Para kluczy. W SIMON nie ma portfeli bez podpisów (D12), a nie ma podpisów
-/// bez trwałej tożsamości.
+/// Keypair. In SIMON every node identity is bound to a signature keypair.
 pub struct Keypair {
     inner: ed25519_dalek::SigningKey,
 }
 
-/// Klucz publiczny (32 B) — tożsamość node'a w rejestrze.
+/// Public key (32 B) - node identity in the registry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct PublicKey(#[serde(with = "hex_bytes")] pub [u8; 32]);
 
-/// Podpis (64 B).
+/// Signature (64 B).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Signature(#[serde(with = "hex_bytes64")] pub [u8; 64]);
 
 impl Keypair {
-    /// Generuje nową parę kluczy z CSPRNG systemowego.
+    /// Generates a new keypair from system CSPRNG.
     ///
-    /// Host-only: na wasm32-unknown-unknown nie ma systemowego CSPRNG bez
-    /// JS-glu, a weryfikacja receiptu (jedyne, co robi WASM) nie generuje
-    /// kluczy — tylko weryfikuje podpisy istniejącymi.
+    /// Host-only: on wasm32-unknown-unknown system CSPRNG is unavailable without JS glue.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn generate() -> Self {
         Self {
@@ -37,7 +33,7 @@ impl Keypair {
         }
     }
 
-    /// Odtwarza parę z 32-bajtowego ziarna (testy, deterministyczny replay).
+    /// Reconstructs keypair from a 32-byte seed (for tests and deterministic replay).
     pub fn from_seed(seed: &[u8; 32]) -> Self {
         Self {
             inner: ed25519_dalek::SigningKey::from_bytes(seed),
@@ -48,8 +44,8 @@ impl Keypair {
         PublicKey(self.inner.verifying_key().to_bytes())
     }
 
-    /// Podpisuje odcisk treści. Podpisujemy ODCISK, nie surową treść —
-    /// dzięki temu to samo API obsługuje receipty, joby i wiadomości protokołu.
+    /// Signs content digest. We sign the DIGEST, not raw content -
+    /// allowing the same API across receipts, jobs, and protocol messages.
     pub fn sign_digest(&self, digest_hex: &str) -> Signature {
         Signature(self.inner.sign(digest_hex.as_bytes()).to_bytes())
     }
@@ -68,27 +64,23 @@ impl PublicKey {
         Ok(PublicKey(arr))
     }
 
-    /// Weryfikuje podpis nad odciskiem treści.
+    /// Verifies signature over content digest.
     pub fn verify_digest(&self, digest_hex: &str, sig: &Signature) -> Result<(), SimonError> {
         let key = ed25519_dalek::VerifyingKey::from_bytes(&self.0)
             .map_err(|e| SimonError::Crypto(e.to_string()))?;
-        // Klucz małego rzędu daje „ważny” podpis bez klucza prywatnego: punkt tożsamościowy
-        // 01||00*31 z R = tożsamość i s = 0 przechodził `verify` dla każdej wiadomości,
-        // a 00..00 (rząd 4) przy stałym R dla ok. 1/4 odcisków, przy czym atakujący dobiera
-        // R albo treść (tests/slabe_klucze.rs przed poprawką: 256/256 i 67/256).
-        // `verify_strict` też odrzuca taki klucz; jawne `is_weak` to asekuracja.
+        // Small-order keys could allow valid signatures without private keys.
+        // Reject weak keys explicitly before verification.
         if key.is_weak() {
             return Err(SimonError::BadSignature);
         }
         let s = DalekSignature::from_bytes(&sig.0);
-        // verify_strict = verify + odrzucenie R i klucza małego rzędu (niekanoniczne s i R
-        // odrzuca już zwykły verify w ed25519-dalek 2.x).
+        // verify_strict enforces canonical s and R and rejects small order points.
         key.verify_strict(digest_hex.as_bytes(), &s)
             .map_err(|_| SimonError::BadSignature)
     }
 }
 
-// --- serde helpery: bajty jako hex w JSON (czytelne w receipcie) ---
+// --- serde helpers: bytes as hex in JSON ---
 
 mod hex_bytes {
     use serde::{Deserialize, Deserializer, Serializer};

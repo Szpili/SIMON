@@ -1,10 +1,9 @@
-//! M0.1 — podpisane `OrderAccepted` + filtr PRZED `winner()`.
+//! M0.1 — Signed `OrderAccepted` and filter before `winner()`.
 //!
-//! Testy napisane PRZED poprawką (zasada: „test pada przed poprawką").
-//! Klasa ataku (macierz RT3): przejęcie koordynatora przez wygenerowany klucz.
+//! Attack class (RT3 matrix): hijacking the coordinator via generated untrusted keys.
 
 use simon_core::crypto::Keypair;
-use simon_harness::client_protocol::{OrderAccepted, RejestrKoordynatorow};
+use simon_harness::client_protocol::{CoordinatorRegistry, OrderAccepted};
 
 fn accept(pk: &str, job: &str) -> OrderAccepted {
     OrderAccepted {
@@ -18,83 +17,83 @@ fn accept(pk: &str, job: &str) -> OrderAccepted {
     }
 }
 
-/// Atakujący generuje klucz o hashu LEPSZYM niż uczciwy, ale NIE MA go na liście.
+/// Attacker generates a key with a lower hash, but is not in registry.
 #[test]
-fn m01_niepodpisany_kandydat_przegrywa_z_uczciwym() {
-    let uczciwy_klucz = Keypair::generate();
-    let uczciwy = accept(&uczciwy_klucz.public().to_hex(), "job-uczciwy");
-    let uczciwy = uczciwy.sign(&uczciwy_klucz);
+fn m01_unsigned_candidate_loses_to_honest() {
+    let honest_key = Keypair::generate();
+    let honest = accept(&honest_key.public().to_hex(), "job-honest");
+    let honest = honest.sign(&honest_key);
 
-    // Niezarejestrowany atakujący — bez podpisu, ale z kluczem "0000...".
-    let atak = accept(
+    // Unregistered attacker without signature
+    let attack = accept(
         "0000000000000000000000000000000000000000000000000000000000000000",
-        "job-atak",
+        "job-attack",
     );
 
-    let rejestr = RejestrKoordynatorow::z_kluczami(&[uczciwy_klucz.public().to_hex()]);
-    let kandydaci = [atak.clone(), uczciwy.clone()];
+    let registry = CoordinatorRegistry::with_keys(&[honest_key.public().to_hex()]);
+    let candidates = [attack.clone(), honest.clone()];
 
-    // Filtrowanie PRZED rankingiem: niepodpisany/niezarejestrowany wypada.
-    let dopuszczeni = rejestr.dopusc(&kandydaci, "o1");
-    assert_eq!(dopuszczeni.len(), 1, "niezarejestrowany kandydat musi wypaść");
+    // Filtering before ranking: unsigned/unregistered is dropped.
+    let admitted = registry.admit(&candidates, "o1");
+    assert_eq!(admitted.len(), 1, "unregistered candidate must be dropped");
 
-    let zwyciezca = rejestr.winner_zrejestrowany(&kandydaci, "o1").expect("zwycięzca");
+    let winner = registry.winner_registered(&candidates, "o1").expect("winner");
     assert_eq!(
-        zwyciezca.coordinator_pubkey,
-        uczciwy_klucz.public().to_hex(),
-        "wygrać ma URGZĘDOWY uczciwy, nie atakujący z ładniejszym hashem"
+        winner.coordinator_pubkey,
+        honest_key.public().to_hex(),
+        "registered honest candidate must win over unverified candidate"
     );
 }
 
-/// Zarejestrowany, ale bez podpisu — też musi wypaść.
+/// Registered coordinator without signature must also be dropped.
 #[test]
-fn m01_zarejestrowany_bez_podpisu_wypada() {
+fn m01_registered_without_signature_is_dropped() {
     let k = Keypair::generate();
-    let bez_podpisu = accept(&k.public().to_hex(), "job-x");
-    let rejestr = RejestrKoordynatorow::z_kluczami(&[k.public().to_hex()]);
-    let kandydaci = [bez_podpisu];
-    let dopuszczeni = rejestr.dopusc(&kandydaci, "o1");
-    assert!(dopuszczeni.is_empty(), "zarejestrowany bez podpisu NIE może wejść");
+    let unsigned = accept(&k.public().to_hex(), "job-x");
+    let registry = CoordinatorRegistry::with_keys(&[k.public().to_hex()]);
+    let candidates = [unsigned];
+    let admitted = registry.admit(&candidates, "o1");
+    assert!(admitted.is_empty(), "registered without signature cannot be admitted");
 }
 
-/// Podpis od INNEGO klucza niż zadeklarowany — musi wypaść.
+/// Signature from key other than declared must be rejected.
 #[test]
-fn m01_podpis_obcym_kluczem_wypada() {
+fn m01_signature_from_wrong_key_is_rejected() {
     let k = Keypair::generate();
-    let obcy = Keypair::generate();
-    let podszycie = accept(&k.public().to_hex(), "job-x").sign(&obcy);
-    let rejestr = RejestrKoordynatorow::z_kluczami(&[k.public().to_hex()]);
-    let kandydaci = [podszycie];
+    let other = Keypair::generate();
+    let spoof = accept(&k.public().to_hex(), "job-x").sign(&other);
+    let registry = CoordinatorRegistry::with_keys(&[k.public().to_hex()]);
+    let candidates = [spoof];
     assert!(
-        rejestr.dopusc(&kandydaci, "o1").is_empty(),
-        "podpis obcym kluczem musi być odrzucony"
+        registry.admit(&candidates, "o1").is_empty(),
+        "signature from wrong key must be rejected"
     );
 }
 
-/// Uczciwy, podpisany kandydat przechodzi i wygrywa.
+/// Honest signed candidate passes and wins.
 #[test]
-fn m01_uczciwy_przechodzi() {
+fn m01_honest_passes() {
     let k = Keypair::generate();
     let ok = accept(&k.public().to_hex(), "job-ok").sign(&k);
-    let rejestr = RejestrKoordynatorow::z_kluczami(&[k.public().to_hex()]);
-    let kandydaci = [ok.clone()];
-    assert_eq!(rejestr.dopusc(&kandydaci, "o1").len(), 1);
+    let registry = CoordinatorRegistry::with_keys(&[k.public().to_hex()]);
+    let candidates = [ok.clone()];
+    assert_eq!(registry.admit(&candidates, "o1").len(), 1);
     assert_eq!(
-        rejestr.winner_zrejestrowany(&kandydaci, "o1").unwrap().job_id,
+        registry.winner_registered(&candidates, "o1").unwrap().job_id,
         "job-ok"
     );
 }
 
-/// Podpis nad innym order_id nie pasuje do tego zlecenia.
+/// Signature over different order_id does not match this order.
 #[test]
-fn m01_podpis_nie_odpowiada_zleceniu() {
+fn m01_signature_mismatched_order_id() {
     let k = Keypair::generate();
     let mut a = accept(&k.public().to_hex(), "job-a").sign(&k);
-    a.order_id = "o-INNE".into(); // podmiana po podpisaniu
-    let rejestr = RejestrKoordynatorow::z_kluczami(&[k.public().to_hex()]);
-    let kandydaci = [a];
+    a.order_id = "o-OTHER".into(); // tamper after signing
+    let registry = CoordinatorRegistry::with_keys(&[k.public().to_hex()]);
+    let candidates = [a];
     assert!(
-        rejestr.dopusc(&kandydaci, "o1").is_empty(),
-        "podpis nad innym order_id nie może przejść"
+        registry.admit(&candidates, "o1").is_empty(),
+        "signature over different order_id must be rejected"
     );
 }

@@ -1,7 +1,7 @@
-//! Testy F3 w Rust — te same ataki co w prototypie Python (`~/DC/tests/`).
+//! F3 tests in Rust - verifying signed receipt integrity.
 //!
-//! Wektor F3: „complete() nie waliduje podpisu" → 100% rozliczeń do podrobienia.
-//! Każdy test odpowiada jednemu realnemu atakowi z red-teamu RT1.
+//! F3 attack vector: "complete() does not validate signature" -> forgery vulnerability.
+//! Each test corresponds to a specific attack scenario from red-team evaluation.
 
 use simon_core::crypto::Keypair;
 use simon_core::receipt::{Precision, Receipt};
@@ -23,7 +23,7 @@ fn receipt_for(job_id: &str, node_id: &str) -> Receipt {
         finished_at_us: 100_500_000,
         signer: Keypair::generate().public(),
         signature: None,
-        wiazania: None,
+        bindings: None,
     }
 }
 
@@ -40,16 +40,16 @@ fn registry_with_node(attested: bool) -> (Registry, Keypair, String) {
         },
     };
     let msg = RegisterMsg::new(node_id.clone(), key.public(), cap);
-    assert!(reg.register(msg), "rejestracja powinna się udać");
+    assert!(reg.register(msg), "registration should succeed");
     (reg, key, node_id)
 }
 
-// --- bramka RULES #2: przydział tylko z attested ---
+// --- Capability gate: assignment only with attested capability ---
 
 #[test]
 fn assign_requires_attested_capability() {
     let (mut reg, _, node_id) = registry_with_node(false);
-    assert!(!reg.assign("job-1", &node_id), "bez attested nie ma przydziału");
+    assert!(!reg.assign("job-1", &node_id), "unattested node cannot receive jobs");
 }
 
 #[test]
@@ -58,7 +58,7 @@ fn assign_after_attestation_ok() {
     assert!(reg.assign("job-1", &node_id));
 }
 
-// --- F3: receipty ---
+// --- F3: receipts ---
 
 #[test]
 fn unsigned_receipt_does_not_verify() {
@@ -78,10 +78,10 @@ fn signed_receipt_verifies_self() {
 fn tampered_content_rejected() {
     let key = Keypair::generate();
     let mut r = receipt_for("job-1", "node-1").sign(&key).unwrap();
-    r.output_digest = "sha256:PODMIENIONE".to_string();
+    r.output_digest = "sha256:TAMPERED".to_string();
     assert!(
         matches!(r.verify_self(), Err(SimonError::BadSignature)),
-        "podmiana treści po podpisaniu musi być wykryta"
+        "tampering content after signing must be detected"
     );
 }
 
@@ -89,7 +89,7 @@ fn tampered_content_rejected() {
 fn signature_not_transferable_to_other_receipt() {
     let key = Keypair::generate();
     let signed = receipt_for("job-1", "node-1").sign(&key).unwrap();
-    // Ten sam podpis, inny job_id.
+    // Same signature, different job_id.
     let mut other = signed.clone();
     other.job_id = "job-2".to_string();
     assert!(other.verify_self().is_err());
@@ -111,10 +111,10 @@ fn signature_excluded_from_digest() {
     let with_sig = signed.digest().unwrap();
     signed.signature = None;
     let without_sig = signed.digest().unwrap();
-    assert_eq!(with_sig, without_sig, "podpis nie może wchodzić do odcisku");
+    assert_eq!(with_sig, without_sig, "signature must not be included in digest");
 }
 
-// --- F3 wpięte w complete() — wariant C ---
+// --- F3 integrated in complete() ---
 
 #[test]
 fn complete_rejects_ok_without_receipt() {
@@ -131,7 +131,7 @@ fn complete_rejects_ok_without_receipt() {
     };
     assert!(
         reg.complete(&res).is_err(),
-        "sukces bez receiptu musi być odrzucony"
+        "successful result without receipt must be rejected"
     );
 }
 
@@ -154,13 +154,13 @@ fn complete_accepts_valid_signed_receipt() {
 
 #[test]
 fn complete_rejects_receipt_signed_by_foreign_key() {
-    // ATAK: atakujący podpisuje WŁASNYM kluczem i wstawia swój pubkey.
+    // Attack: adversary signs with foreign key and embeds foreign pubkey.
     let (mut reg, _registered_key, node_id) = registry_with_node(true);
     assert!(reg.assign("job-1", &node_id));
 
     let foreign_key = Keypair::generate();
     let forged = receipt_for("job-1", &node_id).sign(&foreign_key).unwrap();
-    assert!(forged.verify_self().is_ok(), "podpis sam w sobie jest ważny");
+    assert!(forged.verify_self().is_ok(), "signature is internally valid");
 
     let res = JobResult {
         job_id: "job-1".into(),
@@ -173,7 +173,7 @@ fn complete_rejects_receipt_signed_by_foreign_key() {
     };
     assert!(
         matches!(reg.complete(&res), Err(SimonError::UnregisteredKey)),
-        "bramka 2: klucz musi być ZAREJESTROWANY (rdzeń wariantu C)"
+        "signer key must be registered"
     );
 }
 
@@ -199,7 +199,7 @@ fn complete_rejects_forged_receipt_content() {
 fn complete_rejects_receipt_for_other_job() {
     let (mut reg, key, node_id) = registry_with_node(true);
     assert!(reg.assign("job-1", &node_id));
-    let receipt = receipt_for("job-INNY", &node_id).sign(&key).unwrap();
+    let receipt = receipt_for("job-OTHER", &node_id).sign(&key).unwrap();
     let res = JobResult {
         job_id: "job-1".into(),
         node_id: node_id.clone(),
@@ -209,7 +209,7 @@ fn complete_rejects_receipt_for_other_job() {
         error: None,
         signature: None,
     };
-    assert!(reg.complete(&res).is_err(), "bramka 3: zgodność job_id");
+    assert!(reg.complete(&res).is_err(), "job_id mismatch must be rejected");
 }
 
 #[test]
@@ -225,7 +225,7 @@ fn complete_allows_failure_without_receipt() {
         error: Some("OOM".into()),
         signature: None,
     };
-    assert!(reg.complete(&res).is_ok(), "porażka nie wymaga receiptu");
+    assert!(reg.complete(&res).is_ok(), "failure result does not require receipt");
 }
 
 #[test]
@@ -241,11 +241,10 @@ fn complete_rejects_result_from_unassigned_node() {
         error: None,
         signature: None,
     };
-    // Job nie został przydzielony.
     assert!(reg.complete(&res).is_err());
 }
 
-// --- degradacja ---
+// --- degradation ---
 
 #[test]
 fn evict_orphans_jobs() {

@@ -1,23 +1,23 @@
-//! Test integracyjny E2E (Track H): weryfikacja generowania i wiązania tokenów M1
+//! E2E integration test (Track H): M1 token generation and binding verification.
 //!
-//! Sprawdza 4 scenariusze end-to-end:
-//! 1. Uczciwy przepływ M1: node z działającym `/tokenize` generuje podpisany receipt poziomu 1,
-//!    `PromptResponse` niesie `tokenizer_hash`, `prompt_token_ids` i `output_token_ids`,
-//!    a klient weryfikuje receipt za pomocą `Receipt::zweryfikuj_m1` z oryginalnym `nonce`.
-//! 2. Zmanipulowane identyfikatory tokenów wyjścia (`output_token_ids`): zmiana choćby 1 tokenu
-//!    powoduje błąd weryfikacji M1.
-//! 3. Błędny `client_nonce`: weryfikacja z innym nonce zawodzi.
-//! 4. Czysty fallback do poziomu M0: gdy `/tokenize` zwraca 404, nieprawidłowe dane lub
-//!    tablicę przekraczającą limit `MAX_M1_TOKENS` (65 536), node podpisuje poprawny
-//!    receipt poziomu 0 (`wiazania: None`, `tokenizer_hash: None`).
+//! Verifies 4 end-to-end scenarios:
+//! 1. Honest M1 flow: node with working `/tokenize` generates signed level 1 receipt,
+//!    `PromptResponse` carries `tokenizer_hash`, `prompt_token_ids` and `output_token_ids`,
+//!    and client verifies receipt using `Receipt::verify_m1` with original `nonce`.
+//! 2. Tampered output token IDs (`output_token_ids`): altering even 1 token
+//!    causes M1 verification failure.
+//! 3. Invalid `client_nonce`: verification with a mismatched nonce fails.
+//! 4. Clean fallback to M0 level: when `/tokenize` returns 404, invalid data, or
+//!    an array exceeding `MAX_M1_TOKENS` (65,536), node signs valid
+//!    level 0 receipt (`bindings: None`, `tokenizer_hash: None`).
 
 use simon_core::crypto::Keypair;
 use simon_core::receipt::Receipt;
 use simon_harness::request_response::{PromptReply, PromptRequest};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-#[path = "../src/wspolne.rs"]
-pub mod wspolne;
+#[path = "../src/common.rs"]
+pub mod common;
 
 #[path = "../src/node.rs"]
 pub mod node;
@@ -83,21 +83,21 @@ impl Opcje {
     }
 }
 
-/// Tryb odpowiedzi mockowanego backendu HTTP na zapytanie `/tokenize`.
+/// Response mode of mocked HTTP backend for `/tokenize`.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum TokenizeTryb {
-    /// Prawidłowa tokenizacja promptu i wyjścia
-    Poprawny,
-    /// Endpoint `/tokenize` nie istnieje (HTTP 404)
-    BrakEndpointu404,
-    /// Przekroczony limit `MAX_M1_TOKENS` (65 536)
-    PonadLimit,
-    /// Nieprawidłowy format tokenów (np. ciągi zamiast u32)
-    NiepoprawneTokeny,
+enum TokenizeMode {
+    /// Valid tokenization of prompt and output
+    Valid,
+    /// Endpoint `/tokenize` does not exist (HTTP 404)
+    MissingEndpoint404,
+    /// Exceeded limit `MAX_M1_TOKENS` (65,536)
+    OverLimit,
+    /// Invalid token format (e.g. strings instead of u32)
+    InvalidTokens,
 }
 
-/// Uruchamia wewnątrzprocesowy serwer HTTP symulujący API modelu (vLLM / llama-server).
-async fn mock_backend(tryb: TokenizeTryb) -> u16 {
+/// Runs in-process HTTP server simulating model backend API (vLLM / llama-server).
+async fn mock_backend(mode: TokenizeMode) -> u16 {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
 
@@ -110,19 +110,19 @@ async fn mock_backend(tryb: TokenizeTryb) -> u16 {
 
             tokio::spawn(async move {
                 let mut buf = vec![0u8; 65536];
-                let mut przeczytano = 0;
-                while przeczytano < buf.len() {
-                    let n = match socket.read(&mut buf[przeczytano..]).await {
+                let mut bytes_read = 0;
+                while bytes_read < buf.len() {
+                    let n = match socket.read(&mut buf[bytes_read..]).await {
                         Ok(n) if n > 0 => n,
                         _ => break,
                     };
-                    przeczytano += n;
-                    if buf[..przeczytano].windows(4).any(|w| w == b"\r\n\r\n") {
+                    bytes_read += n;
+                    if buf[..bytes_read].windows(4).any(|w| w == b"\r\n\r\n") {
                         break;
                     }
                 }
 
-                let req_text = String::from_utf8_lossy(&buf[..przeczytano]);
+                let req_text = String::from_utf8_lossy(&buf[..bytes_read]);
                 let header_line = req_text.lines().next().unwrap_or("");
 
                 let (status, body) = if header_line.contains("/v1/models") {
@@ -133,24 +133,24 @@ async fn mock_backend(tryb: TokenizeTryb) -> u16 {
                     let c = r#"{"choices":[{"message":{"role":"assistant","content":"42 to odpowiedz"}}],"usage":{"completion_tokens":3,"prompt_tokens":4}}"#;
                     ("200 OK", c.to_string())
                 } else if header_line.contains("/tokenize") {
-                    match tryb {
-                        TokenizeTryb::Poprawny => {
+                    match mode {
+                        TokenizeMode::Valid => {
                             if req_text.contains("42 to odpowiedz") {
                                 ("200 OK", r#"{"tokens":[42,55,999]}"#.to_string())
                             } else {
                                 ("200 OK", r#"{"tokens":[101,202,303,404]}"#.to_string())
                             }
                         }
-                        TokenizeTryb::BrakEndpointu404 => {
+                        TokenizeMode::MissingEndpoint404 => {
                             ("404 Not Found", r#"{"error":"Not Found"}"#.to_string())
                         }
-                        TokenizeTryb::PonadLimit => {
-                            let nadmiar = vec![1u32; wspolne::MAX_M1_TOKENS + 1];
+                        TokenizeMode::OverLimit => {
+                            let nadmiar = vec![1u32; common::MAX_M1_TOKENS + 1];
                             let c = serde_json::to_string(&serde_json::json!({ "tokens": nadmiar })).unwrap();
                             ("200 OK", c)
                         }
-                        TokenizeTryb::NiepoprawneTokeny => {
-                            ("200 OK", r#"{"tokens":["niepoprawny", 123]}"#.to_string())
+                        TokenizeMode::InvalidTokens => {
+                            ("200 OK", r#"{"tokens":["invalid", 123]}"#.to_string())
                         }
                     }
                 } else {
@@ -172,7 +172,7 @@ async fn mock_backend(tryb: TokenizeTryb) -> u16 {
 
 #[tokio::test]
 async fn test_e2e_scenariusz_1_uczciwy_przeplyw_m1() {
-    let port = mock_backend(TokenizeTryb::Poprawny).await;
+    let port = mock_backend(TokenizeMode::Valid).await;
     let klucz = Keypair::generate();
     let req = PromptRequest {
         v: 1,
@@ -186,7 +186,7 @@ async fn test_e2e_scenariusz_1_uczciwy_przeplyw_m1() {
         chat: false,
     };
 
-    let reply = node::policz(
+    let reply = node::compute_completion(
         &format!("http://127.0.0.1:{port}"),
         "qwen-fp16",
         "vllm/0.6.3",
@@ -197,7 +197,7 @@ async fn test_e2e_scenariusz_1_uczciwy_przeplyw_m1() {
 
     let resp = match reply {
         PromptReply::Ok(r) => r,
-        PromptReply::Blad(e) => panic!("nieoczekiwany błąd node'a: {e:?}"),
+        PromptReply::Error(e) => panic!("unexpected node error: {e:?}"),
     };
 
     assert_eq!(resp.output, "42 to odpowiedz");
@@ -205,25 +205,25 @@ async fn test_e2e_scenariusz_1_uczciwy_przeplyw_m1() {
     assert_eq!(resp.prompt_token_ids, Some(vec![101, 202, 303, 404]));
     assert_eq!(resp.output_token_ids, Some(vec![42, 55, 999]));
 
-    let r: Receipt = serde_json::from_str(&resp.receipt).expect("poprawny JSON receiptu");
-    assert_eq!(r.poziom(), 1, "receipt musi posiadać poziom M1");
-    assert!(r.wiazania.is_some(), "wiazania M1 muszą być obecne");
-    assert!(r.verify_self().is_ok(), "podpis node'a musi być prawidłowy");
-    assert!(r.zgodny_z_wyjsciem(&resp.output), "receipt musi pokrywać treść wyjścia");
+    let r: Receipt = serde_json::from_str(&resp.receipt).expect("valid receipt JSON");
+    assert_eq!(r.level(), 1, "receipt must have M1 level");
+    assert!(r.bindings.is_some(), "M1 bindings must be present");
+    assert!(r.verify_self().is_ok(), "node signature must be valid");
+    assert!(r.matches_output(&resp.output), "receipt must cover output content");
 
-    // Weryfikacja klienta z oryginalnym nonce zlecenia
+    // Client verification with original order nonce
     let th = resp.tokenizer_hash.as_ref().unwrap();
     let pt = resp.prompt_token_ids.as_ref().unwrap();
     let ot = resp.output_token_ids.as_ref().unwrap();
     assert!(
-        r.zweryfikuj_m1(th, &req.nonce, pt, ot).is_ok(),
-        "weryfikacja M1 klienta musi przejść pomyślnie"
+        r.verify_m1(th, &req.nonce, pt, ot).is_ok(),
+        "client M1 verification must succeed"
     );
 }
 
 #[tokio::test]
 async fn test_e2e_scenariusz_2_zmanipulowane_tokeny_wyjscia_odrzucone() {
-    let port = mock_backend(TokenizeTryb::Poprawny).await;
+    let port = mock_backend(TokenizeMode::Valid).await;
     let klucz = Keypair::generate();
     let req = PromptRequest {
         v: 1,
@@ -237,7 +237,7 @@ async fn test_e2e_scenariusz_2_zmanipulowane_tokeny_wyjscia_odrzucone() {
         chat: false,
     };
 
-    let reply = node::policz(
+    let reply = node::compute_completion(
         &format!("http://127.0.0.1:{port}"),
         "qwen-fp16",
         "vllm/0.6.3",
@@ -248,27 +248,27 @@ async fn test_e2e_scenariusz_2_zmanipulowane_tokeny_wyjscia_odrzucone() {
 
     let resp = match reply {
         PromptReply::Ok(r) => r,
-        PromptReply::Blad(e) => panic!("błąd node'a: {e:?}"),
+        PromptReply::Error(e) => panic!("node error: {e:?}"),
     };
 
-    let r: Receipt = serde_json::from_str(&resp.receipt).expect("parsowanie receiptu");
+    let r: Receipt = serde_json::from_str(&resp.receipt).expect("receipt parsing");
     let th = resp.tokenizer_hash.as_ref().unwrap();
     let pt = resp.prompt_token_ids.as_ref().unwrap();
-    let mut zmanipulowane_ot = resp.output_token_ids.clone().unwrap();
+    let mut tampered_ot = resp.output_token_ids.clone().unwrap();
 
-    // Odwracamy 1 bit w tokenie wyjściowym
-    zmanipulowane_ot[0] ^= 1;
+    // Flip 1 bit in output token
+    tampered_ot[0] ^= 1;
 
-    let wynik = r.zweryfikuj_m1(th, &req.nonce, pt, &zmanipulowane_ot);
+    let result = r.verify_m1(th, &req.nonce, pt, &tampered_ot);
     assert!(
-        wynik.is_err(),
-        "weryfikacja M1 ze zmanipulowanymi tokenami wyjścia MUSI zwrócić błąd"
+        result.is_err(),
+        "M1 verification with tampered output tokens MUST return error"
     );
 }
 
 #[tokio::test]
 async fn test_e2e_scenariusz_3_zly_client_nonce_odrzucony() {
-    let port = mock_backend(TokenizeTryb::Poprawny).await;
+    let port = mock_backend(TokenizeMode::Valid).await;
     let klucz = Keypair::generate();
     let req = PromptRequest {
         v: 1,
@@ -282,7 +282,7 @@ async fn test_e2e_scenariusz_3_zly_client_nonce_odrzucony() {
         chat: false,
     };
 
-    let reply = node::policz(
+    let reply = node::compute_completion(
         &format!("http://127.0.0.1:{port}"),
         "qwen-fp16",
         "vllm/0.6.3",
@@ -293,18 +293,18 @@ async fn test_e2e_scenariusz_3_zly_client_nonce_odrzucony() {
 
     let resp = match reply {
         PromptReply::Ok(r) => r,
-        PromptReply::Blad(e) => panic!("błąd node'a: {e:?}"),
+        PromptReply::Error(e) => panic!("node error: {e:?}"),
     };
 
-    let r: Receipt = serde_json::from_str(&resp.receipt).expect("parsowanie receiptu");
+    let r: Receipt = serde_json::from_str(&resp.receipt).expect("receipt parsing");
     let th = resp.tokenizer_hash.as_ref().unwrap();
     let pt = resp.prompt_token_ids.as_ref().unwrap();
     let ot = resp.output_token_ids.as_ref().unwrap();
 
-    let wynik = r.zweryfikuj_m1(th, "inny-sfalszowany-nonce", pt, ot);
+    let result = r.verify_m1(th, "mismatched-forged-nonce", pt, ot);
     assert!(
-        wynik.is_err(),
-        "weryfikacja M1 z niezgodnym nonce klienta MUSI zwrócić błąd"
+        result.is_err(),
+        "M1 verification with mismatched client nonce MUST return error"
     );
 }
 
@@ -323,10 +323,10 @@ async fn test_e2e_scenariusz_4_fallback_do_m0_gdy_tokenize_niedostepny_lub_ponad
         chat: false,
     };
 
-    // 4a: Endpoint /tokenize nie istnieje (HTTP 404)
+    // 4a: Endpoint /tokenize does not exist (HTTP 404)
     {
-        let port_404 = mock_backend(TokenizeTryb::BrakEndpointu404).await;
-        let reply = node::policz(
+        let port_404 = mock_backend(TokenizeMode::MissingEndpoint404).await;
+        let reply = node::compute_completion(
             &format!("http://127.0.0.1:{port_404}"),
             "qwen-fp16",
             "vllm/0.6.3",
@@ -337,24 +337,24 @@ async fn test_e2e_scenariusz_4_fallback_do_m0_gdy_tokenize_niedostepny_lub_ponad
 
         let resp = match reply {
             PromptReply::Ok(r) => r,
-            PromptReply::Blad(e) => panic!("błąd node'a przy braku /tokenize: {e:?}"),
+            PromptReply::Error(e) => panic!("node error on missing /tokenize: {e:?}"),
         };
 
         assert_eq!(resp.tokenizer_hash, None);
         assert_eq!(resp.prompt_token_ids, None);
         assert_eq!(resp.output_token_ids, None);
 
-        let r: Receipt = serde_json::from_str(&resp.receipt).expect("parsowanie receiptu");
-        assert_eq!(r.poziom(), 0, "przy braku /tokenize poziom receiptu musi wynosić 0");
-        assert!(r.wiazania.is_none());
+        let r: Receipt = serde_json::from_str(&resp.receipt).expect("receipt parsing");
+        assert_eq!(r.level(), 0, "on missing /tokenize receipt level must be 0");
+        assert!(r.bindings.is_none());
         assert!(r.verify_self().is_ok());
-        assert!(r.zgodny_z_wyjsciem(&resp.output));
+        assert!(r.matches_output(&resp.output));
     }
 
-    // 4b: /tokenize zwraca ponad MAX_M1_TOKENS tokenów
+    // 4b: /tokenize returns over MAX_M1_TOKENS tokens
     {
-        let port_overcap = mock_backend(TokenizeTryb::PonadLimit).await;
-        let reply = node::policz(
+        let port_overcap = mock_backend(TokenizeMode::OverLimit).await;
+        let reply = node::compute_completion(
             &format!("http://127.0.0.1:{port_overcap}"),
             "qwen-fp16",
             "vllm/0.6.3",
@@ -365,24 +365,24 @@ async fn test_e2e_scenariusz_4_fallback_do_m0_gdy_tokenize_niedostepny_lub_ponad
 
         let resp = match reply {
             PromptReply::Ok(r) => r,
-            PromptReply::Blad(e) => panic!("błąd node'a przy overcap: {e:?}"),
+            PromptReply::Error(e) => panic!("node error on overcap: {e:?}"),
         };
 
         assert_eq!(resp.tokenizer_hash, None);
         assert_eq!(resp.prompt_token_ids, None);
         assert_eq!(resp.output_token_ids, None);
 
-        let r: Receipt = serde_json::from_str(&resp.receipt).expect("parsowanie receiptu");
-        assert_eq!(r.poziom(), 0, "przy overcap poziom receiptu musi wynosić 0");
-        assert!(r.wiazania.is_none());
+        let r: Receipt = serde_json::from_str(&resp.receipt).expect("receipt parsing");
+        assert_eq!(r.level(), 0, "on overcap receipt level must be 0");
+        assert!(r.bindings.is_none());
         assert!(r.verify_self().is_ok());
-        assert!(r.zgodny_z_wyjsciem(&resp.output));
+        assert!(r.matches_output(&resp.output));
     }
 
-    // 4c: /tokenize zwraca niepoprawny format tablicy tokenów
+    // 4c: /tokenize returns invalid token array format
     {
-        let port_invalid = mock_backend(TokenizeTryb::NiepoprawneTokeny).await;
-        let reply = node::policz(
+        let port_invalid = mock_backend(TokenizeMode::InvalidTokens).await;
+        let reply = node::compute_completion(
             &format!("http://127.0.0.1:{port_invalid}"),
             "qwen-fp16",
             "vllm/0.6.3",
@@ -393,27 +393,27 @@ async fn test_e2e_scenariusz_4_fallback_do_m0_gdy_tokenize_niedostepny_lub_ponad
 
         let resp = match reply {
             PromptReply::Ok(r) => r,
-            PromptReply::Blad(e) => panic!("błąd node'a przy niepoprawnych tokenach: {e:?}"),
+            PromptReply::Error(e) => panic!("node error on invalid tokens: {e:?}"),
         };
 
         assert_eq!(resp.tokenizer_hash, None);
         assert_eq!(resp.prompt_token_ids, None);
         assert_eq!(resp.output_token_ids, None);
 
-        let r: Receipt = serde_json::from_str(&resp.receipt).expect("parsowanie receiptu");
-        assert_eq!(r.poziom(), 0);
-        assert!(r.wiazania.is_none());
+        let r: Receipt = serde_json::from_str(&resp.receipt).expect("receipt parsing");
+        assert_eq!(r.level(), 0);
+        assert!(r.bindings.is_none());
         assert!(r.verify_self().is_ok());
     }
 
-    // 4d: Tryb czatu (req.chat = true) -> czysty fallback do poziomu 0
+    // 4d: Chat mode (req.chat = true) -> clean fallback to level 0
     {
-        let port_chat = mock_backend(TokenizeTryb::Poprawny).await;
+        let port_chat = mock_backend(TokenizeMode::Valid).await;
         let mut chat_req = req.clone();
         chat_req.chat = true;
         chat_req.prompt = r#"{"messages":[{"role":"user","content":"hej"}]}"#.into();
 
-        let reply = node::policz(
+        let reply = node::compute_completion(
             &format!("http://127.0.0.1:{port_chat}"),
             "qwen-fp16",
             "vllm/0.6.3",
@@ -424,16 +424,16 @@ async fn test_e2e_scenariusz_4_fallback_do_m0_gdy_tokenize_niedostepny_lub_ponad
 
         let resp = match reply {
             PromptReply::Ok(r) => r,
-            PromptReply::Blad(e) => panic!("błąd node'a w trybie czatu: {e:?}"),
+            PromptReply::Error(e) => panic!("node error in chat mode: {e:?}"),
         };
 
         assert_eq!(resp.tokenizer_hash, None);
         assert_eq!(resp.prompt_token_ids, None);
         assert_eq!(resp.output_token_ids, None);
 
-        let r: Receipt = serde_json::from_str(&resp.receipt).expect("parsowanie receiptu");
-        assert_eq!(r.poziom(), 0);
-        assert!(r.wiazania.is_none());
+        let r: Receipt = serde_json::from_str(&resp.receipt).expect("receipt parsing");
+        assert_eq!(r.level(), 0);
+        assert!(r.bindings.is_none());
         assert!(r.verify_self().is_ok());
     }
 }

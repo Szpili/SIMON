@@ -1,20 +1,11 @@
-//! Macierz tamper (krytyk muse, 2026-10-04): „jeśli binding pada, M3/IFC/staking
-//! dziedziczą forgery". Testujemy, że **każde** pole związane w receipcie v2 jest
-//! objęte podpisem: zmiana jednego bitu → `verify_self()` = Err. Osobno: grant
-//! (double-use/expired/zły parametr) i replay nonce.
-//!
-//! To licencjonuje TYLKO: „v2 receipts są tamper-evident authorship/binding pod
-//! Ed25519 przy założeniu tajności klucza". NIE licencjonuje poprawności wykonania,
-//! tożsamości modelu ani poufności wobec executora.
+//! Tamper matrix test: verifies that every bound field in a v2 receipt
+//! is covered by signature (single bit flip -> verify_self() = Err).
+//! Also tests grant validation and replay nonce.
 
-use simon_core::cap::{
-    odcisk_parametrow_akcji, sprawdz, Kontekst, OdmowaZ, Zezwolenie,
-};
 use simon_core::crypto::Keypair;
-use simon_core::protokol::{BladProtokolu, OknoNonce};
-use simon_core::receipt::{odcisk_parametrow, odcisk_wyjscia, Precision, Receipt};
+use simon_core::receipt::{output_digest_for, params_digest, Precision, Receipt};
 
-fn bazowy_podpisany() -> (Receipt, Keypair) {
+fn base_signed() -> (Receipt, Keypair) {
     let k = Keypair::from_seed(&[11u8; 32]);
     let r = Receipt {
         job_id: "job-1".into(),
@@ -23,21 +14,21 @@ fn bazowy_podpisany() -> (Receipt, Keypair) {
         runtime: "llama.cpp/511f9c13".into(),
         precision: Precision::Fp16,
         activation_hash: "toploc:NIE_POLICZONY".into(),
-        output_digest: odcisk_wyjscia("job-1", "hello world").unwrap(),
+        output_digest: output_digest_for("job-1", "hello world").unwrap(),
         prompt_tokens: 12,
         completion_tokens: 34,
         started_at_us: 1_000_000,
         finished_at_us: 2_000_000,
         signer: k.public(),
         signature: None,
-        wiazania: None,
+        bindings: None,
     }
-    .z_wiazaniem_m1(
+    .with_m1_bindings(
         "tokhash".into(),
         "nonce-abc".into(),
         &[1, 2, 3, 4],
         &[5, 6, 7],
-        odcisk_parametrow(0, 1_000_000, 1, 0, 1_000_000).unwrap(),
+        params_digest(0, 1_000_000, 1, 0, 1_000_000).unwrap(),
         42,
         "llama.cpp/Q8_0/cpu".into(),
     )
@@ -49,9 +40,9 @@ fn bazowy_podpisany() -> (Receipt, Keypair) {
 
 #[test]
 fn kazde_pole_v2_jest_pod_podpisem() {
-    let (bazowy, _k) = bazowy_podpisany();
+    let (bazowy, _k) = base_signed();
     assert!(bazowy.verify_self().is_ok());
-    assert_eq!(bazowy.poziom(), 1);
+    assert_eq!(bazowy.level(), 1);
 
     // (nazwa, mutator)
     type Mutator = Box<dyn Fn(&mut Receipt)>;
@@ -71,32 +62,32 @@ fn kazde_pole_v2_jest_pod_podpisem() {
             r.signer = Keypair::from_seed(&[99u8; 32]).public()
         })),
         // pola M1
-        ("wiazania.schema_version", Box::new(|r| {
-            r.wiazania.as_mut().unwrap().schema_version += 1
+        ("bindings.schema_version", Box::new(|r| {
+            r.bindings.as_mut().unwrap().schema_version += 1
         })),
-        ("wiazania.receipt_level", Box::new(|r| {
-            r.wiazania.as_mut().unwrap().receipt_level = 0
+        ("bindings.receipt_level", Box::new(|r| {
+            r.bindings.as_mut().unwrap().receipt_level = 0
         })),
-        ("wiazania.exec_profile", Box::new(|r| {
-            r.wiazania.as_mut().unwrap().exec_profile.push('x')
+        ("bindings.exec_profile", Box::new(|r| {
+            r.bindings.as_mut().unwrap().exec_profile.push('x')
         })),
-        ("wiazania.tokenizer_hash", Box::new(|r| {
-            r.wiazania.as_mut().unwrap().tokenizer_hash.push('x')
+        ("bindings.tokenizer_hash", Box::new(|r| {
+            r.bindings.as_mut().unwrap().tokenizer_hash.push('x')
         })),
-        ("wiazania.prompt_digest", Box::new(|r| {
-            r.wiazania.as_mut().unwrap().prompt_digest.push('x')
+        ("bindings.prompt_digest", Box::new(|r| {
+            r.bindings.as_mut().unwrap().prompt_digest.push('x')
         })),
-        ("wiazania.output_token_chain", Box::new(|r| {
-            r.wiazania.as_mut().unwrap().output_token_chain.push('x')
+        ("bindings.output_token_chain", Box::new(|r| {
+            r.bindings.as_mut().unwrap().output_token_chain.push('x')
         })),
-        ("wiazania.client_nonce", Box::new(|r| {
-            r.wiazania.as_mut().unwrap().client_nonce.push('x')
+        ("bindings.client_nonce", Box::new(|r| {
+            r.bindings.as_mut().unwrap().client_nonce.push('x')
         })),
-        ("wiazania.sampling_params_hash", Box::new(|r| {
-            r.wiazania.as_mut().unwrap().sampling_params_hash.push('x')
+        ("bindings.sampling_params_hash", Box::new(|r| {
+            r.bindings.as_mut().unwrap().sampling_params_hash.push('x')
         })),
-        ("wiazania.rng_seed", Box::new(|r| {
-            r.wiazania.as_mut().unwrap().rng_seed += 1
+        ("bindings.rng_seed", Box::new(|r| {
+            r.bindings.as_mut().unwrap().rng_seed += 1
         })),
     ];
 
@@ -110,39 +101,39 @@ fn kazde_pole_v2_jest_pod_podpisem() {
     }
     assert!(
         przeszly.is_empty(),
-        "te pola NIE są pod podpisem (tamper niewykryty): {przeszly:?}"
+        "these fields are NOT covered by signature (undetected tamper): {przeszly:?}"
     );
 
-    // podmiana samego podpisu też łamie
+    // modifying signature itself also fails
     let mut r = bazowy.clone();
     r.signature = Some(simon_core::crypto::Signature([0u8; 64]));
-    assert!(r.verify_self().is_err(), "podmieniony podpis musi być odrzucony");
+    assert!(r.verify_self().is_err(), "tampered signature must be rejected");
 }
 
 #[test]
 fn stary_receipt_to_authorship_bez_bindingu() {
-    // Legacy receipt (poziom 0) weryfikuje podpis, ale NIE niesie wiązania wejścia —
-    // więc `zweryfikuj_m1` musi go odrzucić (authorship-only, nie binding).
+    // Legacy receipt (level 0) verifies signature but does not carry input binding —
+    // verify_m1 must reject it (authorship-only, not binding).
     let r: Receipt =
         serde_json::from_str(include_str!("../../../przyklady/receipt.json").trim()).unwrap();
-    assert_eq!(r.poziom(), 0);
-    assert!(r.verify_self().is_ok(), "authorship legacy działa");
+    assert_eq!(r.level(), 0);
+    assert!(r.verify_self().is_ok(), "authorship legacy works");
     assert!(
-        r.zweryfikuj_m1("cokolwiek", "cokolwiek", &[1], &[2]).is_err(),
-        "poziom 0 nie ma wiązania — nie wolno go przedstawiać jako binding"
+        r.verify_m1("any", "any", &[1], &[2]).is_err(),
+        "level 0 has no binding — must not be presented as binding"
     );
 }
 
 #[test]
-fn zweryfikuj_m1_odrzuca_niepodpisany_receipt() {
-    let (bazowy, _) = bazowy_podpisany();
+fn verify_m1_rejects_unsigned_receipt() {
+    let (bazowy, _) = base_signed();
     let mut unsigned = bazowy.clone();
     unsigned.signature = None;
     assert!(
         unsigned
-            .zweryfikuj_m1("tokhash", "nonce-abc", &[1, 2, 3, 4], &[5, 6, 7])
+            .verify_m1("tokhash", "nonce-abc", &[1, 2, 3, 4], &[5, 6, 7])
             .is_err(),
-        "niepodpisany receipt nie może przejść zweryfikuj_m1"
+        "unsigned receipt cannot pass verify_m1"
     );
 }
 
@@ -151,71 +142,71 @@ fn grant_double_use_expired_zly_parametr() {
     let op = Keypair::from_seed(&[7u8; 32]);
     let pk = op.public().to_hex();
     let par = serde_json::json!({"msg": "ok"});
-    let z = Zezwolenie {
+    let z = simon_core::cap::CapabilityGrant {
         id: "g-1".into(),
-        akcja: "log_message".into(),
-        parametry_digest: odcisk_parametrow_akcji("log_message", &par).unwrap(),
-        wystawca: String::new(),
-        wazne_do_us: 1_000_000,
-        budzet: Some(1),
-        podpis: None,
+        action: "log_message".into(),
+        params_digest: simon_core::cap::action_params_digest("log_message", &par).unwrap(),
+        issuer: String::new(),
+        valid_until_us: 1_000_000,
+        budget: Some(1),
+        signature: None,
     }
-    .podpisz(&op)
+    .sign(&op)
     .unwrap();
-    let sufit = simon_core::cap::Sufit {
-        akcje: std::collections::BTreeMap::from([(
+    let sufit = simon_core::cap::CapabilityCeiling {
+        actions: std::collections::BTreeMap::from([(
             "log_message".to_string(),
-            simon_core::cap::Akcja {
-                nazwa: "log_message".into(),
-                parametry: vec![simon_core::cap::Parametr {
-                    nazwa: "msg".into(),
-                    wymagany: true,
-                    ograniczenie: simon_core::cap::Ograniczenie::Tekst { max_len: 200 },
+            simon_core::cap::ActionDef {
+                name: "log_message".into(),
+                params: vec![simon_core::cap::ActionParam {
+                    name: "msg".into(),
+                    required: true,
+                    constraint: simon_core::cap::ParamConstraint::Text { max_len: 200 },
                 }],
             },
         )]),
     };
     let uzyte = vec!["g-1".to_string()];
-    let ok = Kontekst {
-        teraz_us: 500_000,
-        oczekiwany_wystawca: &pk,
-        odwolane: &[],
-        uzyte: &[],
+    let ok = simon_core::cap::GrantContext {
+        now_us: 500_000,
+        expected_issuer: &pk,
+        revoked: &[],
+        used: &[],
     };
-    assert!(sprawdz(&sufit, &z, "log_message", &par, &ok).is_ok());
+    assert!(simon_core::cap::verify_grant(&sufit, &z, "log_message", &par, &ok).is_ok());
     // double-use
-    let ok_uzyte = Kontekst {
-        teraz_us: 500_000,
-        oczekiwany_wystawca: &pk,
-        odwolane: &[],
-        uzyte: &uzyte,
+    let ok_uzyte = simon_core::cap::GrantContext {
+        now_us: 500_000,
+        expected_issuer: &pk,
+        revoked: &[],
+        used: &uzyte,
     };
     assert_eq!(
-        sprawdz(&sufit, &z, "log_message", &par, &ok_uzyte),
-        Err(OdmowaZ::Uzyte)
+        simon_core::cap::verify_grant(&sufit, &z, "log_message", &par, &ok_uzyte),
+        Err(simon_core::cap::GrantRejection::Used)
     );
-    // zły parametr
+    // invalid parameter
     let zly = serde_json::json!({"msg": "rm -rf /"});
     assert_eq!(
-        sprawdz(&sufit, &z, "log_message", &zly, &ok),
-        Err(OdmowaZ::Parametry)
+        simon_core::cap::verify_grant(&sufit, &z, "log_message", &zly, &ok),
+        Err(simon_core::cap::GrantRejection::Params)
     );
     // expired
-    let ok_exp = Kontekst {
-        teraz_us: 2_000_000,
-        oczekiwany_wystawca: &pk,
-        odwolane: &[],
-        uzyte: &[],
+    let ok_exp = simon_core::cap::GrantContext {
+        now_us: 2_000_000,
+        expected_issuer: &pk,
+        revoked: &[],
+        used: &[],
     };
     assert_eq!(
-        sprawdz(&sufit, &z, "log_message", &par, &ok_exp),
-        Err(OdmowaZ::Wygaslo)
+        simon_core::cap::verify_grant(&sufit, &z, "log_message", &par, &ok_exp),
+        Err(simon_core::cap::GrantRejection::Expired)
     );
 }
 
 #[test]
 fn replay_nonce_odrzucony() {
-    let mut o = OknoNonce::nowy(16);
-    assert!(o.przyjmij(1000).is_ok());
-    assert_eq!(o.przyjmij(1000), Err(BladProtokolu::NoncePowtorzony));
+    let mut o = simon_core::protocol::NonceWindow::new(16);
+    assert!(o.accept(1000).is_ok());
+    assert_eq!(o.accept(1000), Err(simon_core::protocol::ProtocolError::ReplayNonce));
 }
