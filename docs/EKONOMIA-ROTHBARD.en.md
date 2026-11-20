@@ -89,3 +89,5 @@ compute). These questions are for a lawyer and a tax adviser, not for a model.
 - The reviewer checked Rothbard's published texts, not our transcripts.
 - The cost figures (3 PLN of electricity per night on a 3090, 2.2 PLN of tokens) come from the earlier roadmap and
   were not re-measured.
+
+Follow-up (Neon, council, Argon): [`EKONOMIA-KONSYLIUM.en.md`](EKONOMIA-KONSYLIUM.en.md).

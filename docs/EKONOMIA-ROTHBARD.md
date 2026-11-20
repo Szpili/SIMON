@@ -88,3 +88,5 @@ rozstrzygnąć prawnik i doradca podatkowy, nie model.
 - Notatki workerów LLM nie są sprawdzone zdanie po zdaniu. W całości przeczytano tylko rozdz. 2–3 WHGDTOM.
 - Recenzent sprawdzał opublikowane teksty Rothbarda, nie nasze transkrypty.
 - Liczby kosztowe (3 zł prądu za noc na 3090, 2,2 zł za tokeny) pochodzą z wcześniejszej roadmapy i nie zostały zmierzone na nowo.
+
+Ciąg dalszy (Neon, konsylium, Argon): [`EKONOMIA-KONSYLIUM.md`](EKONOMIA-KONSYLIUM.md).
